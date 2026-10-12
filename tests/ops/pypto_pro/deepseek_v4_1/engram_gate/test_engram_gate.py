@@ -17,6 +17,7 @@ import logging
 import os
 import sys
 
+import pytest
 import torch
 
 # Make the sibling golden/precision modules importable.
@@ -70,22 +71,27 @@ def _run_case(name):
         raise AssertionError(f"{name} precision failed: {summary}")
 
 
+@pytest.mark.soc("950")
 def test_partial_image_mask():
     _run_case("partial_image_mask")
 
 
+@pytest.mark.soc("950")
 def test_model_token_count_nomask():
     _run_case("model_token_count_nomask")
 
 
+@pytest.mark.soc("950")
 def test_chunked_one_chunk_tail_one():
     _run_case("chunked_one_chunk_tail_one")
 
 
+@pytest.mark.soc("950")
 def test_model_dim_plus_one_partial_mask():
     _run_case("model_dim_plus_one_partial_mask")
 
 
+@pytest.mark.soc("950")
 def test_compile_default_shape():
     _run_case("compile_default_shape")
 
