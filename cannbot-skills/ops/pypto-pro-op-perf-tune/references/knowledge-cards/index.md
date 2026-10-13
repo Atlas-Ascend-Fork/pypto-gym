@@ -10,9 +10,10 @@ okf_version: "0.2"
 
 本文件是卡片清单的**唯一入口**，调优时只从 Active 表获取候选，不通过扫描目录自动采用卡片。
 实际卡片按稳定类别放入子目录。已内置 16 张 VF/VEC 卡片，位于 `vec/`，编号为 `vec-01` 至
-`vec-16`；9 张 Cube 卡片，位于 `cube/`，编号为 `cube-01` 至 `cube-09`；5 张 MEM 卡片，位于
+`vec-16`；10 张 Cube 卡片，位于 `cube/`，编号为 `cube-01` 至 `cube-10`；5 张 MEM 卡片，位于
 `mem/`，编号为 `mem-01` 至 `mem-05`；5 张 PIPE 卡片，位于 `pipe/`，编号为 `pipe-01`
-至 `pipe-05`；1 张 SCALAR 卡片，位于 `scalar/`，编号为 `scalar-01`；另有 1 张跨引擎卡片，
+至 `pipe-05`；3 张 SCALAR 卡片，位于 `scalar/`，编号为 `scalar-01` 至
+`scalar-03`；另有 1 张跨引擎卡片，
 位于 `cross-engine/`，编号为 `cross-engine-01`。以上卡片均以 `status=stable` 登记到 Active 表。
 
 ## Active items
@@ -47,6 +48,7 @@ okf_version: "0.2"
 | `cube-07` | [权重 NZ 离线预打包（GM NZ 声明 + NZ→NZ 纯搬运）](cube/cube-07-weight-nz-prepack.md) | `stable` | `MTE2` | 推理场景权重固定、可离线预处理；matmul 为 MTE2 bound 且权重搬运占比高；原始内轴不对齐时随路转换代价更高、收益更明显 | 仅限 Ascend 950PR 或 950DT；GM Tensor 仅支持 ND/NZ 两种声明，NZ 要求调用方已按 NZ 物理排布 packing 且按对齐后容量分配；NZ 搬运不支持降序 order 转置 |
 | `cube-08` | [同一 L1 地址提供两种布局](cube/cube-08-dual-view-l1-tile-group.md) | `stable` | `MTE1` | 同一份数据要按原布局和转置布局供两条 Cube 输入路径使用，且两边都能同形搬运 | 同地址 TileGroup、NZ/ZN 视角、L0 搬运和共享地址 mutex 合同需在目标版本复核 |
 | `cube-09` | [Cube 串行链操作数降精度：fp32→bf16（acc 保持 fp32 累加）](cube/cube-09-bf16-operand-downcast.md) | `stable` | `MAC` | kernel 由多次 pl.matmul 串行链主导且操作数为 fp32，当前设备同规模对比测试显示 bf16 单次调用成本显著更低，精度合同允许操作数按低精度写回且 golden 容差门内可复验 | Ascend 950PR 实测；依赖已核验的 pl.TileType(Mat/Left/Right, NZ)、pl.cast(RoundMode)、pl.move、pl.insert 与 fp32 acc 语义；写回必须两步法（cast 到 bf16 ND + move 到 bf16 NZ）；其它 SoC 须重做同规模对比测试 |
+| `cube-10` | [matmul N 外 / K 内循环重构（cube-bound + 小侧操作数常驻 L1）](cube/cube-10-ktail-n-split-copyout.md) | `stable` | `MAC、SCALAR、MTE1` | cube-only matmul，K 循环逐块交替累加两个 N 子块（每轮 2 个 MMAD、写两个不同 L0C 地址的 Acc）；profiler 显示 cube-bound（MAC 占用高、MTE2 占用低）；小侧操作数（如权重 B）可常驻 L1 复用（cube-04 Fullload 形态） | 仅限 Ascend 950PR 或 950DT；依赖 phase= 直排 store 与 pl.move 的 offset 切片（cube-04）；MTE2-bound / 操作数流式载入时该重构为负收益 |
 | `mem-01` | [对齐连续主路径 + 隔离尾块](mem/mem-01-aligned-main-tail-split.md) | `stable` | `MTE2、MTE3` | 同一算子同时覆盖对齐与非对齐规格，主循环每个 tile 都走动态 valid_shape/保守搬运路径，且主区可切出静态 shape 的对齐完整 Tile | 仅限 Ascend 950PR 或 950DT；依赖 TileType 静态 shape、valid_shape=[-1,-1] 与 set_validshape |
 | `mem-02` | [按 UB 预算批量搬行](mem/mem-02-batched-row-copy.md) | `stable` | `MTE2、MTE3` | 循环中反复按单行或单个小张量搬入/写出，相邻行在 GM 连续排布且下游同阶段消费，UB 预算可容纳多行 Tile | 仅限 Ascend 950PR 或 950DT；依赖 pl.load/pl.store 的二维 Tile 整块搬运与 make_tile_group 轮转 |
 | `mem-03` | [一次性数据绕过 L2（能力门控）](mem/mem-03-l2-bypass-one-shot.md) | `stable` | `MTE2` | 大权重/scale/输入块只被完整消费一次且可由 shape/schedule 谓词证明无后续复用，热数据 L2 命中被流式读挤压 | 能力门控：PyPTO-Pro 当前版本无 L2 cache hint/bypass 公开 API；`pl.system.dcci` 仅做缓存清理失效，不构成 bypass |
@@ -58,6 +60,8 @@ okf_version: "0.2"
 | `pipe-04` | [共享地址 Tile Group 用显式共享计数器管理 Buffer 下标](pipe/pipe-04-shared-buffer-counter.md) | `stable` | `PIPELINE` | 同一地址空间（相同 addrs 与 mutex_ids）被多组 tile group 共享，且不同流水线阶段（QK/PV、drain、按位图跳块）对各组调用次数不一致 | 仅限 Ascend 950PR 或 950DT；仅用 pl.make_tile_group 下标取用 group[idx] 与 Python 标量计数器，已在当前工具链 kernel 核验，其它 SoC 重新查表并验证 |
 | `pipe-05` | [消费点 GM→L1 直载：替换经 UB 的 NZ 转换路径](pipe/pipe-05-gm-to-l1-direct-load.md) | `stable` | `PIPELINE` | 串行链上存在仅为把 GM 数据搬入 L1 而设的 vec 暂存段（GM→UB→NZ 转换→L1），数据只被紧邻 cube 阶段消费、无需 vec 侧加工，串行链同步主导且上游恒写满全部行；vector 空闲且搬运可提前发射（与 cube 计算重叠）时保留 UB 路径更优 | Ascend 950PR 实测；依赖已核验的 pl.load（GM→Mat/L1 直达 + order 轴映射 + set_validshape 尾块语义）与 Mat/NZ TileType；尾块整行直载必须确认上游写满全部行，否则越界读未定义内存 |
 | `scalar-01` | [Scalar bound 手段清单](scalar/scalar-01-scalar-bound-checklist.md) | `stable` | `SCALAR` | scalar 泳道忙而 VECTOR 空闲、总计算量极小或 shape 很小，循环内存在可外提的冗余标量计算（div/mod、重复 offset 推导） | 仅限 Ascend 950PR 或 950DT；依赖 pl.range 循环标量表达式与 tile 基础算术 |
+| `scalar-02` | [热循环查表与守卫的 load-store 减载](scalar/scalar-02-lut-guard-load-shed.md) | `stable` | `SCALARLDST、SCALAR` | 热循环内存在 getval 结果再作为下一个 getval 偏移的链式查表，或每轮读取 state 类守卫标量；表项 launch 后不变且表很小，守卫条件首轮后恒成立 | 仅限 Ascend 950PR 或 950DT；须核验 pl.getval/pl.setval 动态偏移与运行期标量分支 |
+| `scalar-03` | [小 tile 固定开销与粒度修正](scalar/scalar-03-small-tile-granularity.md) | `stable` | `SCALAR` | 总计算量小或 shape 小，块数远大于每块工作量（如行块高取 1~2）；scalar 占比高、发射率低，热点在逐块固定标量开销而非数据搬运或计算本身 | 仅限已核验 pl.make_tile_group/TileType、pl.range、pl.min、pl.set_validshape 的 Ascend 950PR 或 950DT 工具链 |
 | `cross-engine-01` | [UB 直接交给 L1，少一次 GM 往返](cross-engine/cross-engine-01-ub-to-l1-handoff.md) | `stable` | `VEC、MTE2、MTE3` | Vector 的结果紧接着由 Cube 消费，当前存在关键路径上的 GM 写回和读回 | UB 到 L1 的布局转换、insert、valid shape 和跨核事件需在目标版本复核 |
 
 ## ID 与状态规则
