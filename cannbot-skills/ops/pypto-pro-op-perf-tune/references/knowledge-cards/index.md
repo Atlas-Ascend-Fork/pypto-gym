@@ -10,7 +10,7 @@ okf_version: "0.2"
 
 本文件是卡片清单的**唯一入口**，调优时只从 Active 表获取候选，不通过扫描目录自动采用卡片。
 实际卡片按稳定类别放入子目录。已内置 16 张 VF/VEC 卡片，位于 `vec/`，编号为 `vec-01` 至
-`vec-16`；10 张 Cube 卡片，位于 `cube/`，编号为 `cube-01` 至 `cube-10`；5 张 MEM 卡片，位于
+`vec-16`；11 张 Cube 卡片，位于 `cube/`，编号为 `cube-01` 至 `cube-11`；5 张 MEM 卡片，位于
 `mem/`，编号为 `mem-01` 至 `mem-05`；5 张 PIPE 卡片，位于 `pipe/`，编号为 `pipe-01`
 至 `pipe-05`；3 张 SCALAR 卡片，位于 `scalar/`，编号为 `scalar-01` 至
 `scalar-03`；另有 1 张跨引擎卡片，
@@ -49,6 +49,7 @@ okf_version: "0.2"
 | `cube-08` | [同一 L1 地址提供两种布局](cube/cube-08-dual-view-l1-tile-group.md) | `stable` | `MTE1` | 同一份数据要按原布局和转置布局供两条 Cube 输入路径使用，且两边都能同形搬运 | 同地址 TileGroup、NZ/ZN 视角、L0 搬运和共享地址 mutex 合同需在目标版本复核 |
 | `cube-09` | [Cube 串行链操作数降精度：fp32→bf16（acc 保持 fp32 累加）](cube/cube-09-bf16-operand-downcast.md) | `stable` | `MAC` | kernel 由多次 pl.matmul 串行链主导且操作数为 fp32，当前设备同规模对比测试显示 bf16 单次调用成本显著更低，精度合同允许操作数按低精度写回且 golden 容差门内可复验 | Ascend 950PR 实测；依赖已核验的 pl.TileType(Mat/Left/Right, NZ)、pl.cast(RoundMode)、pl.move、pl.insert 与 fp32 acc 语义；写回必须两步法（cast 到 bf16 ND + move 到 bf16 NZ）；其它 SoC 须重做同规模对比测试 |
 | `cube-10` | [matmul N 外 / K 内循环重构（cube-bound + 小侧操作数常驻 L1）](cube/cube-10-ktail-n-split-copyout.md) | `stable` | `MAC、SCALAR、MTE1` | cube-only matmul，K 循环逐块交替累加两个 N 子块（每轮 2 个 MMAD、写两个不同 L0C 地址的 Acc）；profiler 显示 cube-bound（MAC 占用高、MTE2 占用低）；小侧操作数（如权重 B）可常驻 L1 复用（cube-04 Fullload 形态） | 仅限 Ascend 950PR 或 950DT；依赖 phase= 直排 store 与 pl.move 的 offset 切片（cube-04）；MTE2-bound / 操作数流式载入时该重构为负收益 |
+| `cube-11` | [SWAT 调度：Serpentine 行窗口 + 自适应尾块](cube/cube-11-swat-serpentine-tail-scheduling.md) | `stable` | `MAC、MTE2` | matmul：机制 A 需 B 是访存大头且工作集 > 可共享 L2（固定列 B tile 复用距离超 L2）；机制 B 尾薄片拖慢行窗口；机制 C tile 数不整除核数致末轮空闲核 | 仅限 Ascend 950PR 或 950DT；机制 A 已核验但两形状未测出收益（B 驻留 L2），机制 B/C（变尺寸 tile/二维子块）合法性未核验，采用前须另证 |
 | `mem-01` | [对齐连续主路径 + 隔离尾块](mem/mem-01-aligned-main-tail-split.md) | `stable` | `MTE2、MTE3` | 同一算子同时覆盖对齐与非对齐规格，主循环每个 tile 都走动态 valid_shape/保守搬运路径，且主区可切出静态 shape 的对齐完整 Tile | 仅限 Ascend 950PR 或 950DT；依赖 TileType 静态 shape、valid_shape=[-1,-1] 与 set_validshape |
 | `mem-02` | [按 UB 预算批量搬行](mem/mem-02-batched-row-copy.md) | `stable` | `MTE2、MTE3` | 循环中反复按单行或单个小张量搬入/写出，相邻行在 GM 连续排布且下游同阶段消费，UB 预算可容纳多行 Tile | 仅限 Ascend 950PR 或 950DT；依赖 pl.load/pl.store 的二维 Tile 整块搬运与 make_tile_group 轮转 |
 | `mem-03` | [一次性数据绕过 L2（能力门控）](mem/mem-03-l2-bypass-one-shot.md) | `stable` | `MTE2` | 大权重/scale/输入块只被完整消费一次且可由 shape/schedule 谓词证明无后续复用，热数据 L2 命中被流式读挤压 | 能力门控：PyPTO-Pro 当前版本无 L2 cache hint/bypass 公开 API；`pl.system.dcci` 仅做缓存清理失效，不构成 bypass |
