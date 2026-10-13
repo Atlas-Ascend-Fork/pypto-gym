@@ -18,6 +18,10 @@ description: 实现、调试并自验证 PyPTO-Pro 算子 kernel。用于按冻�
 - `custom/<op>/PRO_MATERIAL_INDEX.md`：需要回看原文时的 API、官方样例和教程路径。
 - flat 的 `custom/<op>/KB_SELECTION.json`，或 split 布局下全部 `custom/<op>/<class>/KB_SELECTION.json`，以及其中选中的所有参考。
 
+性能原则见 `$CANNBOT_CONFIG_ROOT/references/kernel-core-principles.md`。实现期直接相关的是
+`P4`（Device 侧循环内零除法 / 取模，地址按 `addr += stride` 推进）、`P2`（轮转 buffer 用 TileGroup，
+深度改动须复核 `T1`）、`X1`（CV 错拍不得退化为逐 tile 串行）。收尾时按 `kernel-perf-pypto-pro-a5.md` §2 的自检清单（`G1`–`G6`）自查，结论写进本轮报告；没测过的项记 `unknown`（`M1`）。
+
 按 dispatch 交付：
 
 | 路径 | dispatch | 本轮产物 |

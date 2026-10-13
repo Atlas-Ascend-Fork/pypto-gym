@@ -19,6 +19,19 @@ description: 设计 PyPTO-Pro 算子的 tile 级执行方案。当 SPEC、Golden
 > 1. 所有需要 buffer 切换/轮转的 tile 一律用 `make_tile_group` + `auto_mutex`，`make_tile` 仅限单次使用 scratch tile。手动同步的适用范围见 `pypto-pro-material-explore` SKILL「实现选择规则」节。R3 落实 buffer 管理方式，R6 落实 cross_core 同步方案。
 > 2. Vector 选择按该规范写入 DESIGN.md §1：已选 KB 模板明确要求当前步骤使用 `pl.*` 时按模板，否则使用 `vf.*`；本阶段不运行候选实验。
 
+## 性能原则（设计阶段须落实）
+
+根规范：`$CANNBOT_CONFIG_ROOT/references/kernel-core-principles.md`，进入 R0 前读完（约 150 行）。
+各轮须落实的编号：
+
+| 轮次 | 落实 |
+|---|---|
+| R0 前 | `B1` 代价模型、`B2` 绑定资源、`B6` 目标上限——先判绑定资源，再做后续决策 |
+| R2 / R3 | `T1` 逐空间容量 × 深度、`Q1`/`Q3` Cube tile、`T3` Vector `elements_per_pass` |
+| R4 / R6 | `P2` 搬运与计算重叠、`X1` CV 错拍、`X2` 两级配平、`X4` 在线化归约 |
+| R5 | `P3` 按工作量分核与 `η_tail`、`P4` Host 侧切分 |
+| R8 | 把性能结论写进 DESIGN.md §11，每项判定标注所依据的编号 |
+
 ## 知识库
 
 知识来源与读取边界见下方「结构化 Binding 流程（architect）」。
@@ -304,6 +317,7 @@ EXPLORE_REPORT §4中的官方指定算子用于核对完整调用方式，不�
 | **一致性** | R0-R7 各轮输出是否存在矛盾（如 API 需要的 tile 在 R2 中缺失） | | 回溯到矛盾产生的轮次修正 |
 | | 证据链是否完整（每个决策都有来源） | | 补充缺失的文档引用或官方指定算子路径 |
 | | R3 片上地址范围与逐空间容量检查是否全部通过 | | 回到 R3 重排地址 / R2 缩 tile |
+| **性能** | §11 已写代价模型与绑定资源（`B1`/`B2`）、目标上限（`B6`）、分核 `η_tail`（`P3`）；CV 融合已错拍（`X1`） | | 回到对应轮次 |
 | **条件性检查** | 若 §6 填“不涉及cross_core”，确认不存在Cube↔Vector或跨Block/subblock的数据依赖 | | 回到 R0 重新评估 |
 
 **迭代规则**：

@@ -59,7 +59,13 @@ orchestrator 按 `pypto-pro-docs-search` 先用 `--check` 检查缓存，就绪�
 算子功能验证通过后，普通 Pro/深度编排流程**必须**使用 `pypto-pro-op-perf-tune` 进行性能调优，并对照开发时选中的 KB 补齐、验证遗漏的约束与设计模式。Scriptor 按 `references/scriptor-mode.md` 执行：`optimize` 必须覆盖 `pypto-pro-op-perf-tune` 的知识卡片来源，accept 后不强制再调用完整 Skill；只有用户明确要求独立性能调优时才另行调用。
 上述规则均为强制要求：普通流程不得跳过或形式调用；对已启用且仍在继续的 Scriptor optimize，不得跳过逐卡覆盖、实验或有依据的关闭。
 
-共享实现与性能约束：`$CANNBOT_CONFIG_ROOT/references/performance-constraints.md`。
+性能参考分三层，范围不重叠：
+- `$CANNBOT_CONFIG_ROOT/references/kernel-core-principles.md` —— **与平台无关的原则**（`B`/`P`/`T`/`V`/`Q`/`X` 与 `M` 系列的方法条）。指导性，无 lint、无额外产出物。
+- `$CANNBOT_CONFIG_ROOT/references/kernel-perf-pypto-pro-a5.md` —— 落到本平台与本工作流：术语映射、自检清单 `G1`–`G6` 与阈值、取舍裁决、`M5`/`M6`、结论写到哪里。
+- `$CANNBOT_CONFIG_ROOT/references/performance-constraints.md` —— 原则在 PyPTO-Pro **API 写法**上的两条强制；A5 实测数值归 `pypto-pro-op-perf-tune` 与 KB `constraints/arch-a5.md`。
+
+冲突时依次以用户需求、原则、application、`performance-constraints.md`、各 skill 局部规则为准；
+同一量上平台实测与通则冲突时按 `M5` 以实测为准并留痕。低层与高层冲突时上报，不自行折中。
 
 ## 深度编排（按需）
 

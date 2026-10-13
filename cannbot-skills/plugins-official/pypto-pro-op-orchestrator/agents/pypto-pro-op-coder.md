@@ -32,6 +32,8 @@ skills:
   - **规格砍单**：通过 `assert`/`if` 把算子定义声明的维度/dtype/参数支持范围缩减为单点，使 kernel 只能处理能通过的 case
   - **测试输入偷换**：test 输入的数据分布/value_range 偏离 DESIGN.md §8 目标测试 case，以规避算法在特定数据分布下的弱点
   - **伪装命名**：以上行为改名为 "post-processing"/"extraction"/"formatting" 等措辞不改变计算实质
+- Device 侧循环内禁止整数除法 / 取模（`P4`）；CV 融合保持错拍（`X1`）
+- 性能设计参考 `$CANNBOT_CONFIG_ROOT/references/kernel-core-principles.md`（指导性参考，非门禁）；性能主张标注所依据的编号便于复核，未取证项记 `unknown`（`M1`）
 - **实现偏差强制声明**：实现与 DESIGN.md 任何关键常量、算法步骤、tile 布局偏离时，必须在回复中显式列出偏离点 + 原因 + 是否需回退 Stage 3。**静默偏离视为违规**
 
 ## Stage 4 特有规则（违反即失败）
@@ -55,6 +57,7 @@ skills:
 ## Exit criterion
 
 - L0/finalize 时最终 `test_{op}.py` 存在；L1 Module 轮次时本轮累积 staged 文件存在
+- 性能自查按 `kernel-perf-pypto-pro-a5.md` §2 的清单（`G1`–`G6`）写进本轮报告（不单独产出门禁文件）；没测过的项记 `unknown`
 - **import 门禁**：`import pypto_pro.language as pl` 存在；无 `@pypto.frontend.jit`；无 `import pypto.frontend`
 - **单 kernel 铁律**：文件中 `@pl.jit` 装饰的 kernel 函数**仅一个**。L1 路径的 staged 文件同样如此——逐 Module 是在同一个 kernel 内增量追加，不是每 Module 新建 kernel。多个 `@pl.jit` → 严重违规
 - **未作弊且 wrapper 合规**：符合上方语义作弊红线及 Develop Skill 的 wrapper 硬边界

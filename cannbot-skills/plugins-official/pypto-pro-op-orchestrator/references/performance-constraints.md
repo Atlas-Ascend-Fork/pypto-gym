@@ -1,5 +1,7 @@
 # PyPTO-Pro 两条性能强制
 
+> **地位**：`kernel-core-principles.md` 在 PyPTO-Pro API 上的具体化；冲突时以根规范为准并上报。
+>
 > **用途**：PyPTO-Pro 工作流的性能约束。被 `pypto-pro-material-explore`（探索阶段 API 映射）、`pypto-pro-op-design`（设计阶段落实）、`pypto-pro-op-develop`（实现阶段遵守）和 `pypto-pro-op-perf-tune`（性能优化阶段保持铁律）共同引用。各 skill 不重复定义，统一指向本文件。
 >
 > **安装路径**：源码位于 `plugins-official/pypto-pro-op-orchestrator/references/`，由 `init.sh` 软链到 `.opencode/references/`。各 skill 引用时写「见 `.opencode/references/performance-constraints.md`」。
@@ -9,6 +11,8 @@
 ---
 
 ## 强制 1：buffer 管理用 `make_tile_group` + `auto_mutex`
+
+> 依据：`P2`（搬运与计算重叠，默认双缓冲）。手动同步不足导致死锁，过度则每个 tile 排空流水；`auto_mutex` 由框架保证二者皆不发生。深度改动须复核 `T1`。
 
 | 项目 | 规则 |
 |------|------|
@@ -29,6 +33,8 @@
 ---
 
 ## <a id="强制-2vector-数值计算用-vf-手写"></a>强制 2：Vector 默认使用 VF
+
+> 依据：`V2`（逐元素链单趟融合）。`vf.*` 的中间值留在寄存器，不占 UB，省下的容量用于更大的 tile。
 
 Vector 数值计算按以下静态规则选择实现，不比较 VF 与 tile-op 性能：
 

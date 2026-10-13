@@ -25,7 +25,8 @@ mode: subagent
 `stage1-check`、`stage3-check`、`stage5-check`、`upstream-contract-check` 和
 `capability_gap_check` 还必须读取
 `$CANNBOT_CONFIG_ROOT/references/performance-constraints.md`；该文件是 Vector 选择与证据门槛
-的唯一规范源。
+的唯一规范源。`stage3-check` 与 `stage4-check` 可参考
+`$CANNBOT_CONFIG_ROOT/references/kernel-core-principles.md`（性能原则，指导性参考，非门禁）。
 
 # pypto-pro-op-verifier — 门禁裁判（Judge-only）
 
@@ -105,10 +106,11 @@ Architect 产物并完成 #2–#11 与 #12 第 3–5 步。
 | # | 检查项 | 验证方式 |
 |---|--------|---------|
 | 1 | `custom/<op>/DESIGN.md` 与 `custom/<op>/DESIGN_BINDINGS.json` 存在 | 仅做文件存在检查；本项不得读取任一文件正文 |
-| 2 | DESIGN.md 包含 §0–§10 十一个章节 | `grep -c "^## §[0-9]" custom/<op>/DESIGN.md` 确认返回 11 |
+| 2 | DESIGN.md 包含 §0–§11 十二个章节 | `grep -c "^## §[0-9]" custom/<op>/DESIGN.md` 确认返回 12 |
 | 3 | §9 综合评估（准确性/泛化性/一致性）全部通过 | `grep "^## §9" custom/<op>/DESIGN.md` 确认 §9 存在，评估结论中无 ❌ 标记 |
 | 4 | §10 包含 Tile 数据流全景图 | `grep "^## §10" custom/<op>/DESIGN.md` 确认 §10 存在，并 `grep "load_tile\|store_tile" custom/<op>/DESIGN.md` |
 | 5 | §8 含「目标测试 case」表且 ≥4 个具体 case（供 develop 直接实现） | `grep "目标测试 case" custom/<op>/DESIGN.md` 确认表存在，且表内 `test_` case 行数 ≥ 4（单动态轴算子按 design 例外说明，可 <4 但须注明原因） |
+| 5.5 | §11 性能结论自洽 | 无机械校验。复核代价模型与绑定资源（`B1`/`B2`）、目标上限（`B6`）、容量与 `η_tail`（`T1`/`P3`）是否自洽、是否与推导文字相符。原则文件是指导性参考，**偏离它本身不构成 FAIL**；数字前后矛盾或与证据不符才是问题 |
 | 6 | 无 "待定" 或 "TBD" | `grep -i "待定\|TBD\|TODO" custom/<op>/DESIGN.md` 应返回空 |
 | 7 | §4 循环与 Section 结构已参照官方样例 | `grep "参考样例" custom/<op>/DESIGN.md` 应返回非空（确认 §4 引用了官方指定算子路径） |
 | 8 | 动态维度声明有据 | DESIGN.md 中动态维度声明方式与 `docs/` API 文档和官方指定算子样例一致（不含不存在的 API） |

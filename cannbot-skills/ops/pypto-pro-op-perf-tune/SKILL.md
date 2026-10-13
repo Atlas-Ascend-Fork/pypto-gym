@@ -16,6 +16,10 @@ description: 优化并验收已通过正确性验证的 PyPTO-Pro 单 kernel 实
 用户只要求采集、比较或诊断时，进入对应参考页；需要改码调优时执行下述闭环。
 命令中的 `PERF_SKILL_ROOT` 指本 Skill 的实际目录；算子目录示例可替换为项目实际路径。
 
+本 Skill 是 `$CANNBOT_CONFIG_ROOT/references/kernel-core-principles.md` 在 A5 上的具体化：
+通则给方向，本 Skill 的实测给数值。同一数值冲突时以实测为准，并按 `M5` 留痕。
+调优顺序遵循 `kernel-perf-pypto-pro-a5.md` §2 的排障顺序（`G1` → `G6`），且只优化 profile 确认的绑定资源（`B4`）。
+
 ## 1. 目标与边界
 
 保持外部功能合同和下列实现约束不变，找全、落实并关闭全部优化项；冻结 baseline

@@ -206,7 +206,7 @@ artifact 哈希、回滚历史）。**只有编排者能通过 `state_transition
 
 **调度**：`pypto-pro-op-architect` 子代理。子代理加载 skill `pypto-pro-op-design`。
 
-**产出**：`DESIGN.md` + `DESIGN_BINDINGS.json`（结构化 KB requirements）+ `module_interfaces.yaml`（Module 契约，含 `module_count` / `is_fusion` / `has_cross_core` / `modules[]`（含 `golden_steps`）/ `final_outputs` / `composition_verification`）。
+**产出**：`DESIGN.md`（含 §11 性能结论）+ `DESIGN_BINDINGS.json`（结构化 KB requirements）+ `module_interfaces.yaml`（Module 契约，含 `module_count` / `is_fusion` / `has_cross_core` / `modules[]`（含 `golden_steps`）/ `final_outputs` / `composition_verification`）。
 
 **Architect 返回分流**：
 
@@ -226,6 +226,8 @@ artifact 哈希、回滚历史）。**只有编排者能通过 `state_transition
 ---
 
 ## Stage 4：Kernel 实现与验证
+
+coder 按 `kernel-perf-pypto-pro-a5.md` §2 的清单（`G1`–`G6`）自查并写进报告，不单独产出门禁文件。汇总子代理结论时，不带证据路径的记 `unknown`（`M6`）。
 
 Stage 4 据 `stage4_path` 走两条独立调度路径。**agent 自身不做路径判断**——L0 不带 `module_k` 且无 `finalize`；L1 Module 轮次带 `module_k`，cleanup 尝试后的最终交接不带 `module_k`、显式传 `finalize=true`。
 
