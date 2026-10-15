@@ -15,6 +15,7 @@ import io
 import json
 import sys
 import tempfile
+import types
 import unittest
 from argparse import Namespace
 from itertools import product
@@ -203,6 +204,71 @@ class PerformanceRoutingAndAdapterTest(unittest.TestCase):
                 )
             self.assertIn("_Ztarget", output.getvalue())
             self.assertIn("exact_op_name", output.getvalue())
+
+
+class L2CacheCleanTest(unittest.TestCase):
+    """L2 清刷开关：默认开启、可关闭，并透传到采集命令。"""
+
+    def test_flag_defaults_on_and_can_be_disabled(self) -> None:
+        parser = getattr(MSPROF, "_build_arg_parser")()
+        argv = ["--compare", "--output-dir=."]
+        self.assertTrue(parser.parse_args(argv).l2_clean)
+        self.assertFalse(parser.parse_args(argv + ["--no-l2-clean"]).l2_clean)
+
+    def test_standard_command_carries_l2_flag(self) -> None:
+        captured: dict[str, list] = {}
+
+        def fake_run(cmd, **kwargs):
+            captured["cmd"] = cmd
+            return types.SimpleNamespace(returncode=0, stdout="", stderr="")
+
+        run_standard = getattr(MSPROF, "_run_msprof_standard")
+        for enabled, flag in ((True, "--l2-clean"), (False, "--no-l2-clean")):
+            with self.subTest(enabled=enabled), tempfile.TemporaryDirectory() as tmp:
+                (Path(tmp) / "PROF_GROUP_x").mkdir()
+                request = MSPROF.RunRequest("runner.py", tmp, warmup=1, l2_clean=enabled)
+                captured.clear()
+                with patch.object(MSPROF.subprocess, "run", side_effect=fake_run):
+                    _, err = run_standard(request)
+                self.assertIsNone(err)
+                self.assertIn(flag, captured["cmd"])
+
+    def test_summary_records_l2_clean(self) -> None:
+        args = Namespace(
+            warmup=1, repeats=1, seed=42, l2_clean=False, op_name="k",
+            case_arg=None, case_env=None, case_manifest=None, quick=False,
+            performance_cases=None, collection_id=None, deep_round_dir=None,
+            golden_iterations=None,
+        )
+        csi = MSPROF.CompareSummaryInput(
+            out_dir=Path("/tmp/x"), rows=[], speedups=[], ref_times=[],
+            asc_times=[], n_cases=0, args=args, device_id=0, device_src="cli",
+        )
+        self.assertIs(MSPROF.compute_compare_summary(csi)["l2_clean"], False)
+
+
+class SelectorPreflightEnvTest(unittest.TestCase):
+    """manifest 预检必须使用与正式 profiling 一致的设备环境。"""
+
+    def test_manifest_preflight_uses_tile_fwk_env(self) -> None:
+        seen: list[bool] = []
+
+        def fake_env(device_id, seed=None, case_env=None, case_name=None, tile_fwk=False):
+            seen.append(tile_fwk)
+            return {}
+
+        args = Namespace(
+            seed=42, case_arg=None, case_env=None, case_manifest="cases.json",
+            performance_cases={"type": "case_manifest",
+                               "case_functions": {"c1": "f1"}},
+        )
+        with patch.object(CLI, "_profile_env", side_effect=fake_env), \
+                patch.object(CLI, "_test_command", return_value=["true"]), \
+                patch.object(CLI.subprocess, "run",
+                             return_value=types.SimpleNamespace(returncode=1, stdout="", stderr="")):
+            getattr(CLI, "_selector_preflight")("t.py", ["c1"], args, 0)
+        self.assertEqual(seen, [True, True])
+
 
 if __name__ == "__main__":
     unittest.main()

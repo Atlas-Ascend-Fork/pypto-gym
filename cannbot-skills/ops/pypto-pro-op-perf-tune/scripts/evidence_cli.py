@@ -583,7 +583,8 @@ def _selector_preflight(test_script, case_ids, args, device_id):
     unknown_selector = RunSelector(
         case_arg, case_env, unknown, case_manifest, function_adapter,
     )
-    env = _profile_env(device_id, args.seed, case_env, unknown)
+    env = _profile_env(device_id, args.seed, case_env, unknown,
+                       tile_fwk=bool(case_manifest))
     result = subprocess.run(
         _test_command(test_script, unknown_selector),
         capture_output=True, text=True, env=env,
@@ -597,7 +598,8 @@ def _selector_preflight(test_script, case_ids, args, device_id):
         case_selector = RunSelector(
             case_arg, case_env, case_id, case_manifest, function_adapter,
         )
-        env = _profile_env(device_id, args.seed, case_env, case_id)
+        env = _profile_env(device_id, args.seed, case_env, case_id,
+                           tile_fwk=bool(case_manifest))
         result = subprocess.run(
             _test_command(test_script, case_selector),
             capture_output=True, text=True, env=env,

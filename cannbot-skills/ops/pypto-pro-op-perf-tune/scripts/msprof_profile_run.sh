@@ -87,6 +87,13 @@ print_elapsed() {
     fi
 }
 
+# 采集前刷新目标 NPU 的 L2 cache（cannbench 式）；失败只告警，不中断采集。
+l2_clean() {
+    [[ "${L2_CLEAN:-1}" == "1" ]] || return 0
+    python3 "${SCRIPT_DIR}/l2_cache_clean.py" >/dev/null 2>&1 || \
+        echo "WARN: L2 cache clean failed; continuing without it" >&2
+}
+
 # 默认参数
 WARM_UP=3
 OUTPUT_DIR="./msprof_output"
@@ -109,6 +116,8 @@ REPEATS=1
 RETRY=2
 KEEP_PROF=0
 SEED=0
+# 采集前刷新 L2 cache（cannbench 式），默认开启；--no-l2-clean 关闭。
+L2_CLEAN=1
 
 usage() {
     cat <<'EOF'
@@ -120,6 +129,9 @@ Usage: bash msprof_profile_run.sh [OPTIONS] -- python3 test_op.py [args...]
 通用选项:
   --warm-up=N     在正式采集之前，先跑 N 次可执行文件（不采集）预热 DVFS。默认 3。
   --output=<dir>  msprof 结果根目录。默认 ./msprof_output。
+  --l2-clean      每次测量前刷新目标 NPU 的 L2 cache（cannbench 式：大张量归约清空 L2，
+                  使各次测量从一致的 cache 状态起步）。默认开启。
+  --no-l2-clean   关闭测量前的 L2 刷新（与未含该机制的历史协议对齐）。
   -h, --help      Show this help.
 
 标准模式 (默认):
@@ -189,6 +201,8 @@ while [[ $# -gt 0 ]]; do
         --seed=*)    SEED="${1#*=}"; shift ;;
         --retry=*)   RETRY="${1#*=}"; shift ;;
         --keep-prof) KEEP_PROF=1; shift ;;
+        --l2-clean)  L2_CLEAN=1; shift ;;
+        --no-l2-clean) L2_CLEAN=0; shift ;;
         --op-name=*) OP_NAME="${1#*=}"; shift ;;
         --op-name-map=*) OP_NAME_MAP_FILE="${1#*=}"; shift ;;
         --case-arg=*) CASE_ARG="${1#*=}"; shift ;;
@@ -249,6 +263,7 @@ run_standard() {
         SUB="${GROUP_DIR}/PROF_${M}"
         mkdir -p "$SUB"
         echo "--- aic-metrics=${M} -> ${SUB} ---"
+        l2_clean
         msprof --output="$SUB" \
                --ai-core=on \
                --aic-metrics="$M" \
@@ -265,6 +280,7 @@ run_standard() {
     SAMPLE_SUB="${GROUP_DIR}/PROF_Sample"
     mkdir -p "$SAMPLE_SUB"
     echo "--- sample-based (per-core load balance) -> ${SAMPLE_SUB} ---"
+    l2_clean
     msprof --output="$SAMPLE_SUB" \
            --ai-core=on \
            --aic-metrics=PipeUtilization \
@@ -312,6 +328,7 @@ run_compare() {
     extra_args+=("--seed" "$SEED")
     [[ -n "${RETRY:-}" ]] && extra_args+=("--retry" "$RETRY")
     [[ "${KEEP_PROF:-0}" == "1" ]] && extra_args+=("--keep-prof")
+    [[ "${L2_CLEAN:-1}" == "1" ]] && extra_args+=("--l2-clean") || extra_args+=("--no-l2-clean")
 
     python3 "${SCRIPT_DIR}/msprof_perf_summary.py" --compare \
         --output-dir "$OUT_DIR" \
@@ -348,6 +365,7 @@ run_quick() {
     extra_args+=("--seed" "$SEED")
     [[ -n "${RETRY:-}" ]] && extra_args+=("--retry" "$RETRY")
     [[ "${KEEP_PROF:-0}" == "1" ]] && extra_args+=("--keep-prof")
+    [[ "${L2_CLEAN:-1}" == "1" ]] && extra_args+=("--l2-clean") || extra_args+=("--no-l2-clean")
 
     python3 "${SCRIPT_DIR}/msprof_perf_summary.py" --quick \
         --output-dir "$OUT_DIR" \
@@ -516,6 +534,7 @@ run_batch_manifest() {
                 [[ -n "$CASE_ARG" ]] && batch_args+=("--case-arg=$CASE_ARG")
                 [[ -n "$CASE_ENV" ]] && batch_args+=("--case-env=$CASE_ENV")
                 [[ "$KEEP_PROF" == "1" ]] && batch_args+=(--keep-prof)
+                if [[ "${L2_CLEAN:-1}" == "1" ]]; then batch_args+=(--l2-clean); else batch_args+=(--no-l2-clean); fi
                 bash "$0" "${batch_args[@]}" >> "$LOG_FILE" 2>&1
 
                 echo ">>> 算子 $folder_name 在设备 $device_id 上执行完毕" >> "$LOG_FILE"

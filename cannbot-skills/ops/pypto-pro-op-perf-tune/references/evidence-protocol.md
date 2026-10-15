@@ -86,6 +86,8 @@ bash "$PERF_SKILL_ROOT/scripts/msprof_profile_run.sh" --compare \
 
 `--quick` 仅用于按预先冻结的规则筛选候选，写入 `quick_performance.json`、`quick_performance.log`、`quick_perf_report.md`；它不会覆盖正式 compare 三件套，也不能充当正式交付证据。
 
+采集默认在每次 profiled run 前刷新 L2 cache（cannbench 式大张量归约，`--no-l2-clean` 关闭）；该刷新在独立进程、msprof 窗口之外执行，不进入目标 `op_summary`。baseline 与 final 必须使用同一 L2 清刷设置，否则耗时不可比；该设置记录在 `performance.json` 的 `l2_clean` 字段。
+
 批量采集会先完整预检再启动：同构算子可给全局 `--op-name`，异构目录必须给 `--op-name-map=<tsv>`（每行 `operator-directory<TAB>exact Op Name`）。每个算子目录都必须提供 `PERFORMANCE_CASES.json`，也可用 `--case-manifest-map=<tsv>` 逐算子指定（相对路径按 map 所在目录解析）。batch 不接受一个全局 manifest 静默套到异构算子。每轮 batch 日志、Markdown、JSON 均带 collection id，失败批次不会覆盖上次成功汇总。
 
 ## <a id="device-semantics"></a>设备语义

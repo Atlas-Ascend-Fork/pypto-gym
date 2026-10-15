@@ -830,6 +830,19 @@ def _profile_env(device_id, seed=None, case_env=None, case_name=None, tile_fwk=F
     return env
 
 
+def _l2_cache_clean(env):
+    """在 profiled run 之前刷新目标 NPU 的 L2 cache（cannbench 式）。
+
+    单独进程执行，落在 msprof 采集窗口之外；失败只告警，不中断采集。
+    """
+    helper = Path(__file__).resolve().parent / "l2_cache_clean.py"
+    result = subprocess.run(
+        [sys.executable, str(helper)], capture_output=True, text=True, env=env
+    )
+    if result.returncode != 0:
+        LOGGER.warning("[WARN] L2 cache clean failed: %s", result.stderr[-300:])
+
+
 @dataclass(frozen=True)
 class RunSelector:
     """逐 case 选择器参数组（case-arg/case-env/manifest 与适配器开关）。"""
@@ -849,6 +862,7 @@ class RunRequest:
     device_id: int = 0
     seed: int = 0
     selector: RunSelector = RunSelector()
+    l2_clean: bool = True
 
 
 def _test_command(test_script, selector: RunSelector):
@@ -876,6 +890,7 @@ def _run_msprof_standard(request: RunRequest):
         "bash", _find_msprof_script(),
         f"--warm-up={request.warmup}",
         f"--output={request.output_dir}",
+        "--l2-clean" if request.l2_clean else "--no-l2-clean",
         "--",
         *_test_command(request.test_script, selector)
     ]
@@ -922,6 +937,8 @@ def _run_msprof_quick(request: RunRequest):
     warmup_error = _run_warmups(request, env)
     if warmup_error:
         return None, warmup_error
+    if request.l2_clean:
+        _l2_cache_clean(env)
     cmd = [
         "msprof",
         f"--output={request.output_dir}",
@@ -1235,7 +1252,7 @@ def _run_repeat_loop(
         )
         request = RunRequest(
             test_script, str(output_dir), args.warmup, device_id, args.seed,
-            selector,
+            selector, getattr(args, "l2_clean", True),
         )
         prof_dir, err = runner(request)
         if not prof_dir:
@@ -1616,6 +1633,7 @@ def _summary_payload(csi: CompareSummaryInput, rows: list, ratios: list,
         "repeats": csi.args.repeats,
         "seed": csi.args.seed if csi.args.seed is not None else 42,
         "seed_source": "cli_override" if csi.args.seed is not None else "runner_default",
+        "l2_clean": getattr(csi.args, "l2_clean", True),
         "device_id": csi.device_id,
         "device_select_source": csi.device_src,
         **_target_fields(
@@ -2230,6 +2248,14 @@ def _add_compare_args(parser) -> None:
     parser.add_argument("--retry", type=int, default=2, help="单 case 解析失败重试次数")
     parser.add_argument("--device", type=int, default=None, help="NPU 设备 id")
     parser.add_argument("--keep-prof", action="store_true", help="保留 msprof 原始 PROF 目录")
+    parser.add_argument(
+        "--l2-clean", dest="l2_clean", action="store_true", default=True,
+        help="每次测量前刷新目标 NPU 的 L2 cache（cannbench 式），默认开启",
+    )
+    parser.add_argument(
+        "--no-l2-clean", dest="l2_clean", action="store_false",
+        help="关闭测量前的 L2 cache 刷新（与未含该机制的历史协议对齐）",
+    )
     parser.add_argument(
         "--case-arg",
         help="逐 case 选择器参数名；每次 runner 调用追加 '<case-arg> <case-id>'",

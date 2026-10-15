@@ -69,8 +69,8 @@ I/O、支持范围、精度、输入分布、性能 case 与用户目标；下�
 - `module_interfaces.yaml`、staged Module、公开 wrapper 的 callable/签名/I/O/optional 语义与 host
   边界合同（项目有相应产物时读取原文），以及 §1 的实现约束；wrapper body 只能在这些合同内调整；
 - `PERFORMANCE_CASES.json` 及其中的目标 case，在任何调优采集或改码前冻结；
-- 设备、seed、warm-up、repeats、精确 `Op Name` 和计时范围在首次正式采集前冻结；baseline 与
-  Golden 合同生成后不再修改。
+- 设备、seed、warm-up、repeats、精确 `Op Name`、计时范围和 L2 清刷设置（`--l2-clean`，默认开启）
+  在首次正式采集前冻结；baseline 与 Golden 合同生成后不再修改。
 
 调优可以更新最终 `test_{op}.py`、性能交付物，以及项目中为匹配最终接受实现所必需的
 `DESIGN.md`、`DESIGN_BINDINGS.json` 和 `KB_USAGE.json`。事实记录不得删除、降级或
