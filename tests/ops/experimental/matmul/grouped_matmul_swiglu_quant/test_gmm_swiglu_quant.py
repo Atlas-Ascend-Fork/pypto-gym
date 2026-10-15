@@ -59,7 +59,7 @@ class TestParams:
 
 @pytest.fixture
 def params():
-    return get_params("testcase6")
+    return get_params("testcase")
 
 
 def _build_tile_config(params):

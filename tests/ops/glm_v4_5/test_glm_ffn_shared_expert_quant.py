@@ -89,7 +89,7 @@ def gen_input(
     dtypes: torch.dtype,
     device_id: int
 ) -> tuple[torch.Tensor, ...]:
-    torch.manual_seed(42)
+    torch.manual_seed(1)
     hidden_states = torch.randn((b * s, hidden_size), dtype=dtypes, device=f'npu:{device_id}') * 0.01 * 2 - 0.01
 
     weight_gate_upper_tensor = torch.randn((hidden_size, intermediate_size * 2),
