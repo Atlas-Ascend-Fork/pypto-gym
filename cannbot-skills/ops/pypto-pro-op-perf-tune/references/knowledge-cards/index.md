@@ -10,11 +10,16 @@ okf_version: "0.2"
 
 本文件是卡片清单的**唯一入口**，调优时只从 Active 表获取候选，不通过扫描目录自动采用卡片。
 实际卡片按稳定类别放入子目录。已内置 16 张 VF/VEC 卡片，位于 `vec/`，编号为 `vec-01` 至
-`vec-16`；11 张 Cube 卡片，位于 `cube/`，编号为 `cube-01` 至 `cube-11`；5 张 MEM 卡片，位于
-`mem/`，编号为 `mem-01` 至 `mem-05`；5 张 PIPE 卡片，位于 `pipe/`，编号为 `pipe-01`
-至 `pipe-05`；3 张 SCALAR 卡片，位于 `scalar/`，编号为 `scalar-01` 至
-`scalar-03`；另有 1 张跨引擎卡片，
-位于 `cross-engine/`，编号为 `cross-engine-01`。以上卡片均以 `status=stable` 登记到 Active 表。
+`vec-16`；11 张 Cube 卡片，位于 `cube/`，编号为 `cube-01` 至 `cube-11`；6 张 MEM 卡片，位于
+`mem/`，编号为 `mem-01` 至 `mem-06`；6 张 PIPE 卡片，位于 `pipe/`，编号为 `pipe-01`
+至 `pipe-06`；3 张 SCALAR 卡片，位于 `scalar/`，编号为 `scalar-01` 至
+`scalar-03`；1 张同步卡片，位于 `sync/`，编号为 `sync-01`；另有 1 张跨引擎卡片，位于
+`cross-engine/`，编号为 `cross-engine-01`；1 张算法等价改写卡片，位于 `algo/`，编号为
+`algo-01`。以上卡片均以 `status=stable` 登记到 Active 表。
+
+结构受限算子的四类结构维度（操作数数值类型、片上驻留、工作分解、计算图等价改写）
+逐项对应 `cube-09`、`mem-06`、`pipe-06`、`algo-01`；判定与触发条件见
+[结构性优化重审与可达目标取证](../structural-optimization.md)。
 
 ## Active items
 
@@ -55,15 +60,19 @@ okf_version: "0.2"
 | `mem-03` | [一次性数据绕过 L2（能力门控）](mem/mem-03-l2-bypass-one-shot.md) | `stable` | `MTE2` | 大权重/scale/输入块只被完整消费一次且可由 shape/schedule 谓词证明无后续复用，热数据 L2 命中被流式读挤压 | 能力门控：PyPTO-Pro 当前版本无 L2 cache hint/bypass 公开 API；`pl.system.dcci` 仅做缓存清理失效，不构成 bypass |
 | `mem-04` | [连续完整结果一次性直写](mem/mem-04-direct-contiguous-output.md) | `stable` | `MTE3` | 结果在 UB 中已按输出地址连续排布却仍按行/段逐个搬出，且后续无中间变换、结果只需写入最终 GM 区间 | 仅限 Ascend 950PR 或 950DT；依赖 pl.store 整块搬运与 pl.move 的 UB→UB offset 读 |
 | `mem-05` | [Identity/Pure-Copy 快路径路由](mem/mem-05-identity-pure-copy.md) | `stable` | `SCALAR` | 算子存在退化语义（identity reshape、单段 split、参数使变换退化为 copy），且该条件可由 shape/axis/layout/属性在 tiling 阶段完整证明 | 仅限 Ascend 950PR 或 950DT；依赖 pl.load/pl.store 二维整块搬运与 host 侧模板路由 |
+| `mem-06` | [循环/递推状态片上常驻（消除 GM 往返）](mem/mem-06-resident-state-eliminate-gm-roundtrip.md) | `stable` | `MTE2、MTE3` | 循环/递推的状态或跨迭代中间量按每次迭代写回 GM 再读入；片上容量可容纳常驻 live set 与其邻居的轮转槽 | 仅限 Ascend 950PR 或 950DT；依赖 make_tile/TileGroup 的常驻地址、auto_mutex 生命周期与跨核同步合同 |
 | `pipe-01` | [无 bound 手段清单](pipe/pipe-01-no-bound-checklist.md) | `stable` | `PIPELINE` | 各硬件单元利用率均不高、无明显单一瓶颈，trace 有流水气泡与等待区间、搬移-计算 overlap 不足 | 仅限 Ascend 950PR 或 950DT；各手段分别依赖 make_tile_group 深度轮转、auto_mutex、整块搬运与 VF 融合等已核验能力 |
 | `pipe-02` | [三阶段顺序重排（计算发射优先 + 写出延后一拍）](pipe/pipe-02-stage-order-rescheduling.md) | `stable` | `PIPELINE` | TileGroup 双缓冲已开但 trace 显示搬入-计算-写出仍串行（写回等待刚发出的计算、搬运发射反压计算发射），且每核 tile 数足够形成流水 | 仅限 Ascend 950PR 或 950DT；依赖 make_tile_group 的 group[i] 运行时索引与 auto_mutex 依赖 |
 | `pipe-03` | [C/V 交错流水](pipe/pipe-03-cv-pipeline.md) | `stable` | `PIPELINE` | Cube 和 Vector 存在相邻轮次的独立工作，但当前流水图显示整段串行 | Cube/Vector 分区、TileGroup.next()、独立 buffer 和跨核事件需在目标版本复核 |
 | `pipe-04` | [共享地址 Tile Group 用显式共享计数器管理 Buffer 下标](pipe/pipe-04-shared-buffer-counter.md) | `stable` | `PIPELINE` | 同一地址空间（相同 addrs 与 mutex_ids）被多组 tile group 共享，且不同流水线阶段（QK/PV、drain、按位图跳块）对各组调用次数不一致 | 仅限 Ascend 950PR 或 950DT；仅用 pl.make_tile_group 下标取用 group[idx] 与 Python 标量计数器，已在当前工具链 kernel 核验，其它 SoC 重新查表并验证 |
 | `pipe-05` | [消费点 GM→L1 直载：替换经 UB 的 NZ 转换路径](pipe/pipe-05-gm-to-l1-direct-load.md) | `stable` | `PIPELINE` | 串行链上存在仅为把 GM 数据搬入 L1 而设的 vec 暂存段（GM→UB→NZ 转换→L1），数据只被紧邻 cube 阶段消费、无需 vec 侧加工，串行链同步主导且上游恒写满全部行；vector 空闲且搬运可提前发射（与 cube 计算重叠）时保留 UB 路径更优 | Ascend 950PR 实测；依赖已核验的 pl.load（GM→Mat/L1 直达 + order 轴映射 + set_validshape 尾块语义）与 Mat/NZ TileType；尾块整行直载必须确认上游写满全部行，否则越界读未定义内存 |
+| `pipe-06` | [扁平二维 work grid 分解（铺满 AI Core）](pipe/pipe-06-flat-2d-work-grid.md) | `stable` | `PIPELINE、SCALAR` | 算子由大量相互独立的工作项构成，当前映射只占用部分 AI Core，逐核泳道存在大段空窗 | 仅限 Ascend 950PR 或 950DT；依赖 pl.get_block_idx/pl.get_block_num 与多维 GM 张量的组维寻址 |
 | `scalar-01` | [Scalar bound 手段清单](scalar/scalar-01-scalar-bound-checklist.md) | `stable` | `SCALAR` | scalar 泳道忙而 VECTOR 空闲、总计算量极小或 shape 很小，循环内存在可外提的冗余标量计算（div/mod、重复 offset 推导） | 仅限 Ascend 950PR 或 950DT；依赖 pl.range 循环标量表达式与 tile 基础算术 |
 | `scalar-02` | [热循环查表与守卫的 load-store 减载](scalar/scalar-02-lut-guard-load-shed.md) | `stable` | `SCALARLDST、SCALAR` | 热循环内存在 getval 结果再作为下一个 getval 偏移的链式查表，或每轮读取 state 类守卫标量；表项 launch 后不变且表很小，守卫条件首轮后恒成立 | 仅限 Ascend 950PR 或 950DT；须核验 pl.getval/pl.setval 动态偏移与运行期标量分支 |
 | `scalar-03` | [小 tile 固定开销与粒度修正](scalar/scalar-03-small-tile-granularity.md) | `stable` | `SCALAR` | 总计算量小或 shape 小，块数远大于每块工作量（如行块高取 1~2）；scalar 占比高、发射率低，热点在逐块固定标量开销而非数据搬运或计算本身 | 仅限已核验 pl.make_tile_group/TileType、pl.range、pl.min、pl.set_validshape 的 Ascend 950PR 或 950DT 工具链 |
 | `cross-engine-01` | [UB 直接交给 L1，少一次 GM 往返](cross-engine/cross-engine-01-ub-to-l1-handoff.md) | `stable` | `VEC、MTE2、MTE3` | Vector 的结果紧接着由 Cube 消费，当前存在关键路径上的 GM 写回和读回 | UB 到 L1 的布局转换、insert、valid shape 和跨核事件需在目标版本复核 |
+| `algo-01` | [门控 / 超越函数加权收缩的等价改写（逐元素实现改为 cube GEMM）](algo/algo-01-reformulate-transcendental-contraction.md) | `stable` | `VEC、MAC、MTE2` | 关键路径存在门控或超越函数加权的 (查询 × 键) 型收缩，当前以 Vector 逐元素实现、呈 VEC 或依赖受限；权重可按差值分解为行项与列项之积，且存在参考点使指数中间量落在可表示范围内 | 依赖已核验的 exp、逐元素乘、转置与 cube matmul 及其 dtype 组合；分解数值范围须按目标版本核验 |
+| `sync-01` | [核间同步选型：全局屏障与核间事件的成本模型](sync/sync-01-barrier-vs-event-cost-model.md) | `stable` | `PIPELINE、SCALAR` | 循环体内每轮存在跨核生产/消费依赖，当前使用全局屏障，且屏障总成本或全局锁步等待在总耗时中占比高 | 仅限 Ascend 950PR 或 950DT；依赖 set_cross_core/wait_cross_core 与 CrossCoreSyncMode.INTRA_BLOCK，须核验事件 ID 与屏障占用 ID 不冲突 |
 
 ## ID 与状态规则
 

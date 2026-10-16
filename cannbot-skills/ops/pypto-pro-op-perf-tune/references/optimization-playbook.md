@@ -26,23 +26,25 @@ Module/public wrapper 合同、[主 Skill](../SKILL.md)的实现约束和资源�
 
 ## 2. 建立来源账本
 
-第一次改代码前，枚举四类预置来源：
+第一次改代码前，枚举五类预置来源：
 
 1. 项目 selected KB 中全部 `kind=obligation` 的原子要求；无已选 KB 时记录 0 项；
 2. [通用优化手段](general-optimization-methods.md)中的全部 active/eligible item；
 3. [知识卡片索引](knowledge-cards/index.md)的 Active 表中的全部 item；
-4. [模板优化项索引](../templates/INDEX.md)中的全部 active/eligible item。
+4. [模板优化项索引](../templates/INDEX.md)中的全部 active/eligible item；
+5. [结构性优化重审与可达目标取证](structural-optimization.md)的四类结构维度原子项；命中其 §1 触发
+   条件时无条件纳入。
 
 有 selected KB 时先按 Design Skill 的 source-first 合同核对 `DESIGN_BINDINGS.json`，再以原子 requirement
 为账本项；其稳定身份使用完整原子键 `(class_id, selection_field, reference, req_id)`，不得只使用
 组内唯一的 `req_id`。precondition 和 validation scope 只作为适用性与验证依据。进入自主优化后，
-每个新假设在改代码前追加为第五类 `bottleneck_derived`。
+每个新假设在改代码前追加为第六类 `bottleneck_derived`。
 
 每项至少记录：
 
 | 字段 | 含义 |
 |---|---|
-| `item_id` / `source_kind` | 稳定 ID，以及五类来源之一 |
+| `item_id` / `source_kind` | 稳定 ID，以及六类来源之一 |
 | `source_ref` | 权威文件、原子锚点和内容身份；自主项记录对应瓶颈证据 |
 | `case_scope` | 涉及的 P0 case |
 | `applicability` | 适用、不适用、未触发或待证及其依据 |
@@ -104,7 +106,7 @@ index/INDEX 枚举：卡片取 Active 表，模板取 active/eligible 项；未�
 
 ## 5. 自主瓶颈优化
 
-四类预置项全部达到终态、没有未决 enabler 后，保存当前最佳实现和一份新鲜的逐 P0 瓶颈分析，
+五类预置项全部达到终态、没有未决 enabler 后，保存当前最佳实现和一份新鲜的逐 P0 瓶颈分析，
 再进入 `bottleneck_derived`。预置项未闭合或当前证据不可评估时，只补齐前置工作，不能提前建自主项。
 
 每个自主项必须：
@@ -149,7 +151,7 @@ Scalar 残留需要时间线时先补采。新证据使预置项结论失效时�
 
 调优完成必须同时满足：
 
-- 四类预置来源和全部已创建的自主项均已合法关闭，没有未决或需要重开的项；
+- 五类预置来源和全部已创建的自主项均已合法关闭，没有未决或需要重开的项；
 - final sweep 没有新的合法候选；
 - 最终代码是第 6 节规则选出的最佳正确、合规版本；
 - 用户目标或 Golden 理想参考状态及残留瓶颈均如实披露；

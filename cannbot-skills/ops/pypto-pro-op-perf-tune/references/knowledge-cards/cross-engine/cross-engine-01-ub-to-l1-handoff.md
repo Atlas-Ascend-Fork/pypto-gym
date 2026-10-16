@@ -73,7 +73,3 @@ cube_input = pl.move(l0, l1_slot)
 - L1 目的 tile 通常不能像 UB tile 一样随意切片，半片写入需要用合法的 insert 形式。
 - 增加槽位会占用 L1；地址相同或 mutex 相同会把流水重新串行化。
 - 950PR、其他版本和不同布局的支持情况待验证。
-
-## 参考资料
-
-- 会话资料：`/home/daiyuwen/code/ai_code_md/pypto_ub_to_l1_handoff.md`。

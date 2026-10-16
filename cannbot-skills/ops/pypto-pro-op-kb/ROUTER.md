@@ -16,6 +16,7 @@ for signatures and platform-specific behavior.
 | Select A5 constraints; use limits only after target detection | design/develop/perf skills | [constraints/arch-a5.md](constraints/arch-a5.md) |
 | Decide what may run on the host | `pypto-pro-op-design` / `pypto-pro-op-develop` | [constraints/wrapper-boundary.md](constraints/wrapper-boundary.md) |
 | Measure and tune a correct kernel | `pypto-pro-op-perf-tune` | [`pypto-pro-op-perf-tune` evidence protocol](../pypto-pro-op-perf-tune/references/evidence-protocol.md) |
+| A correct kernel is structure-bound, or a "floor" seems reached | `pypto-pro-op-perf-tune` | [structural-optimization.md](../pypto-pro-op-perf-tune/references/structural-optimization.md) — structural-review gate, four structural dimensions, reachable-target derivation |
 | Localise a numerical error | `pypto-pro-op-develop` | [playbooks/numerical-error-localisation.md](playbooks/numerical-error-localisation.md) |
 | Quantize per row with a scale that is also an output | `pypto-pro-op-design` | [patterns/vec-per-token-dynamic-quant.md](patterns/vec-per-token-dynamic-quant.md) |
 | Feed an integer Cube contraction directly into a floating-point epilogue | `pypto-pro-op-design` / `pypto-pro-op-develop` | [patterns/cv-quant-matmul-direct-epilogue.md](patterns/cv-quant-matmul-direct-epilogue.md) |

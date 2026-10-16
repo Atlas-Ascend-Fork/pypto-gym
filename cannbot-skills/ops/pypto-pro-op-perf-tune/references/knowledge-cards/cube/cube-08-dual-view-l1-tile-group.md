@@ -60,7 +60,3 @@ move(l0b, l1_zn.next())
 - 两个视角必须分别和 L0A、L0B 的输入 shape 对齐；跨 shape 搬运不能替代转置。
 - 同地址只允许一个生产者写入；共享地址的 mutex 合同待验证。
 - ZN 视角能否被目标版本正确消费，需要看生成物和 value test，不能只凭声明判断。
-
-## 参考资料
-
-- 会话资料：`/home/daiyuwen/code/ai_code_md/pypto_ub_to_l1_handoff.md`。

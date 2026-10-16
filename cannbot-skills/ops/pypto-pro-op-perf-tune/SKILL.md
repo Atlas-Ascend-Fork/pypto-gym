@@ -55,7 +55,9 @@ I/O、支持范围、精度、输入分布、性能 case 与用户目标；下�
 
 - [通用优化手段](references/general-optimization-methods.md)；
 - [知识卡片索引](references/knowledge-cards/index.md)的 Active 表及其中全部卡片正文；
-- [模板优化项索引](templates/INDEX.md)及其中全部 active/eligible 模板。
+- [模板优化项索引](templates/INDEX.md)及其中全部 active/eligible 模板；
+- [结构性优化重审与可达目标取证](references/structural-optimization.md)：结构受限时的重设计门禁、四类结构维度
+  与可达目标推导。
 
 只有本节明确允许更新的源码、性能交付物和项目事实记录可补齐或纠正；其它必需输入只读。
 项目要求的只读或冻结输入缺失、损坏、无法解析且无可恢复原始字节时，不得当作可选资料跳过，
@@ -72,6 +74,18 @@ I/O、支持范围、精度、输入分布、性能 case 与用户目标；下�
 - 设备、seed、warm-up、repeats、精确 `Op Name`、计时范围和 L2 清刷设置（`--l2-clean`，默认开启）
   在首次正式采集前冻结；baseline 与 Golden 合同生成后不再修改。
 
+冻结前先执行一次**约束分栏审计**，将待冻结项分为两类：
+
+- **验收硬门**（binding，冻结边界）：数学语义、I/O 与公开 dtype、支持范围、P0、输入分布、精度门
+  （容差与 nonfinite）、正确性测试语义、作为理想参考的用户数值目标；
+- **自述 / 实现约束**（descriptive，可协商）：内部计算精度、kernel 数量、操作数精度、查询形状范围，
+  及测量协议以外的实现选择；此类项仅描述当前实现，不构成验收条件。
+
+审计要求：自述约束须在冻结前对照验收硬门逐条论证必要性。当某条自述约束阻断某个合法优化来源
+（例如 selected KB 的 BF16 操作数、结构重设计维度）时，不得径行视为冻结并据此关闭该来源，须在
+改码前将其作为**合同变更候选**提交用户确认并记录结论。放宽自述约束属合同变更，由用户裁定；不得
+静默执行，亦不得因约束未放宽而将来源登记为“能力/契约阻断”。
+
 调优可以更新最终 `test_{op}.py`、性能交付物，以及项目中为匹配最终接受实现所必需的
 `DESIGN.md`、`DESIGN_BINDINGS.json` 和 `KB_USAGE.json`。事实记录不得删除、降级或
 改写已选 KB 义务，也不得用文档修改掩盖代码未落实；未接受的实验不能写成最终事实。更新前按需
@@ -80,9 +94,11 @@ I/O、支持范围、精度、输入分布、性能 case 与用户目标；下�
 
 ## 3. 优化项来源与顺序
 
-优化项只有以下五类，按顺序处理。其中 `knowledge_card` 是核心来源，其余三类是补充：
-`kb_selected` 补齐开发阶段已选 KB 模板、约束与样例中尚未在代码里落实的部分，`general_method` 与
-`template` 补充卡片之外的机会；三者都不能代替 `knowledge_card` 的覆盖。
+优化项只有以下六类，按顺序处理。其中 `knowledge_card` 是核心来源，`kb_selected`、`general_method`、
+`template` 与 `structural` 是补充：`kb_selected` 补齐开发阶段已选 KB 模板、约束与样例中尚未在代码里
+落实的部分，`general_method` 与 `template` 补充卡片之外的机会，`structural` 补足同结构微调无法覆盖
+的结构维度；补充来源均不能代替 `knowledge_card` 的覆盖。命中[结构性优化重审与可达目标取证](references/structural-optimization.md)
+的触发条件时，`structural` 与其余来源并列闭合，且在 `bottleneck_derived` 之前完成。
 第一次修改代码前，按[优化项实验闭环](references/optimization-playbook.md)建立来源覆盖账本。
 
 ### 3.1 `kb_selected`：已选 KB 的未落实要点
@@ -110,6 +126,11 @@ selected KB 去重，同一改动可以共享实验，但每个 source id 单独
 3. **满足条件即执行实验**：适用条件成立且所需能力已确认可用时，按实验闭环完成改码、正确性验证、性能测量与机制核对；预期收益有限或 profiler 未直接呈现该现象，均不构成免于实验的理由。
 4. **不执行须给出依据**：仅三种情形可跳过——机制在当前 kernel 上不成立；所需能力经证实不支持（证据不足则先补证）；同一改动已由其它 source id 完成实验，此时在 `relations` 记录关联，本条仍独立关闭。
 5. **结论与预期不符时复核查证**：按现有闭环记录接受或恢复，不得倒填结论。
+6. **机制类负结果不因单次实验关闭**：当卡片描述的是**机制**（如门控加权收缩改写为 GEMM、递推状态
+   片上常驻）时，首次实测为负通常系某实现变体未达预期，不足以判定机制不成立；须迭代实现变体
+   （dtype、块宽、参考点、融合点、整合位置）后再结论，仅在可复现“机制在当前工具链或合同下不可用”
+   的最小复现时方可关闭。放宽精度门或支持范围属合同变更，须独立向用户确认（参见
+   [algo-01](references/knowledge-cards/algo/algo-01-reformulate-transcendental-contraction.md)）。
 
 贡献或整理新卡片时，从[贡献指南](references/knowledge-cards/CONTRIBUTING.md)开始：Agent 按贡献者
 提供的事实整理卡片，默认以 Active 提交卡片和索引变更，保留未知项与技术限制。
@@ -121,10 +142,19 @@ selected KB 去重，同一改动可以共享实验，但每个 source id 单独
 负向或不 eligible 的模板不进入闭合分母。可能适用项逐个实验，其它项用明确的适用性或能力证据
 关闭。采用模板前必须按当前代码适配，并重新证明正确性、机制和性能。
 
-### 3.5 `bottleneck_derived`：当前瓶颈自主项
+### 3.5 `structural`：结构维度重设计项
 
-前四类预置来源全部闭合后，才可根据当前接受实现的 profiler 与源码、生成物或 Tile DAG 证据
-提出自主项。每项必须指向尚未尝试的具体瓶颈、使用与当前代码哈希匹配的新鲜分析、与前四类和
+按[结构性优化重审与可达目标取证](references/structural-optimization.md)执行。命中其 §1 强制范围时
+**无条件执行**，不得跳过。先按该页 §2 取证“最佳已知结构”并据 §4 得到可达目标 `T_best`/`T_lb`；
+再按其 §3 对四类结构维度（操作数数值类型、片上驻留、工作分解、计算图等价改写）逐项判定并形成原子项。
+其中“计算图等价改写”属算法层，收益通常高于同结构微调，对应知识卡片 `algo-01`。维度只能以
+“实现并实测”或“可复现的能力/契约阻断”关闭；存在已验证的更快结构时，对齐其结构为首要候选。
+`structural` 来源闭合后，方可进入 `bottleneck_derived`。
+
+### 3.6 `bottleneck_derived`：当前瓶颈自主项
+
+前五类预置来源全部闭合后，才可根据当前接受实现的 profiler 与源码、生成物或 Tile DAG 证据
+提出自主项。每项必须指向尚未尝试的具体瓶颈、使用与当前代码哈希匹配的新鲜分析、与前五类和
 既有自主项去重，并按同一受控闭环验证。接受改动后必须在新代码上刷新瓶颈证据，再建立下一项。
 
 profiler、代码分析、平台资料和 general knowledge 可以共同解释新鲜瓶颈并形成假设；平台资料和
@@ -148,15 +178,22 @@ general knowledge 本身不是优化项来源，假设必须先按前述证据�
 4. **建立正式 baseline**：discovery 确认唯一、完整 lowering `Op Name`，再按 manifest 逐 case、
    逐 repeat 采集七指标 baseline 并归档原始证据。
 5. **分析瓶颈并排序**：使用既有 Roofline、Vector/Cube/Scalar/MTE、分层带宽、冲突、逐核及
-   Tile DAG/时间线方法判断适用性、优先级和验证指标；ratio 只负责指路。
-6. **闭合预置来源**：依次处理 `kb_selected`、`general_method`、`knowledge_card`、`template`。每个
-   待实验项执行“改源码 → 完整正确性 → quick → 必要时 formal compare → 机制核对 → 接受或恢复
-   → 写回账本”。
-7. **进入自主优化**：确认四类预置来源全部闭合，并刷新当前最佳实现的瓶颈证据；证据不足先补证，
+   Tile DAG/时间线方法判断适用性、优先级和验证指标；ratio 只负责指路。若命中
+   [结构性优化重审与可达目标取证](references/structural-optimization.md) §1 强制或触发条件，引入
+   `structural` 来源，按其 §2 取证最佳已知结构、按其 §3 逐维判定、按其 §4 得到可达目标
+   `T_best`/`T_lb`。
+6. **闭合预置来源**：依次处理 `kb_selected`、`general_method`、`knowledge_card`、`template`、
+   `structural`（命中触发条件时）。每个待实验项执行“改源码 → 完整正确性 → quick → 必要时
+   formal compare → 机制核对 → 接受或恢复 → 写回账本”。
+7. **进入自主优化**：确认五类预置来源全部闭合，并刷新当前最佳实现的瓶颈证据；证据不足先补证，
    再根据当前瓶颈逐个建立 `bottleneck_derived`，接受改动后重新分析。
 8. **闭合与停止**：关闭全部来源和已创建项，并在最终代码上执行 fresh candidate sweep。性能目标
-   差距和残留瓶颈用于提出、排序候选；仍有合法未尝试项就继续，确认没有新候选时记录候选闭合与
-   最佳版本选择证据。达到或未达到理想目标本身都不能提前结束或阻止交付。
+   差距和残留瓶颈用于提出、排序候选；仍有合法未尝试项就继续。停止前必须闭合 `structural`
+   来源：§2 取证的最佳已知结构（存在时）已实现并实测，且 §3 四类结构维度逐项以“实现并实测”或
+   “可复现的能力/契约阻断”关闭；同时记录当前实现与 `T_best`/`T_lb` 的比值。仅当该比值落入目标
+   效率范围，或每个被跳过项都有可复现的能力/契约阻断证据时，方可停止。冻结结构上测得的“地板/
+   上限”、无最小复现的“能力缺口”均不构成停止依据。确认没有新候选时记录候选闭合与最佳版本选择
+   证据。达到或未达到理想目标本身都不能提前结束或阻止交付。
 9. **同步最终事实**：项目有相关记录时，按上述 owner 合同依据最终接受代码更新 DESIGN/BINDINGS/KB_USAGE，
    逐项核对引用、file/symbol、验证方法与代码一致。
 10. **最终验收**：对同一最终实现连续执行完整正确性、独立 final formal compare 和每个 P0 的
@@ -175,7 +212,7 @@ KEEP/final 文字与实际交付源码相反。主 agent 随后按 `scriptor-mod
 |---|---|
 | `test_{op}.py` | 正确、合规的冻结 baseline 与本轮正式评价候选中，按冻结聚合指标选出的最佳实现 |
 | `PERFORMANCE_CASES.json` | SPEC P0 与既有测试的一一映射，以及冻结的目标 case；baseline/final 共用 |
-| `PERFORMANCE_REPORT.md` | 冻结合同、目标 case、来源账本、逐 case baseline/final/目标、实验、候选比较、终态和证据路径 |
+| `PERFORMANCE_REPORT.md` | 冻结合同、目标 case、来源账本、逐 case baseline/final/目标、实验、候选比较、结构维度结论与可达目标 `T_lb` 比值、终态和证据路径 |
 | `performance.json` / `performance.log` / `perf_report.md` | final formal compare 产物；quick 不能替代 |
 | `docs/perf/round_NNN/` | baseline/final 原始 CSV、measurement/collection 与逐 case timeline |
 | 最终事实记录 | 项目已有或要求的 DESIGN、DESIGN_BINDINGS 和 KB_USAGE，与接受代码一致 |
