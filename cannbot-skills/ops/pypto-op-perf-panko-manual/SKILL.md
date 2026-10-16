@@ -16,7 +16,7 @@ stagnation, `J = s·(P_ref/p)·100`, tree-edit application, stop conditions, sta
 `scripts/panko_harness.py`. You **call** it; you do not re-implement its decisions.
 
 The world model is the **persisted tree** in `custom/<op>/optimization/search_state.json`, not
-this session. You are re-dispatched fresh each cycle: **read the state → apply one transition →
+this session. Each cycle may resume the same task-scoped optimizer conversation: **read the state → apply one transition →
 persist → return a directive.** Therefore every V update / prune MUST carry its reason
 (`--edits ... "reasons"`); a later dispatch re-hydrates the belief from your log.
 
@@ -44,6 +44,7 @@ every inserted intent a `prior_gain` by this same principle-directness scale.
 
 ## References (load as needed)
 - `references/evaluator.md` — the frozen `E(x)→(s,p)` you must run (fixed commands/thresholds).
+- `references/search_acceleration.md` — evaluator modes, cache validity and worker lifecycle.
 - `references/state_schema.md` — `search_state.json` + `<op>_optimization.md`.
 - `references/action_catalog.json` — stage-tagged seed intents (used at INIT).
 - `references/tunable_constants.md` — design note: extending INIT normalisation
@@ -123,6 +124,14 @@ project the plugin was installed into it is `.opencode/skills/pypto-op-perf-pank
 not exist there.
 
 Let `HARNESS = python <SKILL_ROOT>/scripts/panko_harness.py`.
+
+Run INIT/STEP with `python <SKILL_ROOT>/scripts/evaluation_session.py --op-dir <op_dir> --op <op> --op-file <op_file> --device <DEVICE> --test-command '<test_command>' --lint-root <lint_root>`. It runs the full tests, lint, and frozen measurement in a resident worker. Pass `--evaluation-mode resident` to `HARNESS block` to reuse it for BO, keeping paths and commands consistent across dispatches. A terminal `HARNESS stop` closes it. On abort, run `python <SKILL_ROOT>/scripts/evaluation_session.py --close --op-dir <op_dir>`.
+
+For additional reuse, select `--mode cached` (complete results and exact-source static failures) or `--mode prepared` (also guarded deterministic inputs and pure golden references). Before a new INIT's first measurement, call `evaluation_session.py --reset --op-dir <op_dir>` once; never reset a resumed STEP. It starts a new cache generation and removes stale terminal markers while preserving prior evidence. Use the same mode for BO's `--evaluation-mode`. Tests, references, SPEC, lint, configuration, runtime versions, host and environment invalidate the cache. Generated tuning notes do not. Set `PANKO_RUNTIME_SIGNATURE` when replacing runtime binaries without changing their version metadata or changing test dependencies outside the operator directory. Prepared mode requires deterministic tests and a pure `<op>_golden` in `<op>_golden.py`; unsupported fixtures keep fresh preparation. Tensor contents and versions are checked before reuse, including reference outputs.
+
+To retain harness imports and API metadata, set `HARNESS = python <SKILL_ROOT>/scripts/harness_session.py --op-dir <op_dir> --`. Its arguments and stdout remain the original harness contract. After `record`, it runs the original stop check; a real stop with the best source restored runs the original report and writes `optimization/controller-terminal.json`. After recording, require its run_start to match progress._start_ts, its reason to match progress.stop_reason, and its delivered_code_hash to match the current best source before returning STOP. Forced stops do not create it. On abort, call `harness_session.py --op-dir <op_dir> --close` to release both owned workers. Its `--timeout` bounds a complete harness command (default 3600 seconds); set it to the command's BO budget.
+
+If the client exposes a resumable optimizer task/session ID, reuse it only within the same operator directory, role and search configuration; keep the coder's role separate. Always reload `search_state.json` and the current implementation before a resumed cycle. Start a new conversation when that scope changes. Context reuse does not replace the persisted state or bypass any transition.
 
 The action catalogue resolves itself: **omit `--catalog`** and the harness reads
 `<SKILL_ROOT>/references/action_catalog.json`, wherever that is. Pass `--catalog`

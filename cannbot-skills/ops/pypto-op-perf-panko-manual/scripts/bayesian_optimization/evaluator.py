@@ -293,7 +293,7 @@ class RealEvaluator:
                  lint_root=None, lint_stage=7,
                  warmup=1, runs=3, agg="min", eval_timeout_s=300,
                  run_cmd=None, measure_fn=None,
-                 fault_backoff_s=(30, 90), sleep_fn=None):
+                 fault_backoff_s=(30, 90), sleep_fn=None, evaluation_mode="subprocess"):
         """test_command : shell string that exits 0 iff golden+layout pass (from the dispatch prompt).
         lint_root      : path to the pypto-op-lint hook directory under
                          cannbot-skills/plugins-official/pypto-op-orchestrator/hooks
@@ -338,10 +338,21 @@ class RealEvaluator:
         self._sleep = sleep_fn or time.sleep
         self._run_cmd = run_cmd or self._default_run
         self._measure_fn = measure_fn
+        if evaluation_mode not in ("subprocess", "resident", "cached", "prepared"):
+            raise ValueError("unknown evaluation mode")
+        if evaluation_mode != "subprocess" and (run_cmd is not None or measure_fn is not None):
+            raise ValueError("injected runners require subprocess mode")
+        self.evaluation_mode = evaluation_mode
+        self._session_result = {}
         with open(op_file, "r", encoding="utf-8") as f:
             self.base_src = f.read()
         # Discover the per-site tunable tile calls once; pass self.sites to driver.run_bo.
-        self.sites = apply.tunable_sites(self.base_src)
+        try:
+            self.sites = apply.tunable_sites(self.base_src)
+        except SyntaxError:
+            if evaluation_mode not in ("cached", "prepared"):
+                raise
+            self.sites = []
 
     # ------------------------------------------------------------------ objective
     def __call__(self, site_configs):
@@ -432,6 +443,10 @@ class RealEvaluator:
         self._write(new_src)
         return new_src
 
+    def lint_result(self):
+        """The original lint gate and its captured diagnostics for a worker."""
+        return self._lint_ok(), self._last_output
+
     # ------------------------------------------------------------------ internals
     def _default_run(self, cmd, timeout, env=None):
         """Run the correctness command; return its exit code (124 on timeout).
@@ -470,6 +485,15 @@ class RealEvaluator:
                 return m
         return None
 
+    def _test_once(self):
+        """Dispatch one correctness attempt through the selected evaluator."""
+        if self.evaluation_mode == "subprocess":
+            return self._run_cmd(self.test_command, self.eval_timeout_s)
+        import evaluation_session
+        self._session_result = evaluation_session.request(self)
+        self._last_output = self._session_result.get("test_output", "")
+        return self._session_result["test_rc"]
+
     def _run_test(self):
         """Run the correctness command, waiting out a busy device but not a bug.
 
@@ -487,7 +511,7 @@ class RealEvaluator:
         """
         self.last_retries = 0
         for wait in self.fault_backoff_s + (None,):
-            rc = self._run_cmd(self.test_command, self.eval_timeout_s)
+            rc = self._test_once()
             if rc == 0:
                 return rc
             marker = self._env_fault()
@@ -510,6 +534,9 @@ class RealEvaluator:
             f.write(src)
 
     def _lint_ok(self):
+        if self.evaluation_mode != "subprocess":
+            self._last_output = self._session_result.get("lint_output", "")
+            return self._session_result.get("lint_rc", 1) == 0
         if not self.lint_root:
             return True
         env = dict(os.environ)
@@ -543,6 +570,9 @@ class RealEvaluator:
         for every evaluation. The two arms were paying different process costs
         for the same nominal measurement; now they do not.
         """
+        if self.evaluation_mode != "subprocess":
+            self._last_output = self._session_result.get("measure_output", "")
+            return self._session_result.get("metrics", {})
         if self._measure_fn is not None:
             return self._measure_fn(self.op_file)
         ml_path = os.path.join(os.path.dirname(os.path.dirname(__file__)),

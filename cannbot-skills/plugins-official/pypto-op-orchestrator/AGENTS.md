@@ -162,6 +162,13 @@ state_transition(action="start_stage", stage=7, tuning_mode="panko")
 
 **relay 循环：**
 
+若客户端提供可续用的 Task/session ID，同一 `op_dir`、角色和搜索配置的
+auto-tuner dispatch 应复用该 ID；作用域变化时启动新会话，coder 保持独立角色。
+每轮仍读取持久化状态，不以会话记忆代替评估或 transition。使用常驻 harness 时，
+`record` 后检查 `optimization/controller-terminal.json`；只有原有 stop、最佳代码恢复和
+report 均完成才会生成此标记。标记的 run_start、reason、delivered_code_hash 必须与当前
+持久化状态的开始时间、停止原因及最佳代码匹配，才进入收尾，不再调度 coder 或新的搜索周期。
+
 ```
 d = dispatch @pypto-op-auto-tuner-panko(INIT: op, op_dir=custom/<op>, DEVICE, op_file, test_command, P_ref, config)
 while d.directive != "STOP":                     # 唯一合法出口＝STOP

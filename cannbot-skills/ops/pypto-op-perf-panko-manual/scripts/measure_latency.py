@@ -34,6 +34,7 @@ import statistics
 import sys
 import tempfile
 import time
+import types
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import jsonio  # noqa: E402
@@ -341,7 +342,8 @@ def _load_module(path, name):
 
 def _build_run_once(op_dir, op, op_file, device, inputs_file=None):
     """Convention: `custom/<op>/eval/test_inputs.py` exposes `build_inputs()` (or `INPUTS`) giving
-    the args for the wrapper `op` defined in `op_file`. Adapt here if an op differs; the MECHANICS
+    the args for the wrapper `op`. `op_file` accepts a path or an already imported module.
+    Adapt here if an op differs; the MECHANICS
     in `measure()` stay frozen regardless.
     """
     import torch  # noqa
@@ -351,7 +353,7 @@ def _build_run_once(op_dir, op, op_file, device, inputs_file=None):
     _optional("torch_npu")
     os.environ["TILE_FWK_DEVICE_ID"] = str(device)
     _quietly(torch.npu.set_device, int(device))
-    impl = _load_module(op_file, "op_impl")
+    impl = op_file if isinstance(op_file, types.ModuleType) else _load_module(op_file, "op_impl")
     # `<op>_wrapper` is the more common convention in this repo, but `--op` names
     # the operator, not the callable. Without the fallback every trial on such a
     # kernel raises AttributeError inside the measurement subprocess, which the
@@ -368,8 +370,8 @@ def _build_run_once(op_dir, op, op_file, device, inputs_file=None):
     # then drawn on a shape where the tile makes the loop run exactly once,
     # which it does not do at the declared size -- so the campaign optimises a
     # loop that is not there.
-    ti = _load_module(inputs_file or os.path.join(op_dir, "eval", "test_inputs.py"),
-                      "test_inputs")
+    ti = inputs_file if isinstance(inputs_file, types.ModuleType) else _load_module(
+        inputs_file or os.path.join(op_dir, "eval", "test_inputs.py"), "test_inputs")
     builder = getattr(ti, "build_inputs", None)
     inputs = builder(device) if callable(builder) else getattr(ti, "INPUTS")
     args = inputs if isinstance(inputs, (list, tuple)) else [inputs]
@@ -381,6 +383,10 @@ def _build_run_once(op_dir, op, op_file, device, inputs_file=None):
         _quietly(torch.npu.synchronize)
 
     return run_once
+
+
+build_run_once = _build_run_once
+capture_output = _capture
 
 
 def main():

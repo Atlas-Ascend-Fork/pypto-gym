@@ -34,6 +34,8 @@ import subprocess
 import sys
 import time
 
+import evaluation_session
+
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 import jsonio  # noqa: E402
@@ -1184,6 +1186,7 @@ def _block_search(a, st, ctx, cfg):
         op=st["op"], op_dir=a.op_dir, op_file=ctx["op_file"], device=st.get("device_id", ""),
         test_command=a.test_command, lint_root=(a.lint_root or None),
         eval_timeout_s=cfg.get("eval_timeout_s", 300),
+        evaluation_mode=getattr(a, "evaluation_mode", "subprocess"),
         # Overridable so tests can assert the schedule without waiting it out.
         # The default is the production one and campaigns are told to pass
         # nothing else.
@@ -1742,6 +1745,7 @@ def cmd_init(a):
                                        _cli_pipes(a, "preopt_"))  # first-move symptom bias
     _init_snapshot(a, op_file, opening["preopt_hash"])
     save(a.op_dir, st)
+    evaluation_session.clear_terminal_marker(a.op_dir)
     append_log(a.op_dir, a.op,
                f"# {a.op} — PANKO optimization\n\n## Baseline\n"
                f"- preopt latency: {a.preopt_p} us | P_ref: {a.p_ref} us | j0: {opening['j0']}\n"
@@ -3212,6 +3216,7 @@ def _device_verdict(st, a):
         return None, None
     if last_block.get("fault_kind") == "invocation":
         return "harness_fault", None
+    evaluation_session.close_session(a.op_dir)
     probe = _device_probe(st)
     return (None if probe["usable"] else "device_unavailable"), probe
 
@@ -3289,6 +3294,7 @@ def cmd_stop(a):
     if reason is not None:
         _deliver_best(st, a)
         pr["stop_reason"] = reason   # sticky; the Stage-7 completion gate reads this
+        evaluation_session.close_session(a.op_dir)
     if probe is not None:
         _record_probe(st, a, probe)
     delivered = _delivered_check(st, a.op_dir)
@@ -3364,6 +3370,8 @@ def _parser_block(sub):
                    help="upper bound requested by the optimizer; the core clamps it "
                         "against the remaining budget and the run-level share")
     q.add_argument("--lint-root", dest="lint_root", default="")
+    q.add_argument("--evaluation-mode", choices=("subprocess", "resident", "cached", "prepared"),
+                   default="subprocess")
 
 
 def _parser_normalize(sub):

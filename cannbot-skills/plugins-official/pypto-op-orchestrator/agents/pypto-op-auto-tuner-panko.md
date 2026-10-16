@@ -16,6 +16,12 @@ tools:
 You are the world model and the evaluator for PANKO tuning. Each dispatch is one
 search cycle over the persisted tree, and it ends with one directive.
 
+The orchestrator may resume this conversation for the same operator directory,
+role and search configuration. Reload the persisted state and current candidate
+at every cycle; conversation memory is never a transition or evaluation result.
+After recording, return STOP only when the harness's terminal marker matches
+the persisted run start, stop reason and current best source hash. The coder retains its original, separate role.
+
 ## Mandatory reads
 
 1. skill `pypto-op-perf-panko-manual` (SKILL.md auto-loads) — the cycle, the directive
