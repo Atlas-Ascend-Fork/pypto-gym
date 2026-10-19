@@ -154,34 +154,41 @@ pypto-gym/
 │       ├── qwen3_vl_8b_instruct_unredacted_max/  # Qwen3-VL-8B
 │       ├── spatial_ssrl_3b/                 # Spatial SSRL 3B
 │       └── sample_inputs/                   # 公共样例输入
+├── ops/                                     # 算子样例根目录
+│   ├── pypto_tensor/                        # Tile 算子实现
+│   │   ├── arctic/                          # Arctic LSTM Speculator
+│   │   ├── common_utils/                    # 公共工具（对比、日志、设备查询等）
+│   │   ├── deepseek_v2_lite_chat/           # DeepSeek V2 Lite Chat MLA Prolog
+│   │   ├── deepseek_v32_exp/                # DeepSeek V3.2 MLA / Sparse Attention / Lightning Indexer
+│   │   ├── deepseek_v4/                     # DeepSeek V4 MLA / Compressor / Window Attention
+│   │   ├── gemma4_31b_it/                   # Gemma4-31B-it GQA Decode Attention / Softmax
+│   │   ├── glm_v4_5/                        # GLM V4.5 Attention / MoE / FFN / Gate
+│   │   ├── gutenocr_3b/                     # GutenOCR-3B RMSNorm / SwiGLU MLP / MRoPE
+│   │   ├── kimi_linear_48b_a3b/             # Kimi-Linear-48B-A3B KDA
+│   │   ├── ling_3_0_flash/                  # Ling 3.0 Flash KDA
+│   │   ├── llada2/                          # LLaDA2 Liger Cross Entropy Loss
+│   │   ├── llada2_moe/                      # LLaDA2-MoE Gate / Expert FFN / Grouped GEMM
+│   │   ├── minimax/                         # MiniMax M2.7 MoE Grouped GEMM
+│   │   ├── mtgr_segment_attention/          # MTGR Ragged Segment Attention
+│   │   ├── openpangu_v5_7b/                 # openPangu-Embedded-7B 整层融合（单层 BSH）
+│   │   ├── phi_3_mini_4k_instruct/          # Phi-3-mini-4k-instruct RMSNorm
+│   │   ├── qat/                             # 量化感知训练（对称/非对称，per-tensor/channel/group）
+│   │   ├── qwen3_1_7b/                      # Qwen3-1.7B RMSNorm + RoPE
+│   │   ├── qwen3_5/                         # Qwen3.5 GDR 前向/反向
+│   │   ├── qwen3_next/                      # Qwen3-Next Gated Delta Rule
+│   │   ├── qwen3_vl_8b_instruct_unredacted_max/  # Qwen3-VL-8B RMSNorm
+│   │   ├── spatial_ssrl_3b/                 # Spatial SSRL 3B RMSNorm + RoPE
+│   │   └── experimental/                    # 实验性算子
+│   └── pypto_pro/                           # PyPTO Pro 算子
+│       ├── deepseek_v4_1/                   # DeepSeek V4.1 IFA Pro 算子
+│       │   ├── engram_gate/                 # Engram Gate
+│       │   ├── indexer_prologue_k/          # Indexer Prologue K
+│       │   └── indexer_prologue_qw/         # Indexer Prologue Q/W 投影融合
+│       ├── llada2/                          # LLaDA2 Liger Cross Entropy Loss (Pro)
+│       └── experimental/                    # 实验性 Pro 算子
+│           └── ops_transformer/             # Engram / KDA 等
 ├── src/
 │   └── pypto_gym/
-│       ├── ops/                             # 算子样例根目录
-│       │   └── pypto_tensor/                  # Tile 算子实现
-│       │       ├── arctic/                  # Arctic LSTM Speculator
-│       │       ├── common_utils/            # 公共工具（对比、日志、设备查询等）
-│       │       ├── deepseek_v2_lite_chat/   # DeepSeek V2 Lite Chat MLA Prolog
-│       │       ├── deepseek_v32_exp/        # DeepSeek V3.2 MLA / Sparse Attention / Lightning Indexer
-│       │       ├── deepseek_v4/             # DeepSeek V4 MLA / Compressor / Window Attention
-│       │       ├── gemma4_31b_it/           # Gemma4-31B-it GQA Decode Attention / Softmax
-│       │       ├── glm_v4_5/                # GLM V4.5 Attention / MoE / FFN / Gate
-│       │       ├── gutenocr_3b/             # GutenOCR-3B RMSNorm / SwiGLU MLP / MRoPE
-│       │       ├── kimi_linear_48b_a3b/     # Kimi-Linear-48B-A3B KDA
-│       │       ├── llada2_moe/              # LLaDA2-MoE Gate / Expert FFN / Grouped GEMM
-│       │       ├── ling_3_0_flash/          # Ling 3.0 Flash KDA
-│       │       ├── minimax/                 # MiniMax M2.7 MoE Grouped GEMM
-│       │       ├── mtgr_segment_attention/  # MTGR Ragged Segment Attention
-│       │       ├── openpangu_v5_7b/         # openPangu-Embedded-7B 整层融合（单层 BSH）
-│       │       ├── phi_3_mini_4k_instruct/  # Phi-3-mini-4k-instruct RMSNorm
-│       │       ├── qat/                     # 量化感知训练（对称/非对称，per-tensor/channel/group）
-│       │       ├── qwen3_1_7b/              # Qwen3-1.7B RMSNorm + RoPE
-│       │       ├── qwen3_5/                 # Qwen3.5 GDR 前向/反向
-│       │       ├── qwen3_5_9b/              # Qwen3.5-9B Gated Delta Rule
-│       │       ├── qwen3_6_27b/             # Qwen3.6-27B Gated Delta Rule
-│       │       ├── qwen3_next/              # Qwen3-Next Gated Delta Rule
-│       │       ├── qwen3_vl_8b_instruct_unredacted_max/  # Qwen3-VL-8B RMSNorm
-│       │       ├── spatial_ssrl_3b/         # Spatial SSRL 3B RMSNorm + RoPE
-│       │       └── experimental/            # 实验性算子
 │       └── transformers/                    # 各个模型结构定义
 │           ├── gemma4_31b_it/
 │           ├── gutenocr_3b/
@@ -207,17 +214,18 @@ pypto-gym/
 │   │   ├── glm_v4_5/                        # GLM V4.5 算子测试
 │   │   ├── gutenocr_3b/                     # GutenOCR-3B 算子测试
 │   │   ├── kimi_linear_48b_a3b/             # Kimi-Linear-48B-A3B 算子测试
-│   │   ├── llada2_moe/                      # LLaDA2-MoE 算子测试
 │   │   ├── ling_3_0_flash/                  # Ling 3.0 Flash 算子测试
+│   │   ├── llada2/                          # LLaDA2 算子测试
+│   │   ├── llada2_moe/                      # LLaDA2-MoE 算子测试
 │   │   ├── minimax_m27/                     # MiniMax M2.7 算子测试
+│   │   ├── minimax_m3/                      # MiniMax M3 算子测试
 │   │   ├── mtgr_segment_attention/          # MTGR 分段注意力算子测试
+│   │   ├── openpangu_v5_7b/                 # openPangu-Embedded-7B 算子测试
 │   │   ├── phi_3_mini_4k_instruct/          # Phi-3-mini-4k-instruct 算子测试
 │   │   ├── pypto_pro/                       # PyPTO Pro 算子测试
 │   │   ├── qat/                             # QAT 算子测试
 │   │   ├── qwen3_1_7b/                      # Qwen3-1.7B 算子测试
 │   │   ├── qwen3_5/                         # Qwen3.5 算子测试
-│   │   ├── qwen3_5_9b/                      # Qwen3.5-9B 算子测试
-│   │   ├── qwen3_6_27b/                     # Qwen3.6-27B 算子测试
 │   │   ├── qwen3_next/                      # Qwen3-Next 算子测试
 │   │   ├── qwen3_vl_8b_instruct_unredacted_max/  # Qwen3-VL-8B 算子测试
 │   │   ├── spatial_ssrl_3b/                 # Spatial SSRL 3B 算子测试
@@ -247,6 +255,7 @@ pypto-gym/
 | `glm_v4_5/` | attention_pre_quant, attention, attention_fusion, gate, select_experts, ffn_shared_expert_quant, moe_fusion | 注意力（含量化前处理与融合）、MoE 门控/专家选择/FFN/融合等算子 |
 | `gutenocr_3b/` | swiglu_mlp, rms_norm, mrope | SwiGLU MLP、RMSNorm、多模态 RoPE |
 | `kimi_linear_48b_a3b/` | kda_chunk | Kimi Delta Attention（线性注意力，prefill/chunk） |
+| `llada2/` | liger_cross_entropy | Liger Cross Entropy Loss（前向 + 反向） |
 | `llada2_moe/` | gate_select, expert_ffn, moe_grouped_gemm | MoE 门控选择、单专家 FFN、分组 GEMM（9.2x 端到端加速） |
 | `ling_3_0_flash/` | chunk_kda, fused_recurrent_kda | KDA 融合算子（Chunk / Recurrent） |
 | `minimax_m27/` | moe_grouped_gemm | MoE Grouped GEMM（256 专家，BF16，910B 适配，7.6x 加速） |
@@ -256,14 +265,15 @@ pypto-gym/
 | `qat/` | symmetric_per_tensor, symmetric_per_channel, asymmetric_per_group | 量化感知训练三模式（前向 + 反向） |
 | `qwen3_1_7b/` | rms_norm_rope | RMSNorm + RoPE 融合 |
 | `qwen3_5/` | gdr_fwd, gdr_bwd | Chunk Gated Delta Rule 前向/反向 |
-| `qwen3_5_9b/` | gated_delta_rule | Chunk Gated Delta Rule 注意力（D=128, Nv=32, Nqk=16） |
-| `qwen3_6_27b/` | gated_delta_rule | Chunk Gated Delta Rule 注意力（D=128, Nv=48, Nqk=16） |
-| `qwen3_next/` | gated_delta_rule | Chunk Gated Delta Rule，线性复杂度 O(n)，支持 1K-1M+ 序列长度 |
+| `qwen3_next/` | gated_delta_rule | Chunk Gated Delta Rule，线性复杂度 O(n)，支持 1K-1M+ 序列长度（覆盖 Qwen3.5-9B / Qwen3.6-27B 场景） |
 | `qwen3_vl_8b_instruct_unredacted_max/` | rms_norm | RMSNorm（hidden_size=2048） |
 | `spatial_ssrl_3b/` | rms_norm, rope | RMSNorm + RoPE（Vision 2D / 多模态 3D） |
 | `experimental/attention/` | BSA, chunked_gdr, incre_flash_attention_gqa_antiquant, incre_flash_attention_mla, incre_flash_attention, pfa_flash_attention | BSA、Chunk GDR、增量 Flash Attention（GQA/MLA）、PFA Flash Attention 等算子 |
 | `experimental/matmul/` | gmm_mxfp8, grouped_matmul_finalize_routing, grouped_matmul_swiglu_quant, quant_batch_matmul, quant_grouped_matmul_inplace_add, quant_matmul_reduce_sum, transpose_quant_batch_matmul | MXFP8 GMM、量化分组矩阵乘、量化批量矩阵乘、转置量化矩阵乘等算子 |
 | `experimental/ops_transformer/` | flash_attention_mha, flash_attention_mha_grad, flash_attention_score, flash_attention_score_grad, fused_swiglu, fused_swiglu_grad, lightning_indexer, mla_prolog, mla_prolog_mxfp_quant_v3, mla_prolog_quant_hifp8_v3, page_attention_quant, sparse_attention_antiquant_fp8, sparse_attention_antiquant_kv_split, sparse_attention_grad_tnd, sparse_attention_tnd, attention_worker_combine, engram, flash_attention_fp8, kimi_attention_residuals | Flash Attention（MHA/Score/FP8，含量化/反向）、MLA Prolog（含量化）、SwiGLU、Page Attention、稀疏注意力、Engram、Kimi Attention Residuals 等算子 |
+| `pypto_pro/deepseek_v4_1/` | engram_gate, indexer_prologue_k, indexer_prologue_qw | DeepSeek V4.1 IFA Pro 算子（PyPTO Pro DSL） |
+| `pypto_pro/llada2/` | liger_cross_entropy_loss | Liger Cross Entropy Loss（Pro 实现） |
+| `pypto_pro/experimental/ops_transformer/` | engram, kda 系列 | 实验性 Pro 算子（Engram、KDA 等） |
 | `experimental/vector/` | ApplyAdamWV2, GatherPaKvCache, QkvRmsNormRopeCache, ApplyRMSProp, BNTrainingReduce, InplaceAddRmsNorm, InterleaveRope, moe_gating_topk 等 | AdamW / RMSProp 更新、Paged Attention KV cache gather、QKV RMSNorm RoPE cache 融合、RMSNorm、RoPE、MoE 门控等算子 |
 
 ## 添加新算子
