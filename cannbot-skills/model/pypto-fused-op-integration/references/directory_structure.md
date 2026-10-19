@@ -80,7 +80,7 @@ python3 test/test_{op}.py
 ## 归档到 pypto-gym 仓库后的结构
 
 ```
-src/pypto_gym/ops/pypto_tensor/{model_name}/
+ops/pypto_tensor/{model_name}/
   __init__.py              # USE_PTO 开关 + 适配层函数
   {op}/
     {op}_impl.py            # PyPTO kernel 实现
@@ -106,7 +106,7 @@ modeling/transformers/{model_name}/
 |---------|---------|------|
 | `configuration_*.py`、`modeling_*.py`（开源库拷贝） | 保留原始 Apache 2.0，末尾追加华为修改声明 | `src/pypto_gym/transformers/qwen3_1_7b/configuration_qwen3.py` |
 | `ask_*.py`、`bench_*.sh`、`prof_*.sh`、`*.md` 等自有文件 | CANN Open Software License | `modeling/transformers/qwen3_1_7b/ask_Qwen3-1.7B.py` |
-| `*_impl.py`、`__init__.py`（PyPTO kernel） | CANN Open Software License | `src/pypto_gym/ops/pypto_tensor/qwen3_1_7b/__init__.py` |
+| `*_impl.py`、`__init__.py`（PyPTO kernel） | CANN Open Software License | `ops/pypto_tensor/qwen3_1_7b/__init__.py` |
 
 > 开源库拷贝的文件必须在保留原始版权行的前提下，于末尾 `# NOTICE:` 标注华为修改。
 

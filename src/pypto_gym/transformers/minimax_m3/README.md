@@ -33,7 +33,7 @@ routed experts dequantized per forward, so one die holds ~one layer's active exp
 
 ## Switch variable
 
-`USE_PTO_GROUPED_GEMM` (in `src/pypto_gym/ops/pypto_tensor/minimax/__init__.py`) — the single switch
+`USE_PTO_GROUPED_GEMM` (in `ops/pypto_tensor/minimax/__init__.py`) — the single switch
 gating whether the MoE FFN routes through the fused kernel (default `False`; the entry scripts enable
 it per run). Tile / activation parameters are env-exposed (`PYPTO_VEC_TILE`, `PYPTO_CUBE_NBUFFER`,
 `PYPTO_VEC_NBUFFER`, `PYPTO_MM1_*`, `PYPTO_MM2_*`, `PYPTO_SWIGLU_ALPHA`, `PYPTO_SWIGLU_LIMIT`);

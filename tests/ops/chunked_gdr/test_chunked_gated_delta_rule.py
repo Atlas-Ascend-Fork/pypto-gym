@@ -57,7 +57,7 @@ from numpy.testing import assert_allclose
 
 _CUR = Path(__file__).resolve().parent
 sys.path.insert(0, str(_CUR))
-_IMPL = Path(__file__).resolve().parents[3] / "src/pypto_gym/ops/pypto_tensor/experimental/attention/chunked_gdr/"
+_IMPL = Path(__file__).resolve().parents[3] / "ops/pypto_tensor/experimental/attention/chunked_gdr/"
 sys.path.insert(0, str(_IMPL))
 
 import pytest

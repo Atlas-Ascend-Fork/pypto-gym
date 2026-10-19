@@ -34,13 +34,13 @@ from dataclasses import dataclass
 _test_dir = os.path.dirname(os.path.abspath(__file__))
 if _test_dir not in sys.path:      # 让 gdr_fwd_golden 可直接 import
     sys.path.insert(0, _test_dir)
-# 让 gdr_fwd 包（src/pypto_gym/ops/pypto_tensor/qwen3_5/gdr_fwd/）可 import
+# 让 gdr_fwd 包（ops/pypto_tensor/qwen3_5/gdr_fwd/）可 import
 _repo_root = _test_dir
 for _ in range(5):
-    if os.path.isdir(os.path.join(_repo_root, "src", "pypto_gym", "ops", "pypto_tensor", "qwen3_5")):
+    if os.path.isdir(os.path.join(_repo_root, "ops", "pypto_tensor", "qwen3_5")):
         break
     _repo_root = os.path.dirname(_repo_root)
-_ops_dir = os.path.join(_repo_root, "src", "pypto_gym", "ops", "pypto_tensor", "qwen3_5")
+_ops_dir = os.path.join(_repo_root, "ops", "pypto_tensor", "qwen3_5")
 if _ops_dir not in sys.path:
     sys.path.insert(0, _ops_dir)
 del _repo_root, _ops_dir

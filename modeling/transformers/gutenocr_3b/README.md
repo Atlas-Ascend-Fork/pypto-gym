@@ -56,7 +56,7 @@ bash cannbot-skills/model/pypto-fused-op-integration/scripts/restore_model_patch
 | `scripts/` | `modeling/transformers/gutenocr_3b/` |
 | `config.json` | `src/pypto_gym/transformers/gutenocr_3b/` |
 | `modeling_qwen2_5_vl.py`, `configuration_qwen2_5_vl.py` | `src/pypto_gym/transformers/gutenocr_3b/` |
-| `pto_kernels/` | `src/pypto_gym/ops/pypto_tensor/gutenocr_3b/` |
+| `pto_kernels/` | `ops/pypto_tensor/gutenocr_3b/` |
 
 ## 性能对比
 

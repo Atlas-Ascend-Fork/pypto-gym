@@ -104,7 +104,7 @@ openPangu-Embedded-7B/
 
 ## 开关变量
 
-`pypto_gym.ops.pypto_tensor.openpangu_v5_7b.USE_PTO_FUSED_LAYER`（bool，默认 `False`）
+`ops.pypto_tensor.openpangu_v5_7b.USE_PTO_FUSED_LAYER`（bool，默认 `False`）
 
 ask 脚本在构造模型前 `--use-pto` 时置 `USE_PTO_FUSED_LAYER = True`。
 

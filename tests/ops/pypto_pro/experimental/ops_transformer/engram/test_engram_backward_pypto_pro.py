@@ -40,7 +40,7 @@ while not os.path.isdir(os.path.join(_REPO_ROOT, "src")):
     _REPO_ROOT = os.path.dirname(_REPO_ROOT)
     if _REPO_ROOT == os.path.dirname(_REPO_ROOT):
         break
-_SRC_DIR = os.path.join(_REPO_ROOT, "src")
+_SRC_DIR = _REPO_ROOT
 if _SRC_DIR not in sys.path:
     sys.path.insert(0, _SRC_DIR)
 _GOLDEN_DIR = os.path.join(_REPO_ROOT, "tests", "ops", "experimental",
@@ -54,7 +54,7 @@ from engram_golden import (
     _get_device,
 )
 from compare import _compare
-from pypto_gym.ops.pypto_pro.experimental.ops_transformer.engram.engram_backward_impl import (
+from ops.pypto_pro.experimental.ops_transformer.engram.engram_backward_impl import (
     engram_backward_wrapper,
 )
 

@@ -76,7 +76,7 @@ if args.use_pypto:
         shutil.copy2(patched_src, patched_dst)
         logging.info(f"[PyPTO] Installed patched modeling to {patched_dst}")
     # Import real kernel adapter module and register under expected name
-    from pypto_gym.ops.pypto_tensor import llada2_moe as llada2_kernels
+    from ops.pypto_tensor import llada2_moe as llada2_kernels
     llada2_kernels.USE_PTO_EXPERT_FFN = True
     sys.modules["llada2_pto_kernels"] = llada2_kernels
 

@@ -26,7 +26,7 @@ while not os.path.isdir(os.path.join(_REPO_ROOT, "src")):
     _REPO_ROOT = os.path.dirname(_REPO_ROOT)
     if _REPO_ROOT == os.path.dirname(_REPO_ROOT):
         break
-_SRC_DIR = os.path.join(_REPO_ROOT, "src")
+_SRC_DIR = _REPO_ROOT
 if _SRC_DIR not in sys.path:
     sys.path.insert(0, _SRC_DIR)
 
@@ -34,7 +34,7 @@ from ref_kda import RefKDA
 from kda_test_config import (TEST_SHAPES as _BASE_SHAPES, C, DEVICE,
                               require_a5, make_kda_base_inputs, run_main)
 
-from pypto_gym.ops.pypto_pro.experimental.ops_transformer.kda.inversion_kda_impl import (
+from ops.pypto_pro.experimental.ops_transformer.kda.inversion_kda_impl import (
     inversion_kda_cube,
 )
 

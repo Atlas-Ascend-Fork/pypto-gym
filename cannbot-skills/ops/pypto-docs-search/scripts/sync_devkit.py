@@ -191,9 +191,9 @@ def _provision_requests(devkit, pin):
             os.environ.get("PYPTO_SRC", ""), [("docs", "docs/zh")], pin,
         ),
         ProvisionRequest(
-            devkit, "gym", "src/pypto_gym/ops", gym_url,
+            devkit, "gym", "ops", gym_url,
             os.environ.get("PYPTO_GYM_SRC", ""),
-            [("ops", "src/pypto_gym/ops"), ("tests", "tests/ops")], pin,
+            [("ops", "ops"), ("tests", "tests/ops")], pin,
         ),
     ]
 

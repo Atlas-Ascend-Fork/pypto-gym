@@ -6,7 +6,7 @@
 """engram_gate PyPTO-Pro test: one test function per case, plus a ``main`` entry.
 
 The kernel and the host wrapper live under
-``src/pypto_gym/ops/pypto_pro/deepseek_v4_1/engram_gate/engram_gate.py``. Each
+``ops/pypto_pro/deepseek_v4_1/engram_gate/engram_gate.py``. Each
 ``test_xxx`` prepares one case's inputs, runs the public wrapper on the NPU and
 compares against the independent CPU golden with the official Scheme A checker.
 
@@ -32,13 +32,13 @@ while not os.path.isdir(os.path.join(_REPO_ROOT, "src")):
     if _PARENT == _REPO_ROOT:
         break
     _REPO_ROOT = _PARENT
-_SRC_DIR = os.path.join(_REPO_ROOT, "src")
+_SRC_DIR = _REPO_ROOT
 if _SRC_DIR not in sys.path:
     sys.path.insert(0, _SRC_DIR)
 
 import engram_gate_golden_cpu  # noqa: E402
 from precision_compare import check_precision  # noqa: E402
-from pypto_gym.ops.pypto_pro.deepseek_v4_1.engram_gate.engram_gate import (  # noqa: E402
+from ops.pypto_pro.deepseek_v4_1.engram_gate.engram_gate import (  # noqa: E402
     engram_gate_wrapper,
 )
 

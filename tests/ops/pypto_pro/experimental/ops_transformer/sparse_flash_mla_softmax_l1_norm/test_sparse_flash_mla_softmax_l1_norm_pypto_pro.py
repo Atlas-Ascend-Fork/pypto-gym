@@ -55,14 +55,14 @@ while not os.path.isdir(os.path.join(_REPO_ROOT, "src")):
     _REPO_ROOT = os.path.dirname(_REPO_ROOT)
     if _REPO_ROOT == os.path.dirname(_REPO_ROOT):
         break
-_SRC_DIR = os.path.join(_REPO_ROOT, "src")
+_SRC_DIR = _REPO_ROOT
 if _SRC_DIR not in sys.path:
     sys.path.insert(0, _SRC_DIR)
 
 from sparse_flash_mla_softmax_l1_norm_golden import softmax_l1_norm_golden
 from compare import _compare
 
-from pypto_gym.ops.pypto_pro.experimental.ops_transformer.sparse_flash_mla_softmax_l1_norm.sparse_flash_mla_softmax_l1_norm_impl import (
+from ops.pypto_pro.experimental.ops_transformer.sparse_flash_mla_softmax_l1_norm.sparse_flash_mla_softmax_l1_norm_impl import (
     sparse_flash_mla_softmax_l1_norm_wrapper,
 )
 
@@ -179,7 +179,7 @@ def _run_case(cfg, num_cores=4, seed=0):
 
 def _build_tiling(cfg, is_tnd, is_sparse, num_cores):
     """构造 wrapper 相同的 OpTiling（供 golden 使用）。"""
-    from pypto_gym.ops.pypto_pro.experimental.ops_transformer.sparse_flash_mla_softmax_l1_norm.sparse_flash_mla_softmax_l1_norm_impl import (
+    from ops.pypto_pro.experimental.ops_transformer.sparse_flash_mla_softmax_l1_norm.sparse_flash_mla_softmax_l1_norm_impl import (
         OpTiling,
     )
     g, d = cfg["g"], cfg["d"]

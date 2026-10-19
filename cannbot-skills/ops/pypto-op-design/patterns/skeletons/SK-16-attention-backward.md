@@ -137,7 +137,7 @@ def attention_backward_kernel(q, k, v, o, do, l_input, m_input,
 
 ### 开箱性能优化提示
 
-> 实证来源：`src/pypto_gym/ops/pypto_tensor/experimental/ops_transformer/flash_attention_mha_grad/flash_attention_mha_grad_impl_a3.py`（A3 达标实现）
+> 实证来源：`ops/pypto_tensor/experimental/ops_transformer/flash_attention_mha_grad/flash_attention_mha_grad_impl_a3.py`（A3 达标实现）
 
 | 维度 | 推荐配置 | 取值经验 | 作用 |
 |------|---------|---------|------|

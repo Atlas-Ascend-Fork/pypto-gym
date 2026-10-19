@@ -209,7 +209,7 @@ def _make_inputs(device, dtype, actual_kv_len, max_kv_len):
 def test_pangu_fused_layer_decode_step():
     """Single decode step: kernel output vs golden reference."""
     import torch_npu
-    from pypto_gym.ops.pypto_tensor.openpangu_v5_7b.pangu_fused_layer_dynamic_v2_bsh import (
+    from ops.pypto_tensor.openpangu_v5_7b.pangu_fused_layer_dynamic_v2_bsh import (
         PanguFusedLayerV2BSHModule,
     )
 

@@ -23,8 +23,8 @@ from numpy.testing import assert_allclose
 _p = os.path.dirname(__file__)
 while not os.path.isdir(os.path.join(_p, "src")):
     _p = os.path.dirname(_p)
-sys.path.insert(0, os.path.join(_p, "src"))
-sys.path.insert(0, os.path.join(_p, "src", "pypto_gym", "ops", "pypto_tensor"))
+sys.path.insert(0, _p)
+sys.path.insert(0, os.path.join(_p, "ops", "pypto_tensor"))
 
 import pypto
 from experimental.matmul.quant_batch_matmul.quant_batch_matmul_impl import (

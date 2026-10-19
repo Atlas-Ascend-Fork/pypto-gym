@@ -29,8 +29,8 @@ _repo = THIS_DIR
 while _repo != os.path.dirname(_repo) and not os.path.isdir(os.path.join(_repo, "src")):
     _repo = os.path.dirname(_repo)
 if os.path.isdir(os.path.join(_repo, "src")):
-    sys.path.insert(0, os.path.join(_repo, "src"))
-    sys.path.insert(0, os.path.join(_repo, "src", "pypto_gym", "ops", "pypto_tensor"))
+    sys.path.insert(0, _repo)
+    sys.path.insert(0, os.path.join(_repo, "ops", "pypto_tensor"))
 
 from experimental.vector.GatherPaKvCache.gather_pa_kv_cache_impl import (  # noqa: E402
     gather_pa_kv_cache_wrapper,

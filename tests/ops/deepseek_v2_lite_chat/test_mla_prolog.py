@@ -25,7 +25,7 @@ import torch_npu  # noqa: F401
 
 _CUR = Path(__file__).resolve().parent
 sys.path.insert(0, str(_CUR))
-_IMPL = Path(__file__).resolve().parents[3] / "src/pypto_gym/ops/pypto_tensor/deepseek_v2_lite_chat/mla_prolog"
+_IMPL = Path(__file__).resolve().parents[3] / "ops/pypto_tensor/deepseek_v2_lite_chat/mla_prolog"
 sys.path.insert(0, str(_IMPL))
 
 import numpy as np

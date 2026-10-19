@@ -27,7 +27,7 @@
 
 | Operator | Toggle flag | Path |
 |----------|-------------|------|
-| `gated_delta_rule` | `USE_PTO_GATED_DELTA_RULE` | [`src/pypto_gym/ops/pypto_tensor/qwen3_5_9b/gated_delta_rule/`](../../../src/pypto_gym/ops/pypto_tensor/qwen3_5_9b/gated_delta_rule/) |
+| `gated_delta_rule` | `USE_PTO_GATED_DELTA_RULE` | [`ops/pypto_tensor/qwen3_5_9b/gated_delta_rule/`](../../../ops/pypto_tensor/qwen3_5_9b/gated_delta_rule/) |
 
 The fused operator replaces the chunk-prefill path in
 `Qwen3_5GatedDeltaNet.forward` (linear-attention layers). The decode and
@@ -98,7 +98,7 @@ prefill→首 token 延迟与 decode tok/s 由逐 token streamer 拆分。
 |---|---|
 | `ask_Qwen3.5-9B.py`, `bench_qwen3_5_9b.py`, `bench_qwen3_5_9b.sh`, `README.md` | `modeling/transformers/qwen3_5_9b/` |
 | `modeling_qwen3_5.py`, `configuration_qwen3_5.py`（带 PyPTO 钩子的内置 qwen3_5 归档快照）, `README.md` | `src/pypto_gym/transformers/qwen3_5_9b/` |
-| `qwen3_5_9b_pto_kernels/gated_delta_rule/gated_delta_rule_impl.py`, `__init__.py`, `README.md` | `src/pypto_gym/ops/pypto_tensor/qwen3_5_9b/` |
+| `qwen3_5_9b_pto_kernels/gated_delta_rule/gated_delta_rule_impl.py`, `__init__.py`, `README.md` | `ops/pypto_tensor/qwen3_5_9b/` |
 | `qwen3_5_9b_pto_kernels/gated_delta_rule/{gated_delta_rule_golden.py, test_*.py, test_cases.json}` | `tests/ops/qwen3_5_9b/` |
 
 > 还原：按上表逆向拷贝到权重目录。模型为 built-in `qwen3_5` 架构——`config.json` 无 auto_map，

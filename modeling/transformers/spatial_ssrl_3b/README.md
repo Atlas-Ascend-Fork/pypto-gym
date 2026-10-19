@@ -89,5 +89,5 @@ spatial_ssrl_3b/
 | `config.json` | `src/pypto_gym/transformers/spatial_ssrl_3b/config.json` |
 | `configuration_qwen2_5_vl.py` | `src/pypto_gym/transformers/spatial_ssrl_3b/configuration_qwen2_5_vl.py` |
 | `modeling_qwen2_5_vl.py` | `src/pypto_gym/transformers/spatial_ssrl_3b/modeling_qwen2_5_vl.py` |
-| `spatial_ssrl_3b_pto_kernels/` | `src/pypto_gym/ops/pypto_tensor/spatial_ssrl_3b/` |
+| `spatial_ssrl_3b_pto_kernels/` | `ops/pypto_tensor/spatial_ssrl_3b/` |
 | `scripts/` | `modeling/transformers/spatial_ssrl_3b/` |

@@ -35,7 +35,7 @@ kept local-only (WARMUP=5 / ITERS=20); kernel correctness is covered in-repo by 
 
 ## Switch variable
 
-`USE_PTO_GROUPED_GEMM` (in `src/pypto_gym/ops/pypto_tensor/minimax/__init__.py`) — the single
+`USE_PTO_GROUPED_GEMM` (in `ops/pypto_tensor/minimax/__init__.py`) — the single
 switch gating whether the MoE FFN routes through the fused kernel. Tile parameters are env-exposed
 (`PYPTO_VEC_TILE`, `PYPTO_CUBE_NBUFFER`, `PYPTO_VEC_NBUFFER`, `PYPTO_MM1_*`, `PYPTO_MM2_*`);
 `PYPTO_VEC_TILE=128` keeps the SwiGLU/cast vector tile within the 910B 192 KB UB.

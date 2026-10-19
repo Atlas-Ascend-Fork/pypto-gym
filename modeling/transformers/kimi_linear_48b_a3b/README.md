@@ -12,7 +12,7 @@
 
 | Operator | Toggle flag | Path |
 |----------|-------------|------|
-| `kda_chunk` (prefill) | `USE_PTO_KDA` | [`src/pypto_gym/ops/pypto_tensor/kimi_linear_48b_a3b/kda/`](../../../src/pypto_gym/ops/pypto_tensor/kimi_linear_48b_a3b/kda/) |
+| `kda_chunk` (prefill) | `USE_PTO_KDA` | [`ops/pypto_tensor/kimi_linear_48b_a3b/kda/`](../../../ops/pypto_tensor/kimi_linear_48b_a3b/kda/) |
 
 融合算子替换 `KimiDeltaAttention.forward` 中 prefill 的 `chunk_kda` 调用（KDA 线性注意力
 层）。Decode（T=1 recurrent，走上游 torch `fused_recurrent_kda`）与全注意力 (MLA) 路径不受影响（仅 pto 化 chunk 路径）。
@@ -154,7 +154,7 @@ PyPTO-KDA 仍 **launch/dispatch-bound** —— **host-bound 的 MoE 逐专家分
 | `scripts/ask_*.py`, `bench_*.sh`, `prof_*.sh`, `sample_inputs.txt`, `README.md` | `modeling/transformers/kimi_linear_48b_a3b/` |
 | `config.json` | `src/pypto_gym/transformers/kimi_linear_48b_a3b/config.json` |
 | `modeling_kimi.py`, `configuration_kimi.py`, `kimi_fla_compat.py`（trust_remote_code 打补丁版） | `src/pypto_gym/transformers/kimi_linear_48b_a3b/` |
-| `kimi_linear_48b_a3b_pto_kernels/kda/*_impl.py`, `_device_guard.py`, `__init__.py`, `README.md` | `src/pypto_gym/ops/pypto_tensor/kimi_linear_48b_a3b/` |
+| `kimi_linear_48b_a3b_pto_kernels/kda/*_impl.py`, `_device_guard.py`, `__init__.py`, `README.md` | `ops/pypto_tensor/kimi_linear_48b_a3b/` |
 | `kimi_linear_48b_a3b_pto_kernels/kda/{*_golden.py, test/*}` | `tests/ops/kimi_linear_48b_a3b/` |
 
 > 还原：按上表逆向拷贝到权重目录，确认 `config.json` 的 `auto_map` 指向部署的

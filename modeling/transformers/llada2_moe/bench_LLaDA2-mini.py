@@ -88,7 +88,7 @@ def setup_pypto(model_path):
         logging.info(f"[PyPTO] Installed patched modeling to {patched_dst}")
     cache_root = os.path.expanduser("~/.cache/huggingface/modules/transformers_modules")
     shutil.rmtree(os.path.join(cache_root, "LLaDA2_dot_0_hyphen_mini"), ignore_errors=True)
-    from pypto_gym.ops.pypto_tensor import llada2_moe as llada2_kernels
+    from ops.pypto_tensor import llada2_moe as llada2_kernels
     llada2_kernels.USE_PTO_EXPERT_FFN = True
     sys.modules["llada2_pto_kernels"] = llada2_kernels
     logging.info("[PyPTO] Expert FFN kernel enabled")
@@ -268,7 +268,7 @@ def _setup_pypto_kernels():
         return None
     repo_root = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..", ".."))
     sys.path.insert(0, os.path.join(repo_root, "src"))
-    from pypto_gym.ops.pypto_tensor import llada2_moe as llada2_kernels
+    from ops.pypto_tensor import llada2_moe as llada2_kernels
     llada2_kernels.USE_PTO_EXPERT_FFN = True
     sys.modules["llada2_pto_kernels"] = llada2_kernels
     return llada2_kernels.grouped_gemm

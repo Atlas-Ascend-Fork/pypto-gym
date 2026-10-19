@@ -24,7 +24,7 @@ def load_variant_model(args, dev, streaming):
     (``use_pypto`` selects the fused kernel vs the eager per-expert FFN).
     """
     if args.variant == "m27":
-        import pypto_gym.ops.pypto_tensor.minimax as _pto
+        import ops.pypto_tensor.minimax as _pto
         _pto.USE_PTO_GROUPED_GEMM = True        # enable the fused grouped-GEMM kernel for this run
         from pypto_gym.transformers.minimax_m27.modeling_minimax_m27 import (
             attach_expert_fp8, build_model, load_streaming_state_dict,

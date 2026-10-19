@@ -58,8 +58,8 @@ from transformers.modeling_utils import ALL_ATTENTION_FUNCTIONS, PreTrainedModel
 from transformers.utils import TransformersKwargs, auto_docstring, can_return_tuple
 from transformers.utils.deprecation import deprecate_kwarg
 from transformers.utils.generic import OutputRecorder, check_model_inputs
-from pypto_gym.ops.pypto_tensor import minimax as _pto_ops          # read USE_PTO_* dynamically
-from pypto_gym.ops.pypto_tensor.minimax import grouped_gemm, MoeDims
+from ops.pypto_tensor import minimax as _pto_ops          # read USE_PTO_* dynamically
+from ops.pypto_tensor.minimax import grouped_gemm, MoeDims
 from .configuration_minimax_m27 import MiniMaxM27Config as MiniMaxM2Config
 
 

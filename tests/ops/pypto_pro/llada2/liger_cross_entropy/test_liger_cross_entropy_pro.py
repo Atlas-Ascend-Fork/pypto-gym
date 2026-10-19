@@ -68,21 +68,21 @@ while not os.path.isdir(os.path.join(_REPO_ROOT, "src")):
     _REPO_ROOT = os.path.dirname(_REPO_ROOT)
     if _REPO_ROOT == os.path.dirname(_REPO_ROOT):
         break
-_SRC_DIR = os.path.join(_REPO_ROOT, "src")
+_SRC_DIR = _REPO_ROOT
 if _SRC_DIR not in sys.path:
     sys.path.insert(0, _SRC_DIR)
 
-from pypto_gym.ops.pypto_pro.llada2.liger_cross_entropy_loss import (  # noqa: E501
+from ops.pypto_pro.llada2.liger_cross_entropy_loss import (  # noqa: E501
     CrossEntropyOutput,
     LigerCrossEntropyFunction,
     LigerCrossEntropyLoss,
     liger_cross_entropy,
 )
-from pypto_gym.ops.pypto_pro.llada2.liger_cross_entropy_loss.liger_cross_entropy_loss_bwd_impl import (  # noqa: E501
+from ops.pypto_pro.llada2.liger_cross_entropy_loss.liger_cross_entropy_loss_bwd_impl import (  # noqa: E501
     liger_cross_entropy_is_identity_grad,
     liger_cross_entropy_loss_bwd_wrapper,
 )
-from pypto_gym.ops.pypto_pro.llada2.liger_cross_entropy_loss.liger_cross_entropy_loss_fwd_impl import (  # noqa: E501
+from ops.pypto_pro.llada2.liger_cross_entropy_loss.liger_cross_entropy_loss_fwd_impl import (  # noqa: E501
     liger_cross_entropy_loss_fwd_wrapper,
 )
 

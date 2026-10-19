@@ -52,5 +52,5 @@ MODEL_PATH="$MODEL_PATH" DEVICE=0 bash bench_LLaDA2-mini.sh
 |---|---|---|
 | `ask_*.py` / `bench_*.py` / `bench_*.sh` | `modeling/transformers/llada2_moe/` | overwrite |
 | `configuration_llada2_moe.py` / `modeling_llada2_moe.py` | `src/pypto_gym/transformers/llada2_moe/` | overwrite |
-| fused operators (`*_impl.py`) | `src/pypto_gym/ops/pypto_tensor/llada2_moe/` | overwrite |
+| fused operators (`*_impl.py`) | `ops/pypto_tensor/llada2_moe/` | overwrite |
 | operator tests | `tests/ops/llada2_moe/` | new |

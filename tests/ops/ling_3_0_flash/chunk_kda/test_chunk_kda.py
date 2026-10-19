@@ -27,13 +27,13 @@ from pathlib import Path
 import pytest
 
 # ═══════════════════════════════════════════════════════════════════════════════
-# Path bootstrap: add src/pypto_gym/ops/pypto_tensor so ling_3_0_flash package
+# Path bootstrap: add ops/pypto_tensor so ling_3_0_flash package
 # resolves, and this test dir so golden, detailed_tensor_compare, test_inputs
 # resolve.
 # ═══════════════════════════════════════════════════════════════════════════════
 _HERE = Path(__file__).parent
 _REPO_ROOT = _HERE.parent.parent.parent.parent
-_ops_dir = str(_REPO_ROOT / "src" / "pypto_gym" / "ops" / "pypto_tensor")
+_ops_dir = str(_REPO_ROOT / "ops" / "pypto_tensor")
 if _ops_dir not in sys.path:
     sys.path.insert(0, _ops_dir)
 _this_dir = str(_HERE)

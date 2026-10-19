@@ -65,5 +65,5 @@ MODEL_PATH=/path/to/MiniMax-M3 VARIANT=m3 DEVICE=0 bash bench_minimax.sh
 | `ask_minimax.py` / `bench_minimax.py` / `bench_minimax.sh` | `modeling/transformers/minimax/` | overwrite |
 | `modeling_minimax_m27.py` | `src/pypto_gym/transformers/minimax_m27/` | overwrite |
 | `modeling_minimax_m3.py` | `src/pypto_gym/transformers/minimax_m3/` | overwrite |
-| grouped-GEMM / MSA operators | `src/pypto_gym/ops/pypto_tensor/minimax/` | overwrite |
+| grouped-GEMM / MSA operators | `ops/pypto_tensor/minimax/` | overwrite |
 | operator tests | `tests/ops/minimax_m27/`, `tests/ops/minimax_m3/` | new |

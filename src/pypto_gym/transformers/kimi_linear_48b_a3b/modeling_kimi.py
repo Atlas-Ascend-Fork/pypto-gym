@@ -259,7 +259,7 @@ def kda_buffers_for(self, params):
     """
     buf = self.kda_decode_buffers[params.layer_idx]
     if buf is None:
-        from pypto_gym.ops.pypto_tensor.kimi_linear_48b_a3b.kda.kda_fused_decode_impl import (
+        from ops.pypto_tensor.kimi_linear_48b_a3b.kda.kda_fused_decode_impl import (
             make_fused_buffers, seed_fused_buffers)
         buf = make_fused_buffers(params)
         seed_fused_buffers(buf, self.conv_states[params.layer_idx],
@@ -676,7 +676,7 @@ class KimiDeltaAttention(nn.Module):
     def _try_fused_decode(self, hidden_states, cache_params, batch_size):
         if not self._should_use_fused_decode(hidden_states.shape[1], cache_params):
             return None
-        from pypto_gym.ops.pypto_tensor.kimi_linear_48b_a3b.kda.kda_fused_decode_impl import (
+        from ops.pypto_tensor.kimi_linear_48b_a3b.kda.kda_fused_decode_impl import (
             KdaBufferParams, kda_fused_decode, prepare_kda_fused_weights)
         weights = prepare_kda_fused_weights(
             self, lower_bound=getattr(self.config, "gate_lower_bound", -5.0))

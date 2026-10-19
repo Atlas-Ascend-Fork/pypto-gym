@@ -48,13 +48,13 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 if HERE not in sys.path:
     sys.path.insert(0, HERE)
 
-# 让 gdr_bwd 包（src/pypto_gym/ops/pypto_tensor/qwen3_5/gdr_bwd/）可 import
+# 让 gdr_bwd 包（ops/pypto_tensor/qwen3_5/gdr_bwd/）可 import
 _repo_root = HERE
 for _ in range(5):
-    if os.path.isdir(os.path.join(_repo_root, "src", "pypto_gym", "ops", "pypto_tensor")):
+    if os.path.isdir(os.path.join(_repo_root, "ops", "pypto_tensor")):
         break
     _repo_root = os.path.dirname(_repo_root)
-_ops_dir = os.path.join(_repo_root, "src", "pypto_gym", "ops", "pypto_tensor")
+_ops_dir = os.path.join(_repo_root, "ops", "pypto_tensor")
 if _ops_dir not in sys.path:
     sys.path.insert(0, _ops_dir)
 del _repo_root, _ops_dir

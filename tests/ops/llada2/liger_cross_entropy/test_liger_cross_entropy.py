@@ -25,7 +25,7 @@ sys.path.insert(
     ),
 )
 
-from pypto_gym.ops.pypto_tensor.llada2.liger_cross_entropy.liger_cross_entropy_loss import (  # noqa: E402
+from ops.pypto_tensor.llada2.liger_cross_entropy.liger_cross_entropy_loss import (  # noqa: E402
     LigerCrossEntropyLoss,
 )
 

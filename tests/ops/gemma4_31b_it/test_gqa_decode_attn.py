@@ -51,7 +51,7 @@ def run_single_case(case_data, device):
     import numpy as np
     from numpy.testing import assert_allclose
 
-    from src.pypto_gym.ops.pypto_tensor.gemma4_31b_it.gqa_decode_attn.gqa_decode_attn_impl import (
+    from ops.pypto_tensor.gemma4_31b_it.gqa_decode_attn.gqa_decode_attn_impl import (
         gqa_decode_attn_wrapper)
     from gqa_decode_attn_golden import gqa_decode_attn_golden
 

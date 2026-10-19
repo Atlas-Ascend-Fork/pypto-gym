@@ -43,7 +43,7 @@ except ImportError:
 
 # impl lives under src/.../kimi_linear_48b_a3b/kda; golden is same-dir.
 _IMPL = (Path(__file__).resolve().parents[3]
-         / "src" / "pypto_gym" / "ops" / "pypto_tensor" / "kimi_linear_48b_a3b" / "kda")
+         / "ops" / "pypto_tensor" / "kimi_linear_48b_a3b" / "kda")
 sys.path.insert(0, str(_IMPL))
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 

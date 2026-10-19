@@ -197,7 +197,7 @@ pypto-gym/
 │           ├── qwen3_vl_8b_instruct_unredacted_max/
 │           └── spatial_ssrl_3b/
 ├── tests/                                   # 测试用例
-│   ├── ops/                                 # 算子测试（与 src/pypto_gym/ops/ 对应）
+│   ├── ops/                                 # 算子测试（与 ops/ 对应）
 │   │   ├── arctic/                          # Arctic LSTM 算子测试
 │   │   ├── chunked_gdr/                     # Chunk Gated Delta Rule 算子测试
 │   │   ├── deepseek_v2_lite_chat/           # DeepSeek V2 Lite Chat 算子测试
@@ -268,7 +268,7 @@ pypto-gym/
 
 ## 添加新算子
 
-1. 在 `src/pypto_gym/ops/pypto_tensor/` 下新建子目录（若是通用算子，放入 `experimental/` 对应子类）。
+1. 在 `ops/pypto_tensor/` 下新建子目录（若是通用算子，放入 `experimental/` 对应子类）。
 2. 编写 kernel 实现文件，命名建议为 `*_impl.py`，对外暴露入口函数 / 配置类。
 3. 在 `tests/ops/` 下新建同名子目录，添加 `test_*.py`，通过绝对路径引用 kernel。
 4. 用 `@pytest.mark.soc("950", "910")` 标注适用 SoC，用 `@pytest.mark.world_size(N)` 标注多卡需求。

@@ -42,7 +42,7 @@ def qk_rope_wrapper(
 
 ```python
 import sys
-from pypto_gym.ops.pypto_tensor.qwen3_1_7b import qk_rope_wrapper
+from ops.pypto_tensor.qwen3_1_7b import qk_rope_wrapper
 
 # 1. Inject kernel module
 sys.modules["qwen3_pto_kernels"] = type("Kernels", (), {

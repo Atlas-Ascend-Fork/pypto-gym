@@ -50,5 +50,5 @@ Exposed in `sys.modules["llada2_pto_kernels"]`, opt-in (default `False`):
 
 ## Related Directories
 
-- **Ops**: `src/pypto_gym/ops/pypto_tensor/llada2_moe/` — PyPTO fused grouped-GEMM kernel
+- **Ops**: `ops/pypto_tensor/llada2_moe/` — PyPTO fused grouped-GEMM kernel
 - **Tests**: `tests/ops/llada2_moe/` — correctness tests

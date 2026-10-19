@@ -33,7 +33,7 @@ import torch
 import torch.nn.functional as Fn
 import numpy as np
 
-_IMPL = Path(__file__).resolve().parents[3] / "src" / "pypto_gym" / "ops" / "pypto_tensor" / "gemma4_31b_it"
+_IMPL = Path(__file__).resolve().parents[3] / "ops" / "pypto_tensor" / "gemma4_31b_it"
 sys.path.insert(0, str(_IMPL))
 
 from gqa_decode_attn.gqa_decode_attn_impl import (

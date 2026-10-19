@@ -33,9 +33,9 @@ sys.path.insert(0, _DIR)
 _p = _DIR
 while _p != "/" and not os.path.isdir(os.path.join(_p, "src")):
     _p = os.path.dirname(_p)
-sys.path.insert(0, os.path.join(_p, "src"))
+sys.path.insert(0, _p)
 
-from pypto_gym.ops.pypto_tensor.minimax.minimax_grouped_gemm_impl import (  # noqa: E402
+from ops.pypto_tensor.minimax.minimax_grouped_gemm_impl import (  # noqa: E402
     minimax_moe_grouped_gemm,
     convert_minimax_weights,
     MoeDims,

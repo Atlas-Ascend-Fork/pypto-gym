@@ -99,4 +99,4 @@ Qwen3-1.7B/
 |---|---|
 | `scripts/` | `modeling/transformers/qwen3_1_7b/` |
 | `config.json`, `modeling_qwen3.py`, `configuration_qwen3.py` | `src/pypto_gym/transformers/qwen3_1_7b/` |
-| `qwen3_pto_kernels/` | `src/pypto_gym/ops/pypto_tensor/qwen3_1_7b/` |
+| `qwen3_pto_kernels/` | `ops/pypto_tensor/qwen3_1_7b/` |

@@ -737,13 +737,13 @@ print(json.dumps(result, indent=2))
 **归档前检查已有文件：**
 
 ```bash
-ls -d {pypto_gym_repo}/src/pypto_gym/ops/pypto_tensor/*/ {pypto_gym_repo}/tests/ops/*/ 2>/dev/null
+ls -d {pypto_gym_repo}/ops/pypto_tensor/*/ {pypto_gym_repo}/tests/ops/*/ 2>/dev/null
 ```
 
 如已有 `{model_name}` 或近邻名称的归档，**必须先询问用户确认**，再删除。**这一步不可跳过——已有归档意味着之前做过方案，不确认就直接覆盖会丢失旧实现、引入不兼容变更。**：
 
 ```bash
-rm -rf {pypto_gym_repo}/src/pypto_gym/ops/pypto_tensor/{model_name} \
+rm -rf {pypto_gym_repo}/ops/pypto_tensor/{model_name} \
        {pypto_gym_repo}/src/pypto_gym/transformers/{model_name} \
        {pypto_gym_repo}/tests/ops/{model_name}
 find {pypto_gym_repo}/modeling/transformers/{model_name} -mindepth 1 -delete 2>/dev/null
@@ -756,7 +756,7 @@ find {pypto_gym_repo}/modeling/transformers/{model_name} -mindepth 1 -delete 2>/
 | `scripts/` | `modeling/transformers/{model_name}/` |
 | `config.json` | `src/pypto_gym/transformers/{model_name}/` |
 | `core/` | `src/pypto_gym/transformers/{model_name}/` |
-| `{model}_pto_kernels/` | `src/pypto_gym/ops/pypto_tensor/{model_name}/` |
+| `{model}_pto_kernels/` | `ops/pypto_tensor/{model_name}/` |
 
 **归档后写入 `modeling/transformers/{model_name}/README.md`**，追加归档映射记录（内容同上表，保持文件夹粒度）和当前环境版本信息。
 
@@ -768,7 +768,7 @@ find {pypto_gym_repo}/modeling/transformers/{model_name} -mindepth 1 -delete 2>/
 ```python
 from pathlib import Path; import sys; import os
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-_IMPL = Path(__file__).resolve().parents[3] / "src/pypto_gym/ops/pypto_tensor/{model_name}/{op}"
+_IMPL = Path(__file__).resolve().parents[3] / "ops/pypto_tensor/{model_name}/{op}"
 sys.path.insert(0, str(_IMPL))
 from {op}_impl import {op}_wrapper
 from {op}_golden import {op}_golden
@@ -784,7 +784,7 @@ cd {pypto_gym_repo}
 grep -rPn "(/[nN][pP][uU]/|/[hH][oO][mM][eE]/)" \
     modeling/transformers/{model_name}/ \
     src/pypto_gym/transformers/{model_name}/ \
-    src/pypto_gym/ops/pypto_tensor/{model_name}/ \
+    ops/pypto_tensor/{model_name}/ \
     tests/ops/{model_name}/
 ```
 
@@ -818,7 +818,7 @@ python3 -c "import torch; import torch_npu; print(f'torch: {torch.__version__} N
 |---|---|
 | `modeling/transformers/{model_name}/` | `scripts/` |
 | `src/pypto_gym/transformers/{model_name}/` | 按文件类型：`.py` → `core/`，`config.json` → 根目录 |
-| `src/pypto_gym/ops/pypto_tensor/{model_name}/` | `{model}_pto_kernels/` |
+| `ops/pypto_tensor/{model_name}/` | `{model}_pto_kernels/` |
 
 拷贝后调整测试脚本的 `sys.path` 使其引用 `pto_kernels/` 内的 impl：
 

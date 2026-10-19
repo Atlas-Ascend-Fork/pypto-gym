@@ -25,7 +25,7 @@ import torch
 import numpy as np
 from numpy.testing import assert_allclose
 
-_IMPL = Path(__file__).resolve().parents[3] / "src" / "pypto_gym" / "ops" / "pypto_tensor" / "gemma4_31b_it"
+_IMPL = Path(__file__).resolve().parents[3] / "ops" / "pypto_tensor" / "gemma4_31b_it"
 sys.path.insert(0, str(_IMPL))
 
 from attn_softmax.attn_softmax_impl import attn_softmax_wrapper

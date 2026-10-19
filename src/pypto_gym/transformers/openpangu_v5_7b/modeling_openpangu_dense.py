@@ -56,7 +56,7 @@ from module.linear import (
     RowParallelLinear,
     VocabParallelEmbedding,
 )
-from pypto_gym.ops.pypto_tensor import openpangu_v5_7b as _pto_ops
+from ops.pypto_tensor import openpangu_v5_7b as _pto_ops
 
 from .configuration_openpangu_dense import PanguEmbeddedConfig
 
@@ -1200,7 +1200,7 @@ class PanguEmbeddedModel(PanguEmbeddedPreTrainedModel):
 
         if use_pto:
             import pypto
-            from pypto_gym.ops.pypto_tensor.openpangu_v5_7b.pangu_fused_layer_dynamic_v2_bsh import (
+            from ops.pypto_tensor.openpangu_v5_7b.pangu_fused_layer_dynamic_v2_bsh import (
                 PanguFusedLayerV2BSHModule,
                 DynamicFusedLayerConfigV2BSH,
             )

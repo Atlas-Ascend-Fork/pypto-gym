@@ -30,11 +30,11 @@ _DIR = os.path.dirname(os.path.abspath(__file__))
 _p = _DIR
 while _p != "/" and not os.path.isdir(os.path.join(_p, "src")):
     _p = os.path.dirname(_p)
-sys.path.insert(0, os.path.join(_p, "src"))
+sys.path.insert(0, _p)
 
-from pypto_gym.ops.pypto_tensor.minimax.minimax_m3_msa_indexer_impl import (  # noqa: E402
+from ops.pypto_tensor.minimax.minimax_m3_msa_indexer_impl import (  # noqa: E402
     minimax_m3_msa_indexer, NIDX, D, BY, TOPK, LOCAL)
-from pypto_gym.ops.pypto_tensor.minimax.minimax_m3_msa_sparse_attention_impl import (  # noqa: E402
+from ops.pypto_tensor.minimax.minimax_m3_msa_sparse_attention_impl import (  # noqa: E402
     minimax_m3_msa_sparse_decode, HQ, HKV, GROUP, SCALE)
 
 # NOTE: the HF modeling / config (``pypto_gym.transformers.minimax_m3``) pull in ``transformers``,

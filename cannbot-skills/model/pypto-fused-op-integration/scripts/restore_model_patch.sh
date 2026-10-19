@@ -12,7 +12,7 @@
 #
 # 还原内容:
 #   1. 替换 modeling_*.py 为华为修改版 (含 PyPTO 算子注入)
-#   2. 写入 {model_name}_pto_kernels/ (PyPTO 融合算子, 若 src/pypto_gym/ops/pypto_tensor/{model_name}/ 存在)
+#   2. 写入 {model_name}_pto_kernels/ (PyPTO 融合算子, 若 ops/pypto_tensor/{model_name}/ 存在)
 #   3. 确保 config.json 含 auto_map
 #   4. 清除 HF 模块缓存
 
@@ -31,7 +31,7 @@ SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 REPO_ROOT="$(cd "$SCRIPT_DIR/../../../.." && pwd)"
 
 TRANSFORMERS_DIR="$REPO_ROOT/src/pypto_gym/transformers/$MODEL_NAME"
-PYPTO_OPS_DIR="$REPO_ROOT/src/pypto_gym/ops/pypto_tensor/$MODEL_NAME"
+PYPTO_OPS_DIR="$REPO_ROOT/ops/pypto_tensor/$MODEL_NAME"
 
 echo "=== PyPTO 补丁还原: $MODEL_NAME ==="
 echo "MODEL_PATH:  $MODEL_PATH"

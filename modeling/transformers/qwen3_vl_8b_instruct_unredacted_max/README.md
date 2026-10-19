@@ -126,7 +126,7 @@ pip install transformers==5.12.0 accelerate --trusted-host pypi.org --trusted-ho
 # ② 反向归档映射拷贝
 #    modeling/transformers/qwen3_vl_8b_instruct_unredacted_max/          → scripts/
 #    src/pypto_gym/transformers/qwen3_vl_8b_instruct_unredacted_max/     → 根目录 (.py) + config.json
-#    src/pypto_gym/ops/pypto_tensor/qwen3_vl_8b_instruct_unredacted_max/  → pto_kernels/
+#    ops/pypto_tensor/qwen3_vl_8b_instruct_unredacted_max/  → pto_kernels/
 #    或直接运行 restore_model_patch.sh（推荐）：
 bash cannbot-skills/model/pypto-fused-op-integration/scripts/restore_model_patch.sh \
     "$MODEL_PATH" qwen3_vl_8b_instruct_unredacted_max
@@ -143,4 +143,4 @@ python3 scripts/ask_Qwen3-VL-8B-Instruct-Unredacted-MAX.py --prompt "你好" --d
 | `scripts/` | `modeling/transformers/qwen3_vl_8b_instruct_unredacted_max/` |
 | `config.json` | `src/pypto_gym/transformers/qwen3_vl_8b_instruct_unredacted_max/` |
 | `modeling_qwen3_vl.py`、`configuration_qwen3_vl.py` | `src/pypto_gym/transformers/qwen3_vl_8b_instruct_unredacted_max/` |
-| `pto_kernels/` | `src/pypto_gym/ops/pypto_tensor/qwen3_vl_8b_instruct_unredacted_max/` |
+| `pto_kernels/` | `ops/pypto_tensor/qwen3_vl_8b_instruct_unredacted_max/` |

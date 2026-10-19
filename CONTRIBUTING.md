@@ -17,7 +17,7 @@ By submitting a Pull Request, you confirm that you have the right to contribute 
 
 ### 1. 提交新算子 / Adding a New Operator
 
-1. 在 `src/pypto_gym/ops/pypto_tensor/` 下新建子目录（通用算子放入 `experimental/` 对应子类）
+1. 在 `ops/pypto_tensor/` 下新建子目录（通用算子放入 `experimental/` 对应子类）
 2. 编写 kernel 实现文件，命名建议为 `*_impl.py`，使用 `@pypto.frontend.jit` 装饰器
 3. 在 `tests/ops/` 下新建同名子目录，添加 `test_*.py` 测试文件
 4. 测试用例需包含：

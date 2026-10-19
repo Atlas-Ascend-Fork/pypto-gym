@@ -26,7 +26,7 @@ import torch_npu
 
 _CUR = Path(__file__).resolve().parent
 sys.path.insert(0, str(_CUR))
-_IMPL = Path(__file__).resolve().parents[4] / "src/pypto_gym/ops/pypto_tensor/gutenocr_3b/mrope"
+_IMPL = Path(__file__).resolve().parents[4] / "ops/pypto_tensor/gutenocr_3b/mrope"
 sys.path.insert(0, str(_IMPL))
 
 import numpy as np

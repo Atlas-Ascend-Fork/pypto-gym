@@ -26,7 +26,7 @@ Read dynamically from the ops package (mirrors the minimax_m27 pattern):
 
 | Variable | Location | Default | Description |
 |----------|----------|---------|-------------|
-| `USE_PTO_FUSED_LAYER` | `pypto_gym.ops.pypto_tensor.openpangu_v5_7b` | `False` | Master switch — wire the PyPTO fused decode path |
+| `USE_PTO_FUSED_LAYER` | `ops.pypto_tensor.openpangu_v5_7b` | `False` | Master switch — wire the PyPTO fused decode path |
 The modeling reads the switch at `PanguEmbeddedModel.__init__` time and lazily imports
 the heavy kernel module only when enabled, so importing the modeling alone does not
 pull in `pypto`.
@@ -55,7 +55,7 @@ before being passed in, since pypto requires contiguous tensors.
 ## Usage
 
 ```python
-import pypto_gym.ops.pypto_tensor.openpangu_v5_7b as _pto
+import ops.pypto_tensor.openpangu_v5_7b as _pto
 _pto.USE_PTO_FUSED_LAYER = True            # enable BEFORE constructing the model
 
 # The model class is loaded through the cann-recipes PanguEmbeddedRunner, which
@@ -112,5 +112,5 @@ on `pypto` + `torch`.
 
 ## Related Directories
 
-- **Ops**: `src/pypto_gym/ops/pypto_tensor/openpangu_v5_7b/` — PyPTO fused-layer kernels
+- **Ops**: `ops/pypto_tensor/openpangu_v5_7b/` — PyPTO fused-layer kernels
 - **End-to-end**: `modeling/transformers/openpangu_v5_7b/` — `ask_openpangu_v5_7b.py` + reference YAML

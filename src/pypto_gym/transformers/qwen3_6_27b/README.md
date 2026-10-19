@@ -90,7 +90,7 @@ pk.USE_PTO_GATED_DELTA_RULE = True          # enable AFTER the model is on the N
 ```
 
 The kernel module exposes `USE_PTO_GATED_DELTA_RULE` and `gated_delta_rule_wrapper`
-(see `src/pypto_gym/ops/pypto_tensor/qwen3_6_27b/__init__.py`). Set the flag to `False`
+(see `ops/pypto_tensor/qwen3_6_27b/__init__.py`). Set the flag to `False`
 to disable at runtime.
 
 > **Note on loading:** the real `Qwen3.6-27B/config.json` has **no `auto_map`**, so the model
@@ -111,5 +111,5 @@ to disable at runtime.
 
 ## Related Directories
 
-- **Ops**: `src/pypto_gym/ops/pypto_tensor/qwen3_6_27b/` — PyPTO Gated Delta Rule kernel (`gated_delta_rule/`)
+- **Ops**: `ops/pypto_tensor/qwen3_6_27b/` — PyPTO Gated Delta Rule kernel (`gated_delta_rule/`)
 - **Tests**: `tests/ops/qwen3_6_27b/` — single-op precision test (`[PRECISION_PASS]`, chunk vs torch golden) + `test_cases.json`

@@ -1,15 +1,15 @@
 # PyPTO-Gym Tests
 
-本目录是 pypto-gym 的**测试目录**，与 `src/pypto_gym/ops/pypto_tensor/` 下的算子实现一一对应，例如：
+本目录是 pypto-gym 的**测试目录**，与 `ops/pypto_tensor/` 下的算子实现一一对应，例如：
 
 | Kernel 实现 | 对应测试 |
 |---|---|
-| [src/pypto_gym/ops/pypto_tensor/arctic/sum_lstm.py](../src/pypto_gym/ops/pypto_tensor/arctic/sum_lstm.py) | [ops/arctic/test_sum_lstm.py](ops/arctic/test_sum_lstm.py) |
-| [src/pypto_gym/ops/pypto_tensor/qat/qat_impl.py](../src/pypto_gym/ops/pypto_tensor/qat/qat_impl.py) | [ops/qat/test_qat.py](ops/qat/test_qat.py) |
-| [src/pypto_gym/ops/pypto_tensor/glm_v4_5/glm_*_impl.py](../src/pypto_gym/ops/pypto_tensor/glm_v4_5/) | [ops/glm_v4_5/test_glm_*.py](ops/glm_v4_5/) |
-| [src/pypto_gym/ops/pypto_tensor/deepseek_v32_exp/*_impl.py](../src/pypto_gym/ops/pypto_tensor/deepseek_v32_exp/) | [ops/deepseek_v32_exp/test_*.py](ops/deepseek_v32_exp/) |
-| [src/pypto_gym/ops/pypto_tensor/qwen3_1_7b/qwen3_*.py](../src/pypto_gym/ops/pypto_tensor/qwen3_1_7b/) | [ops/qwen3_1_7b/test_*.py](ops/qwen3_1_7b/) |
-| [src/pypto_gym/ops/pypto_tensor/qwen3_next/gated_delta_rule_impl.py](../src/pypto_gym/ops/pypto_tensor/qwen3_next/gated_delta_rule_impl.py) | [ops/qwen3_next/test_gated_delta_rule_qwen3_next.py](ops/qwen3_next/test_gated_delta_rule_qwen3_next.py) |
+| [ops/pypto_tensor/arctic/sum_lstm.py](../ops/pypto_tensor/arctic/sum_lstm.py) | [ops/arctic/test_sum_lstm.py](ops/arctic/test_sum_lstm.py) |
+| [ops/pypto_tensor/qat/qat_impl.py](../ops/pypto_tensor/qat/qat_impl.py) | [ops/qat/test_qat.py](ops/qat/test_qat.py) |
+| [ops/pypto_tensor/glm_v4_5/glm_*_impl.py](../ops/pypto_tensor/glm_v4_5/) | [ops/glm_v4_5/test_glm_*.py](ops/glm_v4_5/) |
+| [ops/pypto_tensor/deepseek_v32_exp/*_impl.py](../ops/pypto_tensor/deepseek_v32_exp/) | [ops/deepseek_v32_exp/test_*.py](ops/deepseek_v32_exp/) |
+| [ops/pypto_tensor/qwen3_1_7b/qwen3_*.py](../ops/pypto_tensor/qwen3_1_7b/) | [ops/qwen3_1_7b/test_*.py](ops/qwen3_1_7b/) |
+| [ops/pypto_tensor/qwen3_next/gated_delta_rule_impl.py](../ops/pypto_tensor/qwen3_next/gated_delta_rule_impl.py) | [ops/qwen3_next/test_gated_delta_rule_qwen3_next.py](ops/qwen3_next/test_gated_delta_rule_qwen3_next.py) |
 
 
 ## 运行方式

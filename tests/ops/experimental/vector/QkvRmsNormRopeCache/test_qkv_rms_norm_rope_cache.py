@@ -43,7 +43,7 @@ while REPO_ROOT != REPO_ROOT.parent and not (REPO_ROOT / "src").is_dir():
 if (REPO_ROOT / "src").is_dir():
     sys_path_items = [
         REPO_ROOT / "src",
-        REPO_ROOT / "src" / "pypto_gym" / "ops" / "pypto_tensor",
+        REPO_ROOT / "ops" / "pypto_tensor",
     ]
     for path_item in reversed(sys_path_items):
         path_text = str(path_item)

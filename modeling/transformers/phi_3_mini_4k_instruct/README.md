@@ -93,5 +93,5 @@ PHI3_MODEL_PATH="$MODEL_PATH" bash bench_Phi-3-mini-4k-instruct.sh
 | `scripts/` | `modeling/transformers/phi_3_mini_4k_instruct/` |
 | `modeling_phi3.py` / `configuration_phi3.py` | `src/pypto_gym/transformers/phi_3_mini_4k_instruct/` |
 | `config.json` | `src/pypto_gym/transformers/phi_3_mini_4k_instruct/` |
-| `pto_kernels/` | `src/pypto_gym/ops/pypto_tensor/phi_3_mini_4k_instruct/` |
+| `pto_kernels/` | `ops/pypto_tensor/phi_3_mini_4k_instruct/` |
 | `pto_kernels/rms_norm/test/` | `tests/ops/phi_3_mini_4k_instruct/` |

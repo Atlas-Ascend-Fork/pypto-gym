@@ -28,7 +28,7 @@ except ImportError:
 
 import pypto
 
-_IMPL = Path(__file__).resolve().parents[3] / "src" / "pypto_gym" / "ops" / "pypto_tensor" / "llada2_moe"
+_IMPL = Path(__file__).resolve().parents[3] / "ops" / "pypto_tensor" / "llada2_moe"
 sys.path.insert(0, str(_IMPL))
 
 from llada2_moe_grouped_gemm_impl import (

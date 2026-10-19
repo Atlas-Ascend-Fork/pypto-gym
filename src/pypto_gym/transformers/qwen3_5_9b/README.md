@@ -111,5 +111,5 @@ Layer type alternation pattern (default): 3 linear_attention layers → 1 full_a
 
 ## Related Directories
 
-- **Ops**: `src/pypto_gym/ops/pypto_tensor/qwen3_5_9b/` — PyPTO Gated Delta Rule kernel (`gated_delta_rule/`)
+- **Ops**: `ops/pypto_tensor/qwen3_5_9b/` — PyPTO Gated Delta Rule kernel (`gated_delta_rule/`)
 - **Tests**: `tests/ops/qwen3_5_9b/` — single-op precision test (`[PRECISION_PASS]`, chunk vs torch golden) + aclgraph capture test + `test_cases.json`

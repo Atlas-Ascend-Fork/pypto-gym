@@ -97,7 +97,7 @@ def main():
 
     # ---- enable the PyPTO fused kernel BEFORE the modeling is imported/constructed ----
     if args.use_pto:
-        import pypto_gym.ops.pypto_tensor.openpangu_v5_7b as _pto  # noqa: E402
+        import ops.pypto_tensor.openpangu_v5_7b as _pto  # noqa: E402
         _pto.USE_PTO_FUSED_LAYER = True
         logger.info("* PyPTO fused decode kernel enabled")
 

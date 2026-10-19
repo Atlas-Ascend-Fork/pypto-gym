@@ -41,9 +41,9 @@ _DIR = os.path.dirname(os.path.abspath(__file__))
 _p = _DIR
 while _p != "/" and not os.path.isdir(os.path.join(_p, "src")):
     _p = os.path.dirname(_p)
-sys.path.insert(0, os.path.join(_p, "src"))
+sys.path.insert(0, _p)
 
-from pypto_gym.ops.pypto_tensor.minimax.msa_main_branch_impl import msa_main_branch
+from ops.pypto_tensor.minimax.msa_main_branch_impl import msa_main_branch
 
 
 HQ = 64

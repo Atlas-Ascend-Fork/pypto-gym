@@ -59,7 +59,7 @@ logger = logging.getLogger("minimax.bench")
 _p = os.path.dirname(os.path.abspath(__file__))
 while not os.path.isdir(os.path.join(_p, "src")):
     _p = os.path.dirname(_p)
-sys.path.insert(0, os.path.join(_p, "src"))
+sys.path.insert(0, _p)
 
 try:
     import torch_npu  # noqa: F401
@@ -236,7 +236,7 @@ def _install_static_moe_m27(body, dev, use_pypto):
     capturable static-route forward (every token to experts 0..top_k-1)."""
     import types
     from torch.nn.functional import linear, silu
-    from pypto_gym.ops.pypto_tensor.minimax import MoeDims, grouped_gemm
+    from ops.pypto_tensor.minimax import MoeDims, grouped_gemm
     from pypto_gym.transformers.minimax_m27.modeling_minimax_m27 import _expert_weight
 
     def _dequant(block):

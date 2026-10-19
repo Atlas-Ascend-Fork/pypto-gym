@@ -26,17 +26,17 @@ while not os.path.isdir(os.path.join(_REPO_ROOT, "src")):
     _REPO_ROOT = os.path.dirname(_REPO_ROOT)
     if _REPO_ROOT == os.path.dirname(_REPO_ROOT):
         break
-_SRC_DIR = os.path.join(_REPO_ROOT, "src")
+_SRC_DIR = _REPO_ROOT
 if _SRC_DIR not in sys.path:
     sys.path.insert(0, _SRC_DIR)
 
 import torch
 import torch_npu  # noqa: F401
 
-from pypto_gym.ops.pypto_tensor.experimental.ops_transformer.engram.engram_forward_impl import (
+from ops.pypto_tensor.experimental.ops_transformer.engram.engram_forward_impl import (
     engram_forward_wrapper,
 )
-from pypto_gym.ops.pypto_tensor.experimental.ops_transformer.engram.engram_backward_impl import (
+from ops.pypto_tensor.experimental.ops_transformer.engram.engram_backward_impl import (
     engram_backward_wrapper,
 )
 

@@ -51,5 +51,5 @@ DEVICE=0 MODEL_PATH="$MODEL_PATH" bash bench_Gemma-4-31B-it.sh
 |---|---|---|
 | `ask_Gemma-4-31B-it.py`, `bench_Gemma-4-31B-it.sh` | `modeling/transformers/gemma4_31b_it/` | overwrite |
 | `configuration_gemma4.py`, `modeling_gemma4.py` | `src/pypto_gym/transformers/gemma4_31b_it/` | overwrite |
-| `pto_kernels/` (excl. golden + test) | `src/pypto_gym/ops/pypto_tensor/gemma4_31b_it/` | overwrite |
+| `pto_kernels/` (excl. golden + test) | `ops/pypto_tensor/gemma4_31b_it/` | overwrite |
 | `pto_kernels/*/test/` | `tests/ops/gemma4_31b_it/` | new |

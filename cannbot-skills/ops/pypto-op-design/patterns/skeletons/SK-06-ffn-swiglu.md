@@ -55,7 +55,7 @@ def fused_swiglu_kernel(input, weight_gate, weight_fc, bias_gate, bias_fc, outpu
 
 ### 开箱性能优化提示
 
-> 实证来源：`pypto-gym/src/pypto_gym/ops/pypto_tile/experimental/ops_transformer/fused_swiglu/fused_swiglu_impl.py:23-65`
+> 实证来源：`pypto-gym/ops/pypto_tile/experimental/ops_transformer/fused_swiglu/fused_swiglu_impl.py:23-65`
 
 | 维度 | 推荐配置 | 取值经验 | 作用 |
 |------|---------|---------|------|

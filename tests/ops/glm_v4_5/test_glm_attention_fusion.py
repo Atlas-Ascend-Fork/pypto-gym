@@ -21,8 +21,8 @@ import pytest
 _p = os.path.dirname(__file__)
 while not os.path.isdir(os.path.join(_p, 'src')):
     _p = os.path.dirname(_p)
-sys.path.insert(0, os.path.join(_p, 'src'))
-sys.path.insert(0, os.path.join(_p, 'src', 'pypto_gym', 'ops', 'pypto_tensor'))
+sys.path.insert(0, _p)
+sys.path.insert(0, os.path.join(_p, 'ops', 'pypto_tensor'))
 
 import glm_v4_5.utils.attn_golden as attn_golden
 from glm_v4_5.glm_attention_fusion_impl import attention, get_qwen_common_config

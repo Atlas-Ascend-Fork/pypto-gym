@@ -26,7 +26,7 @@ while not os.path.isdir(os.path.join(_REPO_ROOT, "src")):
     _REPO_ROOT = os.path.dirname(_REPO_ROOT)
     if _REPO_ROOT == os.path.dirname(_REPO_ROOT):
         break
-_SRC_DIR = os.path.join(_REPO_ROOT, "src")
+_SRC_DIR = _REPO_ROOT
 if _SRC_DIR not in sys.path:
     sys.path.insert(0, _SRC_DIR)
 
@@ -35,7 +35,7 @@ from kda_test_config import (TEST_SHAPES, CHUNK_SIZE, K_DIM, V_DIM, HV, C, K, V,
                               require_a5, make_cu_seqlens_tensor, make_kda_base_inputs,
                               alloc_chunk_h_workspaces, run_main)
 
-from pypto_gym.ops.pypto_pro.experimental.ops_transformer.kda.chunk_h_kda_impl import (
+from ops.pypto_pro.experimental.ops_transformer.kda.chunk_h_kda_impl import (
     run_chunk_h_kda,
 )
 

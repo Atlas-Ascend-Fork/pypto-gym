@@ -38,7 +38,7 @@ while not os.path.isdir(os.path.join(_REPO_ROOT, "src")):
     _REPO_ROOT = os.path.dirname(_REPO_ROOT)
     if _REPO_ROOT == os.path.dirname(_REPO_ROOT):
         break
-_SRC_DIR = os.path.join(_REPO_ROOT, "src")
+_SRC_DIR = _REPO_ROOT
 if _SRC_DIR not in sys.path:
     sys.path.insert(0, _SRC_DIR)
 
@@ -46,19 +46,19 @@ from kda_test_config import (TEST_SHAPES, CHUNK_SIZE, K_DIM, V_DIM, HV, DEVICE,
                               require_a5, make_kda_base_inputs)
 from ref_kda import RefKDA
 
-from pypto_gym.ops.pypto_pro.experimental.ops_transformer.kda.gate_kkt_kda_impl import (
+from ops.pypto_pro.experimental.ops_transformer.kda.gate_kkt_kda_impl import (
     run_gate_kkt_kda,
 )
-from pypto_gym.ops.pypto_pro.experimental.ops_transformer.kda.inversion_kda_impl import (
+from ops.pypto_pro.experimental.ops_transformer.kda.inversion_kda_impl import (
     inversion_kda_cube,
 )
-from pypto_gym.ops.pypto_pro.experimental.ops_transformer.kda.wy_kda_impl import (
+from ops.pypto_pro.experimental.ops_transformer.kda.wy_kda_impl import (
     wy_kda_block,
 )
-from pypto_gym.ops.pypto_pro.experimental.ops_transformer.kda.chunk_h_kda_impl import (
+from ops.pypto_pro.experimental.ops_transformer.kda.chunk_h_kda_impl import (
     run_chunk_h_kda,
 )
-from pypto_gym.ops.pypto_pro.experimental.ops_transformer.kda.chunk_o_kda_impl import (
+from ops.pypto_pro.experimental.ops_transformer.kda.chunk_o_kda_impl import (
     run_chunk_o_kda,
 )
 

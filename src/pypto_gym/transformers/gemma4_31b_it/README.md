@@ -33,5 +33,5 @@ The kernel module is registered as `sys.modules["gemma4_pto_kernels"]` and expos
 
 ## Related Directories
 
-- **Ops**: `src/pypto_gym/ops/pypto_tensor/gemma4_31b_it/` — PyPTO kernels (`attn_softmax/`, `gqa_decode_attn/`)
+- **Ops**: `ops/pypto_tensor/gemma4_31b_it/` — PyPTO kernels (`attn_softmax/`, `gqa_decode_attn/`)
 - **Tests**: `tests/ops/gemma4_31b_it/` — correctness and performance tests

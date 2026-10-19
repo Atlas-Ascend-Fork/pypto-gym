@@ -90,6 +90,6 @@ ask 脚本在 `from transformers import` 之前 `sys.path.insert(0, ...)` 并
 
 ## 相关目录
 
-- **Ops**: `src/pypto_gym/ops/pypto_tensor/kimi_linear_48b_a3b/kda/` — PyPTO KDA kernel
+- **Ops**: `ops/pypto_tensor/kimi_linear_48b_a3b/kda/` — PyPTO KDA kernel
 - **Scripts**: `modeling/transformers/kimi_linear_48b_a3b/` — ask / bench 脚本
 - **Tests**: `tests/ops/kimi_linear_48b_a3b/` — 单算子精度测试

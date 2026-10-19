@@ -81,8 +81,8 @@ from transformers.modeling_outputs import MoeCausalLMOutputWithPast, MoeModelOut
 from transformers.modeling_rope_utils import ROPE_INIT_FUNCTIONS, dynamic_rope_update
 from transformers.modeling_utils import ALL_ATTENTION_FUNCTIONS, PreTrainedModel
 
-from pypto_gym.ops.pypto_tensor import minimax as _pto_ops           # read USE_PTO_* dynamically
-from pypto_gym.ops.pypto_tensor.minimax import (
+from ops.pypto_tensor import minimax as _pto_ops           # read USE_PTO_* dynamically
+from ops.pypto_tensor.minimax import (
     grouped_gemm, MoeDims,
 )
 from .configuration_minimax_m3 import MiniMaxM3Config
@@ -518,10 +518,10 @@ class MiniMaxM3Attention(nn.Module):
         return torch.zeros(keep.shape, dtype=dtype, device=device).masked_fill(~keep, min_dtype)
 
     def _pypto_msa_decode_output(self, idx_q, query_states, input_shape, past_key_values, length):
-        from pypto_gym.ops.pypto_tensor.minimax.minimax_m3_msa_indexer_impl import (
+        from ops.pypto_tensor.minimax.minimax_m3_msa_indexer_impl import (
             minimax_m3_msa_indexer,
         )
-        from pypto_gym.ops.pypto_tensor.minimax.minimax_m3_msa_sparse_attention_impl import (
+        from ops.pypto_tensor.minimax.minimax_m3_msa_sparse_attention_impl import (
             minimax_m3_msa_sparse_decode,
         )
 

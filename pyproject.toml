@@ -62,10 +62,11 @@ tests = [
 
 [tool.setuptools.packages.find]
 where = ["src", "."]
-include = ["pypto_gym*", "benchmark*"]
+include = ["pypto_gym*", "ops*", "benchmark*"]
 
 [tool.setuptools.package-data]
 "pypto_gym" = ["**/*.md", "**/*.yaml"]
+"ops" = ["**/*.md", "**/*.yaml"]
 "benchmark" = ["**/*.md", "**/*.yaml", "**/*.sh"]
 
 [tool.pytest.ini_options]

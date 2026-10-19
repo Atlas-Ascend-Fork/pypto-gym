@@ -234,7 +234,7 @@ def _wire_pypto(local_rank):
     """Register the committed kernels package under the name modeling_kimi expects,
     enable USE_PTO_KDA, and wrap the chunk wrapper to count pypto-vs-fallback. Binds
     PyPTO to THIS rank's NPU (TILE_FWK_DEVICE_ID was set to local_rank before import)."""
-    import pypto_gym.ops.pypto_tensor.kimi_linear_48b_a3b as pto
+    import ops.pypto_tensor.kimi_linear_48b_a3b as pto
     sys.modules["kimi_linear_48b_a3b_pto_kernels"] = pto
     _orig = pto.kda_chunk_wrapper
 
@@ -807,7 +807,7 @@ def _prefill_stage_decode(ctx, input_ids):
 def _build_decode_stage(ctx, dyn_cache, use_fused, capture):
     """Seed the static cache from prefill, build the stage closure, capture."""
     import kda_decode_graph as dg
-    from pypto_gym.ops.pypto_tensor.kimi_linear_48b_a3b.kda import (
+    from ops.pypto_tensor.kimi_linear_48b_a3b.kda import (
         kda_fused_decode_impl as kda_impl)
 
     cfg, model = ctx.cfg, ctx.model
@@ -927,7 +927,7 @@ def _run_decode_mode(params):
     args, rank, world, local, dev, cfg, stage = (
         params.args, params.rank, params.world, params.local, params.dev, params.cfg, params.stage)
     if args.pypto:
-        import pypto_gym.ops.pypto_tensor.kimi_linear_48b_a3b as pto
+        import ops.pypto_tensor.kimi_linear_48b_a3b as pto
         sys.modules["kimi_linear_48b_a3b_pto_kernels"] = pto
         pto.USE_PTO_KDA = True
 

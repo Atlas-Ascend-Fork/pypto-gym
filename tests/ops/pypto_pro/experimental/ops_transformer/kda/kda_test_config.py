@@ -11,11 +11,11 @@ while not os.path.isdir(os.path.join(_REPO_ROOT, "src")):
     _REPO_ROOT = os.path.dirname(_REPO_ROOT)
     if _REPO_ROOT == os.path.dirname(_REPO_ROOT):
         break
-_SRC_DIR = os.path.join(_REPO_ROOT, "src")
+_SRC_DIR = _REPO_ROOT
 if _SRC_DIR not in sys.path:
     sys.path.insert(0, _SRC_DIR)
 
-from pypto_gym.ops.pypto_pro.experimental.ops_transformer.kda.kda_common import (
+from ops.pypto_pro.experimental.ops_transformer.kda.kda_common import (
     C, K, V, HC, K_DIM, V_DIM, DEVICE,
     make_cu_seqlens_tensor, build_chunk_tables, alloc_chunk_h_workspaces,
 )

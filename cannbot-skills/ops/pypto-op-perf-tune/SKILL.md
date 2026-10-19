@@ -141,7 +141,7 @@ description: PyPTO 算子性能分析和自动调优技能。用于对生成及�
 
 **资料库**
 
-1. [高性能编程实践](../../../src/pypto_gym/ops/pypto_tensor) -- 介绍了很多高性能的编程案例，可以参考其中的高性能写法进行优化
+1. [高性能编程实践](../../../ops/pypto_tensor) -- 介绍了很多高性能的编程案例，可以参考其中的高性能写法进行优化
 2. [API 接口文档](https://raw.gitcode.com/cann/pypto/raw/master/docs/zh/api) -- 介绍了整个 pypto 仓库的所有接口及调优参数使用说明
 3. [NPU 内存体系参考](shared/npu-memory-arch.md) -- AI Core Buffer 层级（L1/L0A/L0B/L0C/UB 容量）、L2/Memory 带宽。TileShape 设置、UB 容量规划、泳道搬运分析时查阅；表内为族系典型值
 

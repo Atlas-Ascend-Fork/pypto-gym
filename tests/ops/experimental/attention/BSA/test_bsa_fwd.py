@@ -57,10 +57,10 @@ def _check_project_root_candidate(d, test_file_dir, bsa_marker):
         return None
     tests_dir = os.path.join(d, 'tests')
     rel_from_tests = os.path.relpath(test_file_dir, tests_dir)
-    # Map tests/ops/<rest> -> src/pypto_gym/ops/pypto_tensor/<rest>
+    # Map tests/ops/<rest> -> ops/pypto_tensor/<rest>
     if rel_from_tests.startswith('ops/'):
         rest = rel_from_tests[len('ops/'):]
-        candidate = os.path.join(d, 'src', 'pypto_gym', 'ops', 'pypto_tensor', rest)
+        candidate = os.path.join(d, 'ops', 'pypto_tensor', rest)
         if all(os.path.isfile(os.path.join(candidate, m)) for m in bsa_marker):
             return candidate
     return None
@@ -75,7 +75,7 @@ def _resolve_bsa_root():
          for marker files (BSA_README.md, common/bsa_common.py).
       3. At each parent that has both 'tests/' and 'src/' subdirectories
          (project-root candidate), check whether the src layout contains
-         the BSA implementation under src/pypto_gym/ops/pypto_tensor/ with
+         the BSA implementation under ops/pypto_tensor/ with
          the same relative path as under tests/ops/.
     """
     _BSA_MARKER = ("BSA_README.md", os.path.join("common", "bsa_common.py"))
