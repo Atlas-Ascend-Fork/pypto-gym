@@ -2,7 +2,7 @@
 
 > 本文件定义 PyPTO-Pro 性能调优的采集与证据要求。
 > [msprof 采集指南](msprof-guide.md)、[msprof op 补充指南](msprof-op-guide.md)、
-> [CSV 字段参考](csv_fields_reference.md)、[A5 Roofline 与杠杆](general-knowledge/a5-roofline-and-levers.md)
+> [CSV 字段参考](csv_fields_reference.md)、[A5 Roofline 与杠杆](../general-knowledge/a5-roofline-and-levers.md)
 > 按需提供分析方法；本协议在显式传入 `--case-manifest`（或使用逐 case Golden
 > 采集器/时间线入口）时生效。不传 manifest 时，compare/quick/batch
 > 保持既有的 Markdown Golden 流程不变。
@@ -21,6 +21,7 @@
 - [Final 的补充指令时间线](#instruction-timeline)
 - [Roofline / 流水终态证据](#terminal-evidence)
 - [持久归档](#archive-layout)
+- [msopprof 诊断产物](#msopprof-diagnostic)
 - [CSV 字段与阈值的调优语义](#csv-semantics)
 - [A5 证据状态与使用边界](#a5-boundary)
 - [msprof op 证据优先级与补充边界](#msprof-op-boundary)
@@ -167,11 +168,50 @@ custom/{算子名}/docs/perf/
 │   │   │   └── summary.txt
 │   │   └── repeat_NNN/...
 │   │   └── instruction_timeline/        ← final 每 P0 case 的补充时间线
-│   └── case_<下一 case>_<hash>/...
-└── ...
+    │   └── case_<下一 case>_<hash>/...
+    └── ...
 ```
 
+msopprof 诊断采集（Timeline / Core Occupancy / Roofline，见下节）归档在
+`custom/{算子名}/reports/msopprof<轮次>/`：含 `collection_manifest.json`、分块 `NN_<block>/`
+原始产物与 `VISUAL_ANALYSIS.json/.md`（本 Skill 路径不生成 HTML 报告）。
+
 既有单层 `round_NNN/op_summary_<Metric>.csv + per_core_cycles.csv + summary.txt` 结构在标准模式（不传 manifest）下保持不变。
+
+## <a id="msopprof-diagnostic"></a>msopprof 诊断产物
+
+> 与末节"msprof op 证据优先级与补充边界"是**同一工具（msopprof）的两种用法**：本节管
+> msopprof-visualization 管线的 Timeline/Occupancy/Roofline 块采集与 digest；末节管
+> `msprof op` + `perf_summary.py` 的 8 份 CSV 归档统计。两节证据等级一致（诊断，不进排名），
+> 产物与使用通道不同，互不替代。
+
+Timeline（Pipe 流水图）、Core Occupancy（核间负载）与 Roofline（瓶颈分析图）的采集与
+提取见 [msprof op 增强指南](msprof-op-enhanced-guide.md)；digest 的字段字典见
+[增强指标参考](enhanced-metrics-reference.md)。本节承载 digest 的全部规范约束：
+
+- `VISUAL_ANALYSIS.json` 的 `schema` 固定为 `"pypto-pro-visual-analysis/v1"`；
+  **机器判断只读 JSON**，`VISUAL_ANALYSIS.md` 只是人读渲染，不作机器依据；
+- 字段变更必须同步修改提取脚本、本协议与字段字典，并说明对既有消费方的影响；
+  上游解析器语义变化时，重跑采集核对 digest 字段后方可声明兼容。
+
+**产物清单**：采集目录（`collection_manifest.json` + 分块原始产物）与
+`VISUAL_ANALYSIS.json/.md`；本 Skill 路径不生成 HTML 报告。全部属于**诊断证据**：可引用进账本与
+`PERFORMANCE_REPORT.md`，用于瓶颈定位、候选排序、机制核对与终态披露；**不进入候选排名，
+不单独判 `target_met`**，性能收益仍以同协议 formal compare 为准。
+
+**作为第 6 步（闭合预置来源）输入的合法通道**——机制核对环节按预期机制选 digest 字段：
+
+| 优化项预期机制 | 核对字段 |
+|---|---|
+| 搬算重叠 / 流水编排 | `timeline.pipes`：相关 Pipe 的 `avg_busy_pct_per_lane` 与同 lane 事件重叠变化；`timeline.segment_load`：`largest_exposed_uncovered` 与暴露段 `load_rate` 变化 |
+| 搬运粒度 / 带宽利用 | `roofline.charts[].series[]`：AI、`measured_performance_tops`、`ratio_percent` 位移 |
+| 负载均衡 / 分核 | `core_occupancy.balance_by_type`：核间负载不均衡率 `imbalance_ratio_pct` 与 `verdict` 变化 |
+
+使用规则：
+
+- 接受改动后必须重采 digest，保证与接受代码同源；旧轮次 digest 不得作为新实现 evidence；
+- digest 只核对机制是否符合预期；与假设不符时按 playbook 重新诊断，不倒填结论；
+- 采集与解析沿用原 skill 的 fail-closed 约束（无 manifest 目录拒绝、失败 replay 不复用）。
 
 ## <a id="csv-semantics"></a>CSV 字段与阈值的调优语义
 
@@ -190,9 +230,13 @@ custom/{算子名}/docs/perf/
 - `DAV_3510` 加上核数不唯一确定 SKU；拿不到可验证的设备名/HAL 时，数值 roofline 标记 unavailable。
 - 公式中的符号必须先归一化到 SI 单位（例如 `cube_freq=1650` MHz 是 `1.650e9 cycles/s`；`vec_freq` 同理）。`ddr_rate` 在所选 ini/schema 未说明是 bytes/cycle/core、速率系数还是已归一化带宽之前，不得代入带宽公式。算不出单位就宁可不给数字。
 - 数据墙（字节不可约减 + 占用率达到设备极限）只用于关闭受证据支配的候选，本身不是调优成功条件；目标差距可提高候选优先级，但全部来源、候选与 final sweep 合法闭合后不阻止交付。
-- 停止纪律见 [`pypto-pro-op-kb/references/investigation-discipline.md`](../../pypto-pro-op-kb/references/investigation-discipline.md)：保留反事实证据、如实报告阻断，禁止把历史阈值转写成当前成功。
+- 停止纪律见 [`pypto-pro-op-kb/references/investigation-discipline.md`](../../../pypto-pro-op-kb/references/investigation-discipline.md)：保留反事实证据、如实报告阻断，禁止把历史阈值转写成当前成功。
 
 ## <a id="msprof-op-boundary"></a>msprof op 证据优先级与补充边界
+
+> 本节是 msopprof 的一种用法：`msprof op` + `perf_summary.py` 的 8 份 CSV 归档统计。
+> 同一工具的另一用法（PipeTimeline/Occupancy/Roofline 块采集与 digest）见
+> [msopprof 诊断产物](#msopprof-diagnostic)；两者证据等级一致，产物与通道不同。
 
 - 性能判定以真实 NPU 上板数据为准。当前 PyPTO-Pro 没有已核实的 Execute Graph/pass verify/sim-run 选项；若项目另有 simulator，只能作为诊断辅助，必须记录工具版本和误差，并以上板结果验收。
 - 本仓 `perf_summary.py` 只提供 msprof op 归档统计（不校验归属、不做达标判定）；其产物不能替代调优报告和正式 compare 三件套；正式 baseline/final 必须走本文件的 compare 协议。

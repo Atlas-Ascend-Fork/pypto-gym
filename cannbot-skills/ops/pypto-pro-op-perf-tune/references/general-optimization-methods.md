@@ -12,8 +12,8 @@
 playbook 以 `quick_not_promoted` 和 quick 原始证据关闭。
 
 本页只整理优化动作及其边界。采集、字段解释和瓶颈分析仍以
-[证据协议](evidence-protocol.md)、[msprof 指南](msprof-guide.md)、
-[msprof op 指南](msprof-op-guide.md)和 [CSV 字段参考](csv_fields_reference.md)为准，本文不改写
+[证据协议](perf-analysis/evidence-protocol.md)、[msprof 指南](perf-analysis/msprof-guide.md)、
+[msprof op 指南](perf-analysis/msprof-op-guide.md)和 [CSV 字段参考](perf-analysis/csv_fields_reference.md)为准，本文不改写
 这些通用技巧。
 
 ## 原子项索引

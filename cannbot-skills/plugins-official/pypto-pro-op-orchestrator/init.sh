@@ -162,6 +162,59 @@ install_rendered_config() {
     safe_install_file "$tmpfile" "$target" "$display_name" "$level"
 }
 
+# Pull the remote skills into a config skills directory ($1). The skills are
+# maintained in the shared CANNBot Skills git repository and are not vendored in
+# this checkout, so a sparse checkout fetches only the needed subtrees. A failed
+# refresh keeps an already installed copy; a missing first-time install is fatal.
+provision_remote_skills() {
+    local skills_dir="$1" repo ref work name missing=""
+    [ -n "$REMOTE_SKILLS" ] || return 0
+    repo="$CANNBOT_REMOTE_SKILL_REPO"
+    ref="$CANNBOT_REMOTE_SKILL_REF"
+    if ! command -v git >/dev/null 2>&1; then
+        err "未找到 git，无法拉取远程 Skill：$REMOTE_SKILLS"
+        return 1
+    fi
+    mkdir -p "$skills_dir"
+    work="$(mktemp -d)"
+    if ! git clone --depth 1 --filter=blob:none --no-checkout --branch "$ref" \
+            "$repo" "$work/repo" >/dev/null 2>&1; then
+        for name in $REMOTE_SKILLS; do
+            [ -f "$skills_dir/$name/SKILL.md" ] || missing="$missing $name"
+        done
+        rm -rf "$work"
+        if [ -n "$missing" ]; then
+            err "无法从 $repo 拉取远程 Skill：$missing"
+            return 1
+        fi
+        warn "远程 Skill 拉取失败，保留已有副本（$repo@$ref）"
+        return 0
+    fi
+    # Sparse checkout keeps only the requested skill subtrees; create .git/info
+    # explicitly because old git does not always populate it.
+    mkdir -p "$work/repo/.git/info"
+    git -C "$work/repo" config core.sparseCheckout true
+    git -C "$work/repo" config core.sparseCheckoutCone false
+    if ! { for name in $REMOTE_SKILLS; do printf '/ops/%s/\n' "$name"; done \
+             | git -C "$work/repo" sparse-checkout set --stdin >/dev/null 2>&1; } ||
+       ! git -C "$work/repo" checkout --detach HEAD >/dev/null 2>&1; then
+        rm -rf "$work"
+        err "无法从 $repo 拉取远程 Skill：$REMOTE_SKILLS"
+        return 1
+    fi
+    for name in $REMOTE_SKILLS; do
+        if [ -f "$work/repo/ops/$name/SKILL.md" ]; then
+            rm -rf "${skills_dir:?}/$name"
+            cp -a "$work/repo/ops/$name" "$skills_dir/$name"
+            ok "远程 Skill: $name (来自 $repo@$ref)"
+        else
+            rm -rf "$work"
+            err "远程仓库缺少 Skill：ops/$name"
+            return 1
+        fi
+    done
+    rm -rf "$work"
+}
 
 # Detect TRAE variant and return appropriate config root.
 # Detect TRAE variant by scanning global config directories.
@@ -185,6 +238,12 @@ VERSION="1.0.0"
 EXCLUDED_SKILL=""
 # Skill whitelist (space-separated list) - references shared ops
 INCLUDED_SKILLS="pypto-pro-docs-search pypto-pro-environment-check pypto-pro-golden-generate pypto-pro-intent-understand pypto-pro-material-explore pypto-pro-op-design pypto-pro-op-develop pypto-pro-op-perf-tune pypto-pro-op-plan pypto-pro-precision-debug pypto-pro-cann-delivery"
+# Remote skills (space-separated list) - maintained in the shared CANNBot Skills
+# repo and not vendored in this checkout, so they are pulled from git at install
+# time into the config skills directory.
+REMOTE_SKILLS="ops-profiling"
+CANNBOT_REMOTE_SKILL_REPO="${CANNBOT_REMOTE_SKILL_REPO:-https://gitcode.com/cann/cannbot-skills.git}"
+CANNBOT_REMOTE_SKILL_REF="${CANNBOT_REMOTE_SKILL_REF:-master}"
 # Agent whitelist (shell pattern) - uses local agents/
 INCLUDED_AGENT_PATTERN="pypto-pro-op-*"
 SKILL_CATEGORY="ops"
@@ -366,6 +425,19 @@ CANNBOT_DIR="$CONFIG_ROOT"
 # OpenCode always installs the Pro entry point plus its Scriptor mode, both on a
 # fresh project and on refresh. The Python installer preserves unmanaged roots.
 if [ "$TOOL" = "opencode" ]; then
+    # Print the remote-skills plan before provisioning: this branch execs the
+    # Python installer and never reaches the shared display block below.
+    if [ -n "$REMOTE_SKILLS" ]; then
+        echo ""
+        echo -e "${CYAN}远程 Skills (安装时从 git 拉取)：${NC}"
+        for name in $REMOTE_SKILLS; do
+            echo -e "  ${GREEN}$name${NC} → 将从 ${CANNBOT_REMOTE_SKILL_REPO}@${CANNBOT_REMOTE_SKILL_REF} 拉取"
+            echo -e "    ${DIM}目标路径: $CANNBOT_DIR/skills/$name${NC}"
+        done
+    fi
+    # Fetch remote skills before the Python installer runs; it only manages the
+    # declared Pro/Scriptor skills and leaves this directory in place.
+    provision_remote_skills "$CANNBOT_DIR/skills" || exit 1
     shared_install_base="$CONFIG_ROOT"
     if [ "$LEVEL" = "project" ]; then shared_install_base="$INSTALL_BASE"; fi
     exec "${CANNBOT_PYTHON:-python3}" "$PLUGIN_ROOT/scripts/install_opencode.py" \
@@ -476,6 +548,15 @@ for name in $SKILLS_TO_INSTALL; do
     fi
     echo -e "    ${DIM}目标路径: $target${NC}"
 done
+
+if [ -n "$REMOTE_SKILLS" ]; then
+    echo ""
+    echo -e "${CYAN}远程 Skills (安装时从 git 拉取)：${NC}"
+    for name in $REMOTE_SKILLS; do
+        echo -e "  ${GREEN}$name${NC} → 将从 ${CANNBOT_REMOTE_SKILL_REPO}@${CANNBOT_REMOTE_SKILL_REF} 拉取"
+        echo -e "    ${DIM}目标路径: $CANNBOT_DIR/skills/$name${NC}"
+    done
+fi
 
 echo ""
 echo -e "${CYAN}Agents (${AGENT_COUNT} 项，来自本地 agents/)：${NC}"
@@ -717,6 +798,9 @@ else
     done
 
     ok "Skills: $link_count discovery symlinks"
+
+    # Remote skills maintained in the shared CANNBot Skills git repository.
+    provision_remote_skills "$DISCOVERY" || exit 1
 
     # Render agent discovery files instead of exposing raw prompts through symlinks.
     AGENT_DISCOVERY="$CONFIG_ROOT/agents"

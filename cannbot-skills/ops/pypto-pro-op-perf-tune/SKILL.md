@@ -8,10 +8,9 @@ description: 优化并验收已通过正确性验证的 PyPTO-Pro 单 kernel 实
 本 Skill 定义性能调优的优化来源、执行顺序和交付边界。具体账本、实验、重开、最佳版本选择
 与停止规则统一见[优化项实验闭环](references/optimization-playbook.md)。性能采集和分析按需读取：
 
-- 标准、compare、quick、batch 采集与主 bound 判定：[msprof 指南](references/msprof-guide.md)；
-- 环境支持时的 `msprof op` 补充诊断：[msprof op 指南](references/msprof-op-guide.md)；
-- CSV 字段与阈值边界：[CSV 字段参考](references/csv_fields_reference.md)；
-- 逐 case manifest、Golden、归档和时间线合同：[证据协议](references/evidence-protocol.md)。
+- 性能分析总入口（工具选择、分析主流程与跨 Skill 采集辅助）：[性能分析](references/perf-analysis/performance-analyze.md)；
+- CSV 字段与阈值边界：[CSV 字段参考](references/perf-analysis/csv_fields_reference.md)；
+- 逐 case manifest、Golden、归档和时间线合同：[证据协议](references/perf-analysis/evidence-protocol.md)。
 
 用户只要求采集、比较或诊断时，进入对应参考页；需要改码调优时执行下述闭环。
 命令中的 `PERF_SKILL_ROOT` 指本 Skill 的实际目录；算子目录示例可替换为项目实际路径。
@@ -177,8 +176,10 @@ general knowledge 本身不是优化项来源，假设必须先按前述证据�
    闭环填写。
 4. **建立正式 baseline**：discovery 确认唯一、完整 lowering `Op Name`，再按 manifest 逐 case、
    逐 repeat 采集七指标 baseline 并归档原始证据。
-5. **分析瓶颈并排序**：使用既有 Roofline、Vector/Cube/Scalar/MTE、分层带宽、冲突、逐核及
-   Tile DAG/时间线方法判断适用性、优先级和验证指标；ratio 只负责指路。若命中
+5. **分析瓶颈并排序**：按[性能分析](references/perf-analysis/performance-analyze.md)入口选择工具，使用既有
+   Roofline、Vector/Cube/Scalar/MTE、分层带宽、冲突、逐核及 Tile DAG/时间线方法判断适用性、
+   优先级和验证指标；ratio 只负责指路。跨 Skill 采集辅助的结果仍须按本 Skill 的证据协议归档
+   后才能作为调优依据。若命中
    [结构性优化重审与可达目标取证](references/structural-optimization.md) §1 强制或触发条件，引入
    `structural` 来源，按其 §2 取证最佳已知结构、按其 §3 逐维判定、按其 §4 得到可达目标
    `T_best`/`T_lb`。

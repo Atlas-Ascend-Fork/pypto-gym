@@ -14,7 +14,7 @@ current decision.
 - Selector usage contract: [examples/README.md](examples/README.md)
 - Validated implementation selector: [examples/kernel-index.md](examples/kernel-index.md)
 - Correctness-preserving decomposition: [references/decomposition-primitives.md](references/decomposition-primitives.md)
-- Measurement workflow: [`pypto-pro-op-perf-tune` evidence protocol](../pypto-pro-op-perf-tune/references/evidence-protocol.md)
+- Measurement workflow: [`pypto-pro-op-perf-tune` evidence protocol](../pypto-pro-op-perf-tune/references/perf-analysis/evidence-protocol.md)
 - Integrity checks: `check_kb_integrity.py`, with negative controls in [tests/test_check_kb_integrity.py](tests/test_check_kb_integrity.py) — every case there is a defect that once passed a full green run
 
 ## Retention gate

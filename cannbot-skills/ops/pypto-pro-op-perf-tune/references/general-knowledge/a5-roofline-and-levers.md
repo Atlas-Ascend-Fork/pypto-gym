@@ -17,6 +17,20 @@ Before calculating a roofline:
 If any input is unavailable, leave the numerical estimate unverified and use
 the profiler result as the only tuning basis.
 
+## Cross-Skill profiling tools
+
+For raw collection, cross-run speedup and bottleneck triage this page pairs with the
+`ops-profiling` Skill ([SKILL.md](../../../ops-profiling/SKILL.md)) and its
+`msopprof-visualization` sub-skill
+([SKILL.md](../../../ops-profiling/msopprof-visualization/SKILL.md)) for interactive HTML reports.
+Those tools supply measurements only; the derivation and evidence gate above still decide the roofline.
+
+> Note: `ops-profiling` is not vendored in this repository; it is fetched from the
+> upstream `cann/cannbot-skills` repo at install time. The sibling links above resolve
+> only in the installed layout or an upstream checkout. If they dangle, locate the
+> skill via `$CANNBOT_CONFIG_ROOT/skills/ops-profiling` (or `$VIS_SKILL_ROOT` for the
+> `msopprof-visualization` sub-skill).
+
 ## Primary source paths
 
 Resolve these under the installed, version-recorded PyPTO/CANN tree; do not copy
@@ -145,9 +159,9 @@ the result.
 6. Keep the change only when the measured target metric improves without
    violating the numerical contract.
 
-Use [msprof-guide.md](../msprof-guide.md) or
-[msprof-op-guide.md](../msprof-op-guide.md) for collection, and
-[csv_fields_reference.md](../csv_fields_reference.md) for the fields supported by
+Use [msprof-guide.md](../perf-analysis/msprof-guide.md) or
+[msprof-op-guide.md](../perf-analysis/msprof-op-guide.md) for collection, and
+[csv_fields_reference.md](../perf-analysis/csv_fields_reference.md) for the fields supported by
 the current parser.
 
 ## A5 原语代价表（每 64 lane 寄存器）

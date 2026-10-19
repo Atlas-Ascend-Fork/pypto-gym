@@ -1,8 +1,8 @@
 # 优化项实验闭环
 
 本页定义五类优化项如何登记、实验、重开和关闭。采集命令与归档格式见
-[证据协议](evidence-protocol.md)，指标解释见[msprof 指南](msprof-guide.md)与
-[CSV 字段参考](csv_fields_reference.md)。平台资料、general knowledge 和本页本身不产生优化项；
+[证据协议](perf-analysis/evidence-protocol.md)，指标解释见[msprof 指南](perf-analysis/msprof-guide.md)与
+[CSV 字段参考](perf-analysis/csv_fields_reference.md)。平台资料、general knowledge 和本页本身不产生优化项；
 模板项只由[模板优化项索引](../templates/INDEX.md)枚举。
 
 ## 1. 冻结实验合同
@@ -84,7 +84,9 @@ baseline。对每个 P0 记录绝对 Task Duration、AIC/AIV 时间、Vector/Cub
 5. 正确落实的 `kb_selected` 缺口直接进入 formal 记录性能影响；其它候选按冻结晋级规则决定是否
    formal，未晋级则恢复当前最佳并以 `status=rejected, reason_code=quick_not_promoted` 关闭，
    有明确组合价值时暂记 `enabler`；
-6. 核对预期机制；性能变化与假设不符时重新诊断，不倒填结论；
+6. 核对预期机制（可用 msopprof digest 字段，映射与证据等级见
+   [证据协议](perf-analysis/evidence-protocol.md)的"msopprof 诊断产物"节；digest 只核对机制，
+   不证明收益）；性能变化与假设不符时重新诊断，不倒填结论；
 7. `kb_selected` 验证通过后保留修复并记为 `implemented`；其它项依据第 6 节决定保留或恢复，
    并关闭该 source item。
 

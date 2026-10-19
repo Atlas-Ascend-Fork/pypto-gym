@@ -11,7 +11,6 @@
 - [Step 1：构建算子（如果有指定的调用方式，这一步可跳过）](#build-operator)
 - [Step 2：采集](#collect-profile)
 - [Step 3：归档 + 统计摘要](#archive-summary)
-- [主 Bound 判定（msprof 归档）](#bound-classification)
 - [数据目录结构](#data-layout)
 - [通用分析纪律](#analysis-discipline)
 - [注意事项](#cautions)
@@ -104,8 +103,8 @@ bash "$PERF_SKILL_ROOT/scripts/msprof_profile_run.sh" --batch --base-dir=./custo
 ## <a id="pypto-io"></a>PyPTO-Pro 输入与输出
 
 采集脚本执行算子目录中已有、已按算子合同通过全量正确性测试的 runner；优化前后必须保留
-wrapper 边界、Golden 语义与精度门槛。独立输入的要求见[主 Skill](../SKILL.md)；若项目使用
-[Develop Skill](../../pypto-pro-op-develop/SKILL.md)，也须保留其测试合同。逐 case
+wrapper 边界、Golden 语义与精度门槛。独立输入的要求见[主 Skill](../../SKILL.md)；若项目使用
+[Develop Skill](../../../pypto-pro-op-develop/SKILL.md)，也须保留其测试合同。逐 case
 输入、Golden 机器合同和输出证据以[证据协议](evidence-protocol.md)为准。不传 manifest 的兼容
 compare/quick 输出仍按上面的模式说明生成。
 
@@ -114,12 +113,12 @@ compare/quick 输出仍按上面的模式说明生成。
 ## <a id="platform-tool-selection"></a>平台与工具选择
 
 在加载任何平台专属模型前，先运行
-[`../../pypto-pro-environment-check/scripts/get_npu_arch.py`](../../pypto-pro-environment-check/scripts/get_npu_arch.py)
+[`../../pypto-pro-environment-check/scripts/get_npu_arch.py`](../../../pypto-pro-environment-check/scripts/get_npu_arch.py)
 或读取构建配置，记录设备型号、`NpuArch`、CANN/PyPTO 版本和 `pypto_pro.__file__`：
 
 - 仅当结果确认 raw 输出 `3510`（`NpuArch` 值）、helper 输出 `dav-3510`、runtime 输出 `DAV_3510`
   或构建目标 `dav-c310` 时，加载
-  [A5 roofline 与杠杆](general-knowledge/a5-roofline-and-levers.md)；
+  [A5 roofline 与杠杆](../general-knowledge/a5-roofline-and-levers.md)；
 - 对未知平台或非 A5 平台，不应用 A5 核数、容量、带宽、频率或经验结论，直接使用该平台的
   官方资料与本次 profiler 数据；
 - 平台探测失败时，将平台模型标记为不可用，但仍可继续做不依赖硬编码常量的实测瓶颈分析。
@@ -133,7 +132,7 @@ compare/quick 输出仍按上面的模式说明生成。
 
 完整 `test_{op}.py` 的 profile 会混入输入生成、Golden 和精度检查，不能把其中的 `aclnn*`
 直接归因给 wrapper，也不能据此计算 wrapper 占比。PyPTO-Pro wrapper 合规由
-[wrapper 边界合同](../../pypto-pro-op-kb/constraints/wrapper-boundary.md)裁决；profile 只提供性能
+[wrapper 边界合同](../../../pypto-pro-op-kb/constraints/wrapper-boundary.md)裁决；profile 只提供性能
 证据，不能授权越界。性能结论只使用可唯一归属到目标 kernel 或冻结 case 的字段和计时口径。
 
 ---
@@ -212,39 +211,9 @@ python3 "$PERF_SKILL_ROOT/scripts/msprof_perf_summary.py" $GROUP_DIR ops/{operat
 
 5. 同步把 `per_core_cycles.csv` 归档到同目录，方便二次分析
 
-归档完成后即结束本 Step 的职责。下游从 `summary.txt`（含逐核负载均衡段）、`op_summary_*.csv`、`per_core_cycles.csv` 读取指标后，按 **下文「主 Bound 判定」** 推导**主 bound 档位**。
-
----
-
-## <a id="bound-classification"></a>主 Bound 判定（msprof 归档）
-
-本节适用于 **`msprof` 经 Step 2～3 得到的归档目录**（`round_NNN/`）。
-
-### 输入与输出
-
-| 项目 | 说明 |
-|------|------|
-| **输入** | 从归档中的 `op_summary_*.csv`、`summary.txt` 等抽取的**单核侧**各流水线 **busy 占 case（或 task）总时长** 的百分比 |
-| **不适用** | msprof 聚合指标**无**可对照流水图的气泡时间；报告中气泡列标注「不适用」，**不得**填写气泡数值 |
-| **输出** | **主 bound 档位**：`MTE2 BOUND` / `CUBE BOUND` / `VEC BOUND` / `FIXP BOUND` / `MTE3 BOUND` / `SCALAR BOUND` / **无 bound** |
-
-各流水线 busy 占比的**抽取与列映射**以本文 Step 3 产物及 [`csv_fields_reference.md`](csv_fields_reference.md) 为准；若归档 CSV 表头与文档示例不一致，**以实际表头为准**。
-
-### 判定规则
-
-在已得到各流水线 busy 占比后，**从上到下**匹配**第一条成立**：
-
-| 优先级 | Bound 类型 | 判断规则 |
-|--------|-----------|----------|
-| 1 | MTE2 BOUND | MTE2 busy 占 case > 80%，或（MTE2 在 8 条中占比最大且 > 70%） |
-| 2 | CUBE BOUND | CUBE busy 占 case > 80%，或（CUBE 在 8 条中占比最大且 > 70%） |
-| 3 | VEC BOUND | PUSHQ busy 占 case > 80% |
-| 4 | FIXP BOUND | FIXP busy 占 case > 80% |
-| 5 | MTE3 BOUND | MTE3 busy 占 case > 80% |
-| 6 | SCALAR BOUND | SCALAR busy 占 case > 80%，或 SCALARLDST busy 占 case > 80% |
-| — | **无 bound** | 以上条件均不满足 |
-
-「占比最大」比较对象为上述单元对应的统计。
+归档完成后即结束本 Step 的职责。本文只做**指标提取**：下游从 `summary.txt`（含逐核负载均衡段）、
+`op_summary_*.csv`、`per_core_cycles.csv` 读取指标后，判定（主 bound 档位、等级与行动）统一走
+[指标运用指导](metric-application-guide.md)。
 
 ---
 
@@ -289,8 +258,8 @@ ops/{算子名}/docs/perf/
 
 ## <a id="analysis-discipline"></a>通用分析纪律
 
-本节只提供分析证据；调优项的来源、建项时机和登记要求以[主 Skill](../SKILL.md)及
-[优化项实验闭环](optimization-playbook.md)为准，不能仅凭本节文字建立优化项。
+本节只提供分析证据；调优项的来源、建项时机和登记要求以[主 Skill](../../SKILL.md)及
+[优化项实验闭环](../optimization-playbook.md)为准，不能仅凭本节文字建立优化项。
 
 - **kernel 总耗时不是 DMA floor。** 要估计纯搬运下界，单独运行只含合同 load+store 的 sweep；
   完整 kernel 时间同时包含计算、依赖和固定开销，不能反过来当搬运下界。
@@ -304,10 +273,10 @@ ops/{算子名}/docs/perf/
   形态；推断平台或框架限制必须有独立 probe、平台资料和其它实现的可复核证据。
 - **串行依赖、历史估算和旧二进制都需排除。** 依赖链要用生成物/trace/受控 A-B 证明；结构
   改变后重新推导估计；body 修改后验证生成物身份。实验细则见
-  [优化项实验闭环](optimization-playbook.md)。
+  [优化项实验闭环](../optimization-playbook.md)。
 
 更完整的 sibling/floor/证伪纪律见
-[KB investigation discipline](../../pypto-pro-op-kb/references/investigation-discipline.md)。
+[KB investigation discipline](../../../pypto-pro-op-kb/references/investigation-discipline.md)。
 
 ---
 
@@ -329,5 +298,5 @@ ops/{算子名}/docs/perf/
 | 文件 | 内容 |
 |------|------|
 | [`csv_fields_reference.md`](csv_fields_reference.md) | 字段定义和阈值（按 `op_summary_*` 列名对齐），供下游分析角色参考 |
-| `../scripts/msprof_profile_run.sh` | 一键采集脚本（Step 2 调用） |
-| `../scripts/msprof_perf_summary.py` | 归档 + 摘要 + 逐核负载均衡（Step 3 调用） |
+| `../../scripts/msprof_profile_run.sh` | 一键采集脚本（Step 2 调用） |
+| `../../scripts/msprof_perf_summary.py` | 归档 + 摘要 + 逐核负载均衡（Step 3 调用） |
