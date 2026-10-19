@@ -229,8 +229,10 @@ def assemble_key_blocks(ctx, actual_s2_tile):
 
     block_num = s2_tile // block_size
     base_idx = ctx.s2_idx * block_num
+    block_cnt = (actual_s2_tile + block_size - 1) // block_size
     for i in range(block_num):
-        b_idx = (block_table[ctx.b_idx, base_idx + i].max(0) * n2 + ctx.n2_idx) * block_size
+        read_idx = (block_cnt - 1).min(i)
+        b_idx = (block_table[ctx.b_idx, base_idx + read_idx].max(0) * n2 + ctx.n2_idx) * block_size
         kn_view = pypto.view(knope_2d, [block_size, kv_d], [b_idx, 0], valid_shape=[actual_s2_tile, kv_d])
         pypto.assemble(kn_view, [i * block_size, 0], kn_assemble)
         pypto.assemble(kn_view, [i * block_size, 0], key_assemble)
