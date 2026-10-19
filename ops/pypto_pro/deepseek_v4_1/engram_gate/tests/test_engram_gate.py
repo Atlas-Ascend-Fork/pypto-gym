@@ -5,10 +5,10 @@
 # THIS SOFTWARE IS PROVIDED ON AN "AS IS" BASIS, WITHOUT WARRANTIES OF ANY KIND, EITHER EXPRESS OR IMPLIED.
 """engram_gate PyPTO-Pro test: one test function per case, plus a ``main`` entry.
 
-The kernel and the host wrapper live under
-``ops/pypto_pro/deepseek_v4_1/engram_gate/engram_gate.py``. Each
-``test_xxx`` prepares one case's inputs, runs the public wrapper on the NPU and
-compares against the independent CPU golden with the official Scheme A checker.
+The kernel and the host wrapper live under ``op_kernel/engram_gate.py``; the CPU
+golden and the Scheme A comparator live under ``tests/assets/``. Each ``test_xxx``
+prepares one case's inputs, runs the public wrapper on the NPU and compares the
+output against the independent CPU golden with the official Scheme A checker.
 
 Run: ``python test_engram_gate.py``
 """
@@ -20,27 +20,17 @@ import sys
 import pytest
 import torch
 
-# Make the sibling golden/precision modules importable.
-_HERE = os.path.dirname(os.path.abspath(__file__))
-if _HERE not in sys.path:
-    sys.path.insert(0, _HERE)
-
-# Locate the repo root (the directory containing 'src') so the kernel module is importable.
-_REPO_ROOT = _HERE
-while not os.path.isdir(os.path.join(_REPO_ROOT, "src")):
-    _PARENT = os.path.dirname(_REPO_ROOT)
-    if _PARENT == _REPO_ROOT:
-        break
-    _REPO_ROOT = _PARENT
-_SRC_DIR = _REPO_ROOT
-if _SRC_DIR not in sys.path:
-    sys.path.insert(0, _SRC_DIR)
+# tests/ , tests/assets/ and op_kernel/ all sit next to each other.
+_THIS_DIR = os.path.dirname(os.path.abspath(__file__))
+_OP_DIR = os.path.dirname(_THIS_DIR)
+for _path in (_THIS_DIR, os.path.join(_THIS_DIR, "assets"),
+              os.path.join(_OP_DIR, "op_kernel")):
+    if _path not in sys.path:
+        sys.path.insert(0, _path)
 
 import engram_gate_golden_cpu  # noqa: E402
-from precision_compare import check_precision  # noqa: E402
-from ops.pypto_pro.deepseek_v4_1.engram_gate.engram_gate import (  # noqa: E402
-    engram_gate_wrapper,
-)
+from engram_gate import engram_gate_wrapper  # noqa: E402
+from engram_gate_precision import check_precision  # noqa: E402
 
 logging.basicConfig(level=logging.INFO, format="%(message)s")
 _LOG = logging.getLogger(__name__)

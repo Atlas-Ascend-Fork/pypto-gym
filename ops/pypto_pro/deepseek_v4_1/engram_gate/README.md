@@ -1,97 +1,150 @@
-# EngramGate（PyPTO-Pro）
+# engram_gate
 
-`engram_gate` 使用 PyPTO-Pro 在昇腾 NPU 上融合实现 Engram residual gate 的双路
-RMS、加权点积、signed-sqrt sigmoid 门控和 residual update。
+## 产品支持情况
 
-## 接口
+| 项目 | 说明 |
+| :--- | :--- |
+| 硬件平台 | Ascend 950PR（`Ascend950PR_9589`，平台信息 `soc_version = 'DAV_3510'`）；cube（矩阵计算单元）32 核 / vector（向量计算单元）64 核 |
+| 使用的计算单元 | AI Vector（AIV）核，不使用 Cube |
+| 软件环境 | CANN 9.3.0、PyPTO-Pro DSL |
+| 输入数据类型 | `x`、`key`、`value` 为 BF16；`weight` 为 FP32；`image_mask` 为 BOOL |
+| 输出数据类型 | `y` 为 BF16 |
+| 支持的形状 | `x` / `key` / `y` 为 `[t, hc, dim]`，`value` 为 `[t, dim]`，`weight` 为 `[hc, dim]`，`image_mask` 为 `[t]`；`t ≥ 1`，`hc` 为 `1 ~ 向量核数`（本平台向量核数为 64），`dim` 最大 8512 |
+| 参考实现 | 功能说明里那条公式的独立 CPU 参考实现（FP32 计算、BF16 输出），见 `tests/assets/engram_gate_golden_cpu.py` |
+
+未覆盖的情况（当前不支持）：`dim > 8512`、`hc` 大于向量核数、`eps` / `clamp_value` 取默认值
+`1e-6` 以外的值、输入含有 NaN / Inf。
+
+前三种调用都会在 host 侧报错，不会静默给出错误结果：`dim` 与 `eps` / `clamp_value` 由
+wrapper 直接拦下；`hc` 越界时，`hc = 0` 在计算起核数时除零，`hc` 大于向量核数则在起核时
+报 `InvalidType`。含 NaN / Inf 的输入不在支持范围内，输出未定义。
+
+## 功能说明
+
+`engram_gate` 是 DeepSeek V4.1 Engram 的残差门控（residual gate）算子，使用 PyPTO-Pro
+在昇腾 NPU 的向量核上实现。计算沿最后一维 `dim`、逐 `(token, head)` 行进行：
+
+```text
+rstd = rsqrt(mean(x²) + eps) · rsqrt(mean(key²) + eps)    # x、key 两路均方根（RMS）的倒数之积
+dot  = Σ(x · weight · key) · rstd / √dim                  # 加权点积，按 dim 归约
+gate = sigmoid(copysign(√max(|dot|, clamp_value), dot))   # |dot| 开方后贴回 dot 的符号，再过 sigmoid（1/(1+e^(-x))）
+y    = bf16(x + gate · value)                             # 残差更新
+```
+
+其中 `value` 按 token 共享、不随 head 变化，所以在 head 维上广播。
+
+如果把这四步各写成一个 kernel，就要来回读写全局内存四趟。本算子把它们融合成**一个 kernel
+的一趟扫描**：每个 `(token, head)` 行的 `x`、`key`、`value` 各只搬进片上一次，`y` 只写出
+一次，两趟计算复用同一块片上数据，中间的统计量不再往返全局内存。`value` 行由同一 token 的
+`hc` 个 head 各搬一次、`weight` 由每个核各搬自己那一行，这两处重复量在 `RESULTS.md` 的流量
+表里单列。
+
+`image_mask` 为 `True` 的 token 不做上述门控计算，直接原样返回 `x`（逐位相等，不重新取整）。
+这类 token 在 kernel 里走一条只搬不算的分支。
+
+## 函数原型
 
 ```python
+# 把 op_kernel 目录加入 sys.path 后：
+from engram_gate import engram_gate_wrapper
+
 y = engram_gate_wrapper(x, key, value, weight, image_mask, eps=1e-6, clamp_value=1e-6)
 ```
 
-| 参数 | dtype | shape | 说明 |
+### 参数说明
+
+| 参数 | 形状 | 类型 | 说明 |
 | :--- | :--- | :--- | :--- |
-| `x`, `key` | BF16 | `[t, hc, dim]` | query / key 激活 |
-| `value` | BF16 | `[t, dim]` | value，按 token 共享（不随 hc 变化） |
-| `weight` | FP32 | `[hc, dim]` | 逐 `(hc, dim)` 组合权重 |
-| `image_mask` | BOOL | `[t]` | `True` 的 token 原样返回 `x` |
-| `y` | BF16 | `[t, hc, dim]` | 输出，与 `x` 同 shape |
+| `x` | `[t, hc, dim]` | BF16 | 主激活值，也是残差更新的基准项 |
+| `key` | `[t, hc, dim]` | BF16 | key 激活值，与 `x` 同形状 |
+| `value` | `[t, dim]` | BF16 | value 激活值，按 token 共享（在 head 维广播） |
+| `weight` | `[hc, dim]` | FP32 | 逐 `(head, dim)` 的加权系数 |
+| `image_mask` | `[t]` | BOOL | 为 `True` 的 token 原样返回 `x` |
+| `eps` | 标量 | float | RMS 的稳定项，只接受默认值 `1e-6` |
+| `clamp_value` | 标量 | float | `\|dot\|` 的软阈值，只接受默认值 `1e-6` |
 
-## 算子介绍
+### 返回值说明
 
-计算公式（沿最后一维 `dim`，逐 `(token, hc)` 行）：
+| 返回值 | 形状 | 类型 | 说明 |
+| :--- | :--- | :--- | :--- |
+| `y` | `[t, hc, dim]` | BF16 | 门控后的残差更新结果，与 `x` 同形状；由本函数内部分配并返回 |
+
+## 约束说明
+
+- `dim` 最大 8512。这个上限来自 kernel 给片上数据行定的宽度 `CHUNK = 8512`：整行
+  `(token, head)` 必须一次驻留在 UB（片上统一缓冲，kernel 直接寻址的片上内存）里，才能让
+  两趟计算复用同一块数据。超过时 wrapper 直接报错，不做静默降级。
+- `eps` 与 `clamp_value` 被编成 kernel 内的立即数，`1e-6` 以外的取值 wrapper 会报错。
+- `t`、`hc`、`dim` 都是运行时动态轴，同一个 kernel 服务全部形状，不需要按形状重新编译。
+- 启动核数取 `min(向量核数, t·hc)`，再向下取整到 `hc` 的倍数——因为 token 维按
+  `hc` 分组轮转，核数必须是 `hc` 的整数倍才不会漏 token。
+- 因此 `hc` 不能大于向量核数（本平台 64）：否则取整后起核数为 0。`hc ≤ 64` 时起核数总是
+  `hc` 的整数倍且不小于 `hc`，每个核至少拿到一行。
+- 输入张量的内存布局不做要求：连续张量与带步长的非连续视图（`token` 维、`dim` 维分别构成
+  非连续）都得到一致的结果；`RESULTS.md` 的精度与性能数据在连续张量上采集。
+- `x`、`key`、`value`、`weight`、`image_mask` 的形状必须互相匹配，否则 wrapper 报错；
+  dtype 必须与上表一致，不一致时运行时报 `InvalidType`，并指出是哪个入参、期望与实际分别是
+  什么 dtype。
+- 单次调用只下发一个 kernel，host 侧不做任何数值计算，也不做额外的同步或后处理。
+- 输出 `y` 是新分配的张量，不原地修改 `x`。
+
+## 调用示例
+
+```python
+import sys
+
+import torch
+import torch_npu  # noqa: F401
+
+sys.path.insert(0, "ops/pypto_pro/deepseek_v4_1/engram_gate/op_kernel")
+from engram_gate import engram_gate_wrapper
+
+torch.npu.set_device(0)
+t, hc, dim = 5, 4, 5120
+
+x = torch.randn(t, hc, dim, dtype=torch.bfloat16).npu()
+key = torch.randn(t, hc, dim, dtype=torch.bfloat16).npu()
+value = torch.randn(t, dim, dtype=torch.bfloat16).npu()
+weight = torch.randn(hc, dim, dtype=torch.float32).npu()
+image_mask = torch.arange(t) % 2 == 1
+image_mask = image_mask.npu()
+
+y = engram_gate_wrapper(x, key, value, weight, image_mask)
+torch.npu.synchronize()
+print(y.shape, y.dtype)
+# torch.Size([5, 4, 5120]) torch.bfloat16
+
+# image_mask == True 的行与 x 逐位相等
+print(bool(torch.equal(y[image_mask], x[image_mask])))
+# True
+```
+
+示例依赖的文件分布在算子目录下（`op_kernel/` 放 kernel 与公开 wrapper，`tests/assets/` 放
+golden 与精度比较器，`tests/` 直接放测试入口）：
 
 ```text
-rstd = rsqrt(mean(x²) + eps) * rsqrt(mean(key²) + eps)
-dot  = sum(x * weight * key) * rstd / sqrt(dim)
-gate = sigmoid(copysign(sqrt(max(|dot|, clamp_value)), dot))
-y    = bf16(x + gate * value)
+engram_gate/
+├── README.md                           # 本文件：接口与用法
+├── DESIGN.md                           # 设计说明：阶段划分、切分与流水
+├── RESULTS.md                          # 结果说明：用例、精度与性能
+├── op_kernel/
+│   └── engram_gate.py                  # 算子本体（kernel + 公开 wrapper）
+└── tests/
+    ├── test_engram_gate.py             # 测试入口（pytest 与命令行都能跑）
+    └── assets/
+        ├── engram_gate_golden_cpu.py   # 独立 CPU 参考实现
+        └── engram_gate_precision.py    # 精度比较器（方案 A）
 ```
 
-`image_mask` 为 `True` 的 token 直接返回 `x`（逐位相等）。`dim` 支持到单次行扫描上限
-（`CHUNK = 8512`，覆盖全部算例；`dim > 8512` 暂不支持）。
-
-## 实现结构
-
-- **单个** `@pl.jit(auto_mutex=True)` kernel（`engram_gate_kernel`）服务全部算例：
-  `t / hc / dim` 都是运行时动态轴；寄存器级计算在 `engram_gate_vf` 内完成。
-- 每个 `(token, hc)` 行整行驻留 UB（固定行宽 `CHUNK`）：pass1 在寄存器里累加
-  `Σx²`、`Σkey²`、`Σ(x·w·key)` 并算出 gate 标量；pass2 读同一块 UB 行写回
-  `x + gate·value`，不做 GM 重读。
-- 满段用融合乘加 `mul_add_dst` 的无掩码快循环，尾块单独用 `update_mask` 处理；
-  3 槽轮转 buffer 配 `auto_mutex`；`weight` 按核驻留。
-- host 侧 `engram_gate_wrapper` 只做形状校验 + `torch.empty` 分配 + 单次 launch；
-  启动核数由 PyPTO-Pro 平台信息 `get_platform_info().vector_core_num` 动态取
-  （不写死）。全部数值计算都在 kernel 内。
-
-## 支持算例
-
-| case | t | hc | dim | image_mask | 说明 |
-| :--- | :--- | :--- | :--- | :--- | :--- |
-| `partial_image_mask` | 5 | 4 | 5120 | `idx%2==1` | 部分 mask 直通 |
-| `model_token_count_nomask` | 72 | 4 | 5120 | 全 False | 多 token |
-| `chunked_one_chunk_tail_one` | 3 | 4 | 8449 | 全 False | 超 8192、非 64 倍数尾块 |
-| `model_dim_plus_one_partial_mask` | 5 | 4 | 5121 | `idx%2==1` | `dim` 非 64 倍数 + 部分 mask |
-| `compile_default_shape` | 2 | 4 | 5120 | 全 False | 小 token 默认形状 |
-
-## 精度
-
-与独立 CPU 参考实现（`engram_gate_golden_cpu.py`，FP32 计算、BF16 输出）按官方
-方案 A（Scheme A）精度标准（`precision_compare.py`）比对：**5/5 PASS**，
-`matched_ratio = 1.0`；`image_mask` 为 `True` 的行与 `x` 逐位相等。
-
-## 性能
-
-> 下表为**参考数值**，实际耗时每次运行可能有所波动。
-
-Ascend 950PR，msprof `Task Duration` 取 min（固定采集协议：预热后 32 次调用、每次后
-`torch.npu.synchronize()`，丢前 5 次对剩余 27 次取 min）：
-
-| case | Task Duration (µs) |
-| :--- | ---: |
-| `partial_image_mask` | 2.381 |
-| `model_token_count_nomask` | 4.449 |
-| `chunked_one_chunk_tail_one` | 2.992 |
-| `model_dim_plus_one_partial_mask` | 2.409 |
-| `compile_default_shape` | 2.224 |
-
-## 运行测试
+测试与参考实现自检都可以在仓库根目录直接运行，不需要额外的驱动脚本：
 
 ```bash
-python test_engram_gate.py
-```
+# 全部 5 个用例
+pytest ops/pypto_pro/deepseek_v4_1/engram_gate/tests -q
 
-逐个构建输入、上板运行公开 wrapper，并与独立 CPU golden 用官方精度标准比较。
+# 只跑其中一个用例
+pytest ops/pypto_pro/deepseek_v4_1/engram_gate/tests -q -k partial_image_mask
 
-## 文件结构
-
-```
-ops/pypto_pro/deepseek_v4_1/engram_gate/
-├── engram_gate.py            # kernel（engram_gate_vf / engram_gate_kernel）+ host wrapper
-└── README.md
-
-tests/ops/pypto_pro/deepseek_v4_1/engram_gate/
-├── engram_gate_golden_cpu.py # 独立 CPU 参考实现
-├── precision_compare.py      # 官方方案 A 精度标准
-└── test_engram_gate.py       # 逐 case 测试 + main 入口
+# CPU 参考实现自检
+python ops/pypto_pro/deepseek_v4_1/engram_gate/tests/assets/engram_gate_golden_cpu.py
 ```
