@@ -470,13 +470,14 @@ def ifa_func_kernel(
                         bs_ofs = b_idx * s1_scalar + s1_idx
                         n1g_ofs = n2_idx * group + g_idx * g_tile
                         actual_s2_tile = (cur_seq - s2_idx * s2_tile).min(s2_tile)
+                        block_cnt = (actual_s2_tile + block_size - 1) // block_size
                         oi_ofs = [bs_ofs, n1g_ofs, 0]
                         # 5. 按照计算图实现运算逻辑，设置set_vec_tile_shapes时应尽可能用满UB，但不要超过UB的大小。
                         pypto.set_vec_tile_shapes(v1_tile[0], v1_tile[1])
                         qi = pypto.view(q_2d, [g_tile, dn], [bs_ofs * n1 + n1g_ofs, 0])
                         kj_assemble = pypto.tensor([s2_tile, dn], dtype, "kj_assemble")
                         for i in range(block_num):
-                            block_idx = block_table[b_idx, idx + i]
+                            block_idx = block_table[b_idx, idx + (block_cnt - 1).min(i)]
                             block_idx_valid = block_idx.max(0)
                             kj_assemble[i * block_size:(i + 1) * block_size, 0:] = \
                                 pypto.view(key_cache_2d, [block_size, dn], [block_idx_valid * block_size, 0])
@@ -506,7 +507,7 @@ def ifa_func_kernel(
                             # c2
                             vj_assemble = pypto.tensor([s2_tile, dn], dtype, "vj_assemble")
                             for i in range(block_num):
-                                block_idx = block_table[b_idx, idx + i]
+                                block_idx = block_table[b_idx, idx + (block_cnt - 1).min(i)]
                                 block_idx_valid = block_idx.max(0)
                                 vj_assemble[i * block_size:(i + 1) * block_size, 0:] = \
                                     pypto.view(value_cache_2d, [block_size, dn], [block_idx_valid * block_size, 0])
@@ -538,7 +539,7 @@ def ifa_func_kernel(
                             # c2
                             vj_assemble = pypto.tensor([s2_tile, dn], dtype, "vj_assemble")
                             for i in range(block_num):
-                                block_idx = block_table[b_idx, idx + i]
+                                block_idx = block_table[b_idx, idx + (block_cnt - 1).min(i)]
                                 block_idx_valid = block_idx.max(0)
                                 vj_assemble[i * block_size:(i + 1) * block_size, 0:] = \
                                     pypto.view(value_cache_2d, [block_size, dn],
