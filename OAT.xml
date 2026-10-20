@@ -14,6 +14,7 @@
                     type="filepath"
                     name="framework/tests/st/distributed/ops/test_case/.*.csv"
                     desc="ST distributed ops test case cvs files, no license header required"/>
+                <filteritem type="filename" name="*.toml" desc="TOML configuration files (e.g. codex agent adapters), no license header required"/>
             </filefilter>
         </filefilterlist>
         <licensematcherlist>

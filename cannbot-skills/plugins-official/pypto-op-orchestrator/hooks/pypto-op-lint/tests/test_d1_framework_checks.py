@@ -1,7 +1,16 @@
 # -*- coding: utf-8 -*-
-# Copyright (c) Huawei Technologies Co., Ltd. 2024-2025. All rights reserved.
+# ----------------------------------------------------------------------------------------------------------
+# Copyright (c) 2026 Huawei Technologies Co., Ltd.
+# This program is free software, you can redistribute it and/or modify it under the terms and conditions of
+# CANN Open Software License Agreement Version 2.0 (the "License").
+# Please refer to the License for details. You may not use this file except in compliance with the License.
+# THIS SOFTWARE IS PROVIDED ON AN "AS IS" BASIS, WITHOUT WARRANTIES OF ANY KIND, EITHER EXPRESS OR IMPLIED,
+# INCLUDING BUT NOT LIMITED TO NON-INFRINGEMENT, MERCHANTABILITY, OR FITNESS FOR A PARTICULAR PURPOSE.
+# See LICENSE in the root of the software repository for the full text of the License.
+# ----------------------------------------------------------------------------------------------------------
 
 """D1 框架约束合规规则（OL01-OL08）核心测试。"""
+
 from pathlib import Path
 
 from .helpers import build_stateless_op_dir, load_lint_module, run_rule, write_file
@@ -15,9 +24,7 @@ def _module_impl(
     with_jit: bool = True,
     with_wrapper: bool = True,
 ) -> str:
-    body = "\n".join(
-        f"    {line}" if line else "" for line in kernel_body.splitlines()
-    )
+    body = "\n".join(f"    {line}" if line else "" for line in kernel_body.splitlines())
     if with_jit:
         kernel = (
             "@pypto.frontend.jit\n"
@@ -28,8 +35,7 @@ def _module_impl(
     else:
         kernel = f"def demo_module1_kernel(x, y):\n{body}\n"
     wrapper = (
-        "\ndef demo_module1_wrapper(x, y):\n    return None\n"
-        if with_wrapper else ""
+        "\ndef demo_module1_wrapper(x, y):\n    return None\n" if with_wrapper else ""
     )
     return f"{import_line}\n{kernel}{wrapper}"
 
@@ -49,9 +55,7 @@ def _run_module_rule(
 
 
 def _two_arg_impl(kernel_body: str) -> str:
-    body = "\n".join(
-        f"    {line}" if line else "" for line in kernel_body.splitlines()
-    )
+    body = "\n".join(f"    {line}" if line else "" for line in kernel_body.splitlines())
     return f"""import pypto
 @pypto.frontend.jit
 def demo_kernel(x: pypto.Tensor([1024, 128], pypto.DT_FP32),
@@ -135,8 +139,7 @@ def test_ol02_pass_on_slice_assignment(tmp_path: Path):
 def test_ol02_fail_on_module_file_with_bare_assignment(tmp_path: Path):
     """模块开发阶段（Stage 5 Phase M_k）即捕获 module impl 中的写回违规。"""
     module_impl = _module_impl(
-        "pypto.set_vec_tile_shapes(32, 128)\n"
-        "y = x  # 违规: 应该用 y[:] = x",
+        "pypto.set_vec_tile_shapes(32, 128)\ny = x  # 违规: 应该用 y[:] = x",
     )
     finding = _run_module_rule(tmp_path, module_impl, "OL02")
     assert finding.status == "FAIL"
@@ -207,7 +210,9 @@ def demo_wrapper(x, y):
     assert "非正规 PyPTO 导入" in finding.message
 
 
-def test_ol07_fail_when_import_pypto_frontend_alias_even_with_canonical_import(tmp_path: Path):
+def test_ol07_fail_when_import_pypto_frontend_alias_even_with_canonical_import(
+    tmp_path: Path,
+):
     mod = load_lint_module()
     op_dir = build_stateless_op_dir(tmp_path, "demo")
     impl = """import pypto
@@ -432,7 +437,9 @@ def test_ol03_fail_on_module_file_with_return(tmp_path: Path):
 
 def test_ol07_fail_on_module_file_missing_import(tmp_path: Path):
     module_impl = _module_impl(
-        "y[:] = x", import_line="import torch", with_jit=False,
+        "y[:] = x",
+        import_line="import torch",
+        with_jit=False,
     )
     finding = _run_module_rule(tmp_path, module_impl, "OL07")
     assert finding.status == "FAIL"
@@ -519,8 +526,8 @@ def demo_wrapper(x, y):
 def _nested_multivalue_unroll_impl():
     return _two_arg_impl(
         "B = x.shape[0]\n"
-        "for b in pypto.loop(B, name=\"outer\"):\n"
-        "    for k in pypto.loop(4, name=\"inner\", unroll_list=[4, 2, 1]):\n"
+        'for b in pypto.loop(B, name="outer"):\n'
+        '    for k in pypto.loop(4, name="inner", unroll_list=[4, 2, 1]):\n'
         "        x_tile = pypto.view(x, [1, 32], [b, k * 32])\n"
         "        y[:] = x",
     )
@@ -620,8 +627,8 @@ def test_ol49_fail_in_module_file(tmp_path: Path):
     module_impl = _module_impl(
         "pypto.set_vec_tile_shapes(16, 64)\n"
         "B = x.shape[0]\n"
-        "for b in pypto.loop(B, name=\"outer\", unroll_list=[8, 4, 2, 1]):\n"
-        "    for k in pypto.loop(4, name=\"inner\"):\n"
+        'for b in pypto.loop(B, name="outer", unroll_list=[8, 4, 2, 1]):\n'
+        '    for k in pypto.loop(4, name="inner"):\n'
         "        x_tile = pypto.view(x, [1, 32], [b, k * 32])\n"
         "        y[:] = x",
         shape="[1024, 128]",
@@ -799,7 +806,7 @@ def test_ol56_fail_in_module_file(tmp_path: Path):
     module_impl = _module_impl(
         "pypto.set_vec_tile_shapes(16, 64)\n"
         "B = x.shape[0]\n"
-        "for b in pypto.loop(B, name=\"batch\", unroll_list=[8, 4, 2, 1]):\n"
+        'for b in pypto.loop(B, name="batch", unroll_list=[8, 4, 2, 1]):\n'
         "    x_tile = pypto.view(x, [1, 128], [b, 0])\n"
         "    y[:] = x",
         shape="[1024, 128]",
@@ -1246,6 +1253,8 @@ def demo_kernel_npu(x: pypto.Tensor([128], pypto.DT_FP32), out: pypto.Tensor([12
     write_file(op_dir / "demo_impl.py", impl)
     finding = run_rule(mod, op_dir, "OL58")
     assert finding.status == "SKIP", finding.message
+
+
 # ── Issue #118: OL56 单值门禁对 loop_unroll 同效（不再逃逸） ──
 
 

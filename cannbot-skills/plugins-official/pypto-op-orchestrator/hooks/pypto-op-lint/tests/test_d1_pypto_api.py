@@ -1,5 +1,13 @@
 # -*- coding: utf-8 -*-
-# Copyright (c) Huawei Technologies Co., Ltd. 2024-2026. All rights reserved.
+# ----------------------------------------------------------------------------------------------------------
+# Copyright (c) 2026 Huawei Technologies Co., Ltd.
+# This program is free software, you can redistribute it and/or modify it under the terms and conditions of
+# CANN Open Software License Agreement Version 2.0 (the "License").
+# Please refer to the License for details. You may not use this file except in compliance with the License.
+# THIS SOFTWARE IS PROVIDED ON AN "AS IS" BASIS, WITHOUT WARRANTIES OF ANY KIND, EITHER EXPRESS OR IMPLIED,
+# INCLUDING BUT NOT LIMITED TO NON-INFRINGEMENT, MERCHANTABILITY, OR FITNESS FOR A PARTICULAR PURPOSE.
+# See LICENSE in the root of the software repository for the full text of the License.
+# ----------------------------------------------------------------------------------------------------------
 
 """D1 PyPTO API 存在性检查 (OL55) 单元测试。
 
@@ -7,6 +15,7 @@ OL55 通过对比 AST 中的 ``pypto.<attr>`` 与 ``dir(pypto)`` 阻止 typo
 (``pypto.empty`` 等)。本测试用 ``unittest.mock.patch`` 替换实际的
 ``get_pypto_attrs`` 函数, 避免依赖 lint 环境是否真的装了 pypto。
 """
+
 from pathlib import Path
 from unittest.mock import patch
 
@@ -14,22 +23,50 @@ from .helpers import build_stateless_op_dir, load_lint_module, run_rule, write_f
 
 # 模拟 dir(pypto) 的常用属性子集 (覆盖 build_stateless_op_dir 默认 impl
 # 与本测试中合法 case 用到的全部 attr)。
-_FAKE_PYPTO_ATTRS = frozenset({
-    # 张量与类型注解
-    "Tensor", "DataType",
-    "DT_FP32", "DT_FP16", "DT_BF16", "DT_INT32", "DT_UINT8",
-    "DYNAMIC", "STATIC",
-    # 创建 / 转换
-    "zeros", "ones", "full", "from_torch", "cast", "clone",
-    # 算术与归约
-    "add", "sub", "mul", "div", "exp", "log", "amax", "amin", "sum", "matmul",
-    # 控制 / 视图
-    "loop", "view", "assemble",
-    # tile 配置
-    "set_vec_tile_shapes", "set_cube_tile_shapes",
-    # 子模块 / 顶层
-    "frontend", "op", "config", "RunMode",
-})
+_FAKE_PYPTO_ATTRS = frozenset(
+    {
+        # 张量与类型注解
+        "Tensor",
+        "DataType",
+        "DT_FP32",
+        "DT_FP16",
+        "DT_BF16",
+        "DT_INT32",
+        "DT_UINT8",
+        "DYNAMIC",
+        "STATIC",
+        # 创建 / 转换
+        "zeros",
+        "ones",
+        "full",
+        "from_torch",
+        "cast",
+        "clone",
+        # 算术与归约
+        "add",
+        "sub",
+        "mul",
+        "div",
+        "exp",
+        "log",
+        "amax",
+        "amin",
+        "sum",
+        "matmul",
+        # 控制 / 视图
+        "loop",
+        "view",
+        "assemble",
+        # tile 配置
+        "set_vec_tile_shapes",
+        "set_cube_tile_shapes",
+        # 子模块 / 顶层
+        "frontend",
+        "op",
+        "config",
+        "RunMode",
+    }
+)
 
 
 def _patch_attrs(attrs):

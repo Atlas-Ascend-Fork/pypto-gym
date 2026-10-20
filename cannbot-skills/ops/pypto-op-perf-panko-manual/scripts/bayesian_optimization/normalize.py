@@ -41,6 +41,7 @@ What this module deliberately does NOT decide: whether the rewrite preserves
 semantics. Constant folding is not enough to know that, and the golden test
 already answers it exactly. Two gates, each doing the thing it can actually do.
 """
+
 import ast
 
 from . import apply
@@ -60,11 +61,17 @@ def _int_pairs(target, value):
     """(name, int) pairs bound by one target of a simple assignment."""
     if isinstance(target, ast.Name) and _is_int(value):
         return [(target.id, value.value)]
-    if not (isinstance(target, ast.Tuple) and isinstance(value, ast.Tuple)
-            and len(target.elts) == len(value.elts)):
+    if not (
+        isinstance(target, ast.Tuple)
+        and isinstance(value, ast.Tuple)
+        and len(target.elts) == len(value.elts)
+    ):
         return []
-    return [(t.id, v.value) for t, v in zip(target.elts, value.elts)
-            if isinstance(t, ast.Name) and _is_int(v)]
+    return [
+        (t.id, v.value)
+        for t, v in zip(target.elts, value.elts)
+        if isinstance(t, ast.Name) and _is_int(v)
+    ]
 
 
 def constant_env(src):
@@ -92,8 +99,11 @@ def constant_env(src):
 
 
 def _is_int(n):
-    return isinstance(n, ast.Constant) and isinstance(n.value, int) \
+    return (
+        isinstance(n, ast.Constant)
+        and isinstance(n.value, int)
         and not isinstance(n.value, bool)
+    )
 
 
 def _arg_value(node, env):
@@ -139,8 +149,7 @@ def tile_calls(src):
 def tunable_count(src):
     """How many tile sites BO can actually move. 0 means the lever is dead."""
     try:
-        return len([s for s in apply.tunable_sites(src)
-                    if s.kind in ("cube", "vec")])
+        return len([s for s in apply.tunable_sites(src) if s.kind in ("cube", "vec")])
     except SyntaxError:
         return 0
 
@@ -148,15 +157,18 @@ def tunable_count(src):
 def _arg_reason(i, j, before, after):
     """Why argument `j` of tile call `i` is not an admissible normalisation, or None."""
     if before is None:
-        return (f"tile call {i} arg {j}: original value could not be resolved "
-                f"to an integer, so the rewrite cannot be verified. Bind it to "
-                f"a module-level integer literal, or leave the call alone")
+        return (
+            f"tile call {i} arg {j}: original value could not be resolved "
+            f"to an integer, so the rewrite cannot be verified. Bind it to "
+            f"a module-level integer literal, or leave the call alone"
+        )
     if after is None:
-        return (f"tile call {i} arg {j}: normalised value is still not a "
-                f"literal integer")
+        return f"tile call {i} arg {j}: normalised value is still not a literal integer"
     if before != after:
-        return (f"tile call {i} arg {j}: value changed {before} -> {after}. "
-                f"Normalisation exposes parameters; it does not tune them")
+        return (
+            f"tile call {i} arg {j}: value changed {before} -> {after}. "
+            f"Normalisation exposes parameters; it does not tune them"
+        )
     return None
 
 
@@ -189,7 +201,8 @@ def check(before_src, after_src):
     if len(before_calls) != len(after_calls):
         report["reasons"].append(
             f"tile call count changed: {len(before_calls)} -> {len(after_calls)}; "
-            f"normalisation may not add or remove tile calls")
+            f"normalisation may not add or remove tile calls"
+        )
         return report
     for i, ((bn, _), (an, _)) in enumerate(zip(before_calls, after_calls)):
         if bn != an:
@@ -200,7 +213,8 @@ def check(before_src, after_src):
         if len(ba) != len(aa):
             report["reasons"].append(
                 f"tile call {i}: arity {len(ba)} -> {len(aa)}; a normalisation "
-                f"does not change how many dimensions a tile has")
+                f"does not change how many dimensions a tile has"
+            )
             continue
         for j, (b, a) in enumerate(zip(ba, aa)):
             reason = _arg_reason(i, j, b, a)
@@ -211,7 +225,8 @@ def check(before_src, after_src):
     if n_after <= n_before:
         report["reasons"].append(
             f"tunable tile sites did not increase ({n_before} -> {n_after}); "
-            f"the lever can see no more than it could before")
+            f"the lever can see no more than it could before"
+        )
 
     report["ok"] = not report["reasons"]
     return report

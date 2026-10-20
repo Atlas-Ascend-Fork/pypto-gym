@@ -1,8 +1,17 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
-# Copyright (c) Huawei Technologies Co., Ltd. 2024-2026. All rights reserved.
+# ----------------------------------------------------------------------------------------------------------
+# Copyright (c) 2026 Huawei Technologies Co., Ltd.
+# This program is free software, you can redistribute it and/or modify it under the terms and conditions of
+# CANN Open Software License Agreement Version 2.0 (the "License").
+# Please refer to the License for details. You may not use this file except in compliance with the License.
+# THIS SOFTWARE IS PROVIDED ON AN "AS IS" BASIS, WITHOUT WARRANTIES OF ANY KIND, EITHER EXPRESS OR IMPLIED,
+# INCLUDING BUT NOT LIMITED TO NON-INFRINGEMENT, MERCHANTABILITY, OR FITNESS FOR A PARTICULAR PURPOSE.
+# See LICENSE in the root of the software repository for the full text of the License.
+# ----------------------------------------------------------------------------------------------------------
 
 """D2 工件完整性与流程合规规则（OL09-OL14, OL24）核心测试。"""
+
 import json
 from pathlib import Path
 
@@ -66,6 +75,7 @@ some text without required sections
 
 # ── OL10: API_REPORT.md 结构化章节校验 ──
 
+
 def test_ol10_pass_when_api_report_complete(tmp_path: Path):
     mod = load_lint_module()
     op_dir = build_stateless_op_dir(tmp_path, "demo")
@@ -96,6 +106,7 @@ def test_ol10_fail_when_missing_sections(tmp_path: Path):
 
 # ── OL11: golden 文件可导入 ──
 
+
 def test_ol11_pass_when_golden_importable(tmp_path: Path):
     mod = load_lint_module()
     op_dir = build_stateless_op_dir(tmp_path, "demo")
@@ -112,6 +123,7 @@ def test_ol11_fail_when_golden_has_syntax_error(tmp_path: Path):
 
 
 # ── OL12: DESIGN.md 结构化章节校验 ──
+
 
 def test_ol12_pass_when_design_complete(tmp_path: Path):
     mod = load_lint_module()
@@ -144,6 +156,7 @@ def test_ol12_fail_when_design_missing(tmp_path: Path):
 
 # ── OL13: 三件套完整 ──
 
+
 def test_ol13_pass_when_all_three_present(tmp_path: Path):
     mod = load_lint_module()
     op_dir = build_stateless_op_dir(tmp_path, "demo")
@@ -160,6 +173,7 @@ def test_ol13_fail_when_impl_missing(tmp_path: Path):
 
 
 # ── OL14: 精度通过 ──
+
 
 def test_ol14_pass_when_stage5_completed(tmp_path: Path):
     """Stage 6 (Verification) entry needs Stage 5 completed in the new model."""
@@ -230,6 +244,7 @@ def test_ol44_fail_for_l1_when_module_count_unknown(tmp_path: Path):
 
 
 # ── OL24: 状态文件结构合法 ──
+
 
 def test_ol24_pass_when_state_valid(tmp_path: Path):
     """Schema v2.0 with max_stage, optional stage5_phases, etc. — PASS."""

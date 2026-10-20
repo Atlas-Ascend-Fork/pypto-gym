@@ -121,14 +121,16 @@ class RunCommandTest(unittest.TestCase):
     def test_it_runs_and_captures_output(self):
         self._script("ok.py", "print('hello')\n")
         out, code = evaluator.run_command(
-            f"cd {self.dir} && {Path(sys.executable).name} ok.py", 30)
+            f"cd {self.dir} && {Path(sys.executable).name} ok.py", 30
+        )
         self.assertEqual(code, 0)
         self.assertIn("hello", out)
 
     def test_stderr_is_captured_with_stdout(self):
         self._script("err.py", "import sys; sys.stderr.write('boom'); sys.exit(2)\n")
         out, code = evaluator.run_command(
-            f"cd {self.dir} && {Path(sys.executable).name} err.py", 30)
+            f"cd {self.dir} && {Path(sys.executable).name} err.py", 30
+        )
         self.assertEqual(code, 2)
         self.assertIn("boom", out)
 
@@ -137,7 +139,8 @@ class RunCommandTest(unittest.TestCase):
         self._script("after.py", "print('SHOULD NOT RUN')\n")
         exe = Path(sys.executable).name
         out, code = evaluator.run_command(
-            f"cd {self.dir} && {exe} bad.py && {exe} after.py", 30)
+            f"cd {self.dir} && {exe} bad.py && {exe} after.py", 30
+        )
         self.assertEqual(code, 3)
         self.assertNotIn("SHOULD NOT RUN", out)
 
@@ -149,13 +152,15 @@ class RunCommandTest(unittest.TestCase):
     def test_the_step_environment_reaches_the_process(self):
         self._script("env.py", "import os; print(os.environ.get('PANKO_T', 'unset'))\n")
         out, _ = evaluator.run_command(
-            f"cd {self.dir} && PANKO_T=42 {Path(sys.executable).name} env.py", 30)
+            f"cd {self.dir} && PANKO_T=42 {Path(sys.executable).name} env.py", 30
+        )
         self.assertIn("42", out)
 
     def test_a_timeout_is_124(self):
         self._script("slow.py", "import time; time.sleep(30)\n")
         _, code = evaluator.run_command(
-            f"cd {self.dir} && {Path(sys.executable).name} slow.py", 1)
+            f"cd {self.dir} && {Path(sys.executable).name} slow.py", 1
+        )
         self.assertEqual(code, 124)
 
     def _script(self, name, body):
@@ -174,7 +179,8 @@ class DefaultRunTest(unittest.TestCase):
 
     def test_a_good_command_carries_its_code_and_output(self):
         code, out = evaluator.default_run(
-            f'{Path(sys.executable).name} -c "print(7)"', 30)
+            f'{Path(sys.executable).name} -c "print(7)"', 30
+        )
         self.assertEqual(code, 0)
         self.assertIn("7", out)
 

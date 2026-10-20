@@ -31,6 +31,7 @@ Taint is propagated by name and ignores scope, so a name reused in two functions
 over-taints. For stage 2 that is the conservative direction only in the sense of
 admitting more; the incumbent-value check and the golden are what bound the cost.
 """
+
 import ast
 
 _LOOP = "loop"
@@ -53,8 +54,11 @@ def _is_jit(fn):
 
 
 def _int_lit(n):
-    return isinstance(n, ast.Constant) and isinstance(n.value, int) \
+    return (
+        isinstance(n, ast.Constant)
+        and isinstance(n.value, int)
         and not isinstance(n.value, bool)
+    )
 
 
 def _offsets(src):
@@ -66,8 +70,10 @@ def _offsets(src):
 
 
 def _span(starts, node):
-    return (starts[node.lineno - 1] + node.col_offset,
-            starts[node.end_lineno - 1] + node.end_col_offset)
+    return (
+        starts[node.lineno - 1] + node.col_offset,
+        starts[node.end_lineno - 1] + node.end_col_offset,
+    )
 
 
 def _assign_pairs(node):
@@ -79,8 +85,11 @@ def _assign_pairs(node):
     pairs = []
     for t in node.targets:
         if isinstance(t, ast.Tuple) and len(t.elts) == len(node.value.elts):
-            pairs += [(a, b) for a, b in zip(t.elts, node.value.elts)
-                      if isinstance(a, ast.Name) and _int_lit(b)]
+            pairs += [
+                (a, b)
+                for a, b in zip(t.elts, node.value.elts)
+                if isinstance(a, ast.Name) and _int_lit(b)
+            ]
     return pairs
 
 
@@ -125,8 +134,11 @@ def _contexts(node, parents, jit_nodes):
             n = _fname(cur.func)
             if n == _LOOP:
                 flags.add("loop")
-            elif isinstance(cur.func, ast.Attribute) and \
-                    isinstance(cur.func.value, ast.Name) and cur.func.value.id == "torch":
+            elif (
+                isinstance(cur.func, ast.Attribute)
+                and isinstance(cur.func.value, ast.Name)
+                and cur.func.value.id == "torch"
+            ):
                 flags.add("torch")
     return flags
 
@@ -143,8 +155,9 @@ def _names_bound(node):
 
 def _reads_tainted(node, tainted):
     """Does this assignment read a name the root constant reaches?"""
-    return any(isinstance(n, ast.Name) and n.id in tainted
-               for n in ast.walk(node.value))
+    return any(
+        isinstance(n, ast.Name) and n.id in tainted for n in ast.walk(node.value)
+    )
 
 
 def _taint(tree, root):
@@ -176,8 +189,11 @@ def analyse(src):
     for fn in ast.walk(tree):
         if isinstance(fn, (ast.FunctionDef, ast.AsyncFunctionDef)) and _is_jit(fn):
             jit_nodes.update(ast.walk(fn))
-    reads = [n for n in ast.walk(tree)
-             if isinstance(n, ast.Name) and isinstance(n.ctx, ast.Load)]
+    reads = [
+        n
+        for n in ast.walk(tree)
+        if isinstance(n, ast.Name) and isinstance(n.ctx, ast.Load)
+    ]
 
     out = {}
     for name, (val, s, e) in binds.items():

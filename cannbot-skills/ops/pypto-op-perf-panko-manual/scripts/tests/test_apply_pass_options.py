@@ -21,30 +21,30 @@ import unittest
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent))
-from _support import SCRIPTS_DIR  # noqa: E402
+from _support import SCRIPTS_DIR  # noqa: F401, E402
 
 import bayesian_optimization as bayesian  # noqa: E402
 
 NBUF = "pass:cube_nbuffer_setting#0"
 L1RE = "pass:cube_l1_reuse_setting#0"
 
-NO_KWARG = '''import pypto
+NO_KWARG = """import pypto
 
 
 @pypto.frontend.jit(runtime_options={"device_sched_mode": 1})
 def k(a, b):
     pypto.set_vec_tile_shapes(64, 128)
     return a + b
-'''
+"""
 
-EXISTING = '''import pypto
+EXISTING = """import pypto
 
 
 @pypto.frontend.jit(runtime_options={"device_sched_mode": 1}, pass_options={"cube_nbuffer_setting": {-1: 4}})
 def k(a, b):
     pypto.set_vec_tile_shapes(64, 128)
     return a + b
-'''
+"""
 
 
 def _pass_site_ids(src):
@@ -52,7 +52,6 @@ def _pass_site_ids(src):
 
 
 class PassOptionsRewriteTest(unittest.TestCase):
-
     # ── the knob is absent from the decorator entirely ────────────────────────
 
     def test_single_knob_writes_the_kwarg(self):
@@ -72,8 +71,13 @@ class PassOptionsRewriteTest(unittest.TestCase):
 
     def test_unset_knob_is_not_written(self):
         """UNSET is the original kernel, which must stay a reachable point."""
-        out, n = bayesian.apply.apply(NO_KWARG, {NBUF: {"value": bayesian.apply.UNSET},
-                                           L1RE: {"value": bayesian.apply.UNSET}})
+        out, n = bayesian.apply.apply(
+            NO_KWARG,
+            {
+                NBUF: {"value": bayesian.apply.UNSET},
+                L1RE: {"value": bayesian.apply.UNSET},
+            },
+        )
         self.assertEqual(n, 0)
         self.assertEqual(out, NO_KWARG)
 
@@ -90,7 +94,7 @@ class PassOptionsRewriteTest(unittest.TestCase):
 
     def test_existing_literal_warm_starts_at_its_value(self):
         cfg = bayesian.apply.current_config(EXISTING)
-        self.assertEqual(cfg[NBUF], {"value": 4})          # the value, not the -1 key
+        self.assertEqual(cfg[NBUF], {"value": 4})  # the value, not the -1 key
         self.assertEqual(cfg[L1RE], {"value": bayesian.apply.UNSET})
 
     def test_existing_literal_is_retunable(self):

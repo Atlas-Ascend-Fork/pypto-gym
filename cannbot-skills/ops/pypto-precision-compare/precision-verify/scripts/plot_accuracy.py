@@ -12,6 +12,7 @@
 PyPTO 精度变化折线图绘制工具
 从验证结果日志文件中提取精度数据并绘制变化趋势图
 """
+
 import logging
 import os
 import re
@@ -19,16 +20,18 @@ import sys
 
 import matplotlib.pyplot as plt
 
-CHECKPOINT_PATTERN = re.compile(r'^(\d+_[^:\s]+):')
-NUMBER_PATTERN = r'([-+]?\d*\.?\d+(?:[eE][-+]?\d+)?)'
-TOLERANCE_PATTERN = re.compile(f'Tolerance: rtol={NUMBER_PATTERN}, atol={NUMBER_PATTERN}')
-ACTUAL_PATTERN = re.compile(f'Actual: rtol={NUMBER_PATTERN}, atol={NUMBER_PATTERN}')
+CHECKPOINT_PATTERN = re.compile(r"^(\d+_[^:\s]+):")
+NUMBER_PATTERN = r"([-+]?\d*\.?\d+(?:[eE][-+]?\d+)?)"
+TOLERANCE_PATTERN = re.compile(
+    f"Tolerance: rtol={NUMBER_PATTERN}, atol={NUMBER_PATTERN}"
+)
+ACTUAL_PATTERN = re.compile(f"Actual: rtol={NUMBER_PATTERN}, atol={NUMBER_PATTERN}")
 
 
 logging.basicConfig(
     level=logging.INFO,
-    format='%(message)s',
-    handlers=[logging.StreamHandler(sys.stdout)]
+    format="%(message)s",
+    handlers=[logging.StreamHandler(sys.stdout)],
 )
 logger = logging.getLogger(__name__)
 
@@ -36,9 +39,9 @@ logger = logging.getLogger(__name__)
 def extract_operator_name(log_file_path):
     """从日志文件路径中提取算子名称"""
     log_file_name = os.path.basename(log_file_path)
-    if log_file_name.endswith('_verify_result.log'):
-        return log_file_name[:-len('_verify_result.log')]
-    return 'operator'
+    if log_file_name.endswith("_verify_result.log"):
+        return log_file_name[: -len("_verify_result.log")]
+    return "operator"
 
 
 def _checkpoint_starts(lines):
@@ -53,7 +56,8 @@ def _checkpoint_starts(lines):
 def _parse_checkpoint_metrics(lines, start_line):
     tolerance = None
     actual = None
-    for line in lines[start_line:start_line + 20]:
+    end_line = start_line + 20
+    for line in lines[start_line:end_line]:
         tolerance_match = TOLERANCE_PATTERN.search(line)
         if tolerance_match:
             tolerance = tuple(float(tolerance_match.group(i)) for i in (1, 2))
@@ -77,6 +81,55 @@ def parse_checkpoints(lines):
     return results
 
 
+def _plot_tolerance_axis(ax, checkpoints, actual, tolerance, kind, color, fmt):
+    """一个容差子图：实际值曲线对容差曲线，并标注各 checkpoint 的数值。"""
+    name = {"rtol": "Relative Tolerance", "atol": "Absolute Tolerance"}[kind]
+    ax.plot(
+        range(len(checkpoints)),
+        actual,
+        marker="o",
+        linewidth=2,
+        markersize=8,
+        color=color,
+        label=f"Actual {kind}",
+    )
+    ax.plot(
+        range(len(checkpoints)),
+        tolerance,
+        marker="s",
+        linewidth=2,
+        markersize=6,
+        color="green",
+        linestyle="--",
+        label=f"Tolerance {kind}",
+    )
+    ax.set_xlabel("Checkpoint", fontsize=14)
+    ax.set_ylabel(f"{name} ({kind})", fontsize=14)
+    ax.set_title(
+        f"{name} ({kind}) Change Across Checkpoints",
+        fontsize=16,
+        fontweight="bold",
+        y=1.02,
+    )
+    ax.grid(True, alpha=0.3)
+    ax.set_xticks(range(len(checkpoints)))
+    ax.set_xticklabels(checkpoints, rotation=45, ha="right", fontsize=11)
+    ax.legend(loc="upper right", fontsize=11)
+
+    for i, value in enumerate(actual):
+        if value > 0:
+            ax.annotate(
+                f"{value:{fmt}}",
+                (i, value),
+                textcoords="offset points",
+                xytext=(0, 10),
+                ha="center",
+                fontsize=8,
+                color=color,
+                fontweight="bold",
+            )
+
+
 def plot_accuracy(results, output_path):
     """绘制精度变化折线图"""
     checkpoints_list = [r[0] for r in results]
@@ -87,42 +140,15 @@ def plot_accuracy(results, output_path):
 
     fig, (ax1, ax2) = plt.subplots(2, 1, figsize=(14, 10))
 
-    ax1.plot(range(len(checkpoints_list)), act_rtol_values, marker='o', linewidth=2, markersize=8,
-             color='blue', label='Actual rtol')
-    ax1.plot(range(len(checkpoints_list)), tol_rtol_values, marker='s', linewidth=2, markersize=6,
-             color='green', linestyle='--', label='Tolerance rtol')
-    ax1.set_xlabel('Checkpoint', fontsize=14)
-    ax1.set_ylabel('Relative Tolerance (rtol)', fontsize=14)
-    ax1.set_title('Relative Tolerance (rtol) Change Across Checkpoints', fontsize=16, fontweight='bold', y=1.02)
-    ax1.grid(True, alpha=0.3)
-    ax1.set_xticks(range(len(checkpoints_list)))
-    ax1.set_xticklabels(checkpoints_list, rotation=45, ha='right', fontsize=11)
-    ax1.legend(loc='upper right', fontsize=11)
-
-    for i, (ckpt, rtol) in enumerate(zip(checkpoints_list, act_rtol_values)):
-        if rtol > 0:
-            ax1.annotate(f'{rtol:.4f}', (i, rtol), textcoords="offset points",
-                       xytext=(0, 10), ha='center', fontsize=8, color='blue', fontweight='bold')
-
-    ax2.plot(range(len(checkpoints_list)), act_atol_values, marker='o', linewidth=2, markersize=8,
-             color='red', label='Actual atol')
-    ax2.plot(range(len(checkpoints_list)), tol_atol_values, marker='s', linewidth=2, markersize=6,
-             color='green', linestyle='--', label='Tolerance atol')
-    ax2.set_xlabel('Checkpoint', fontsize=14)
-    ax2.set_ylabel('Absolute Tolerance (atol)', fontsize=14)
-    ax2.set_title('Absolute Tolerance (atol) Change Across Checkpoints', fontsize=16, fontweight='bold', y=1.02)
-    ax2.grid(True, alpha=0.3)
-    ax2.set_xticks(range(len(checkpoints_list)))
-    ax2.set_xticklabels(checkpoints_list, rotation=45, ha='right', fontsize=11)
-    ax2.legend(loc='upper right', fontsize=11)
-
-    for i, (ckpt, atol) in enumerate(zip(checkpoints_list, act_atol_values)):
-        if atol > 0:
-            ax2.annotate(f'{atol:.2f}', (i, atol), textcoords="offset points",
-                       xytext=(0, 10), ha='center', fontsize=8, color='red', fontweight='bold')
+    _plot_tolerance_axis(
+        ax1, checkpoints_list, act_rtol_values, tol_rtol_values, "rtol", "blue", ".4f"
+    )
+    _plot_tolerance_axis(
+        ax2, checkpoints_list, act_atol_values, tol_atol_values, "atol", "red", ".2f"
+    )
 
     plt.tight_layout()
-    plt.savefig(output_path, dpi=300, bbox_inches='tight')
+    plt.savefig(output_path, dpi=300, bbox_inches="tight")
     return output_path
 
 
@@ -153,18 +179,18 @@ def main():
 
     operator_name = extract_operator_name(log_file_path)
 
-    with open(log_file, 'r') as f:
+    with open(log_file, "r") as f:
         lines = f.readlines()
 
     results = parse_checkpoints(lines)
 
-    logger.info(f'Extracted accuracy data of {len(results)} checkpoints')
+    logger.info(f"Extracted accuracy data of {len(results)} checkpoints")
     for i, (ckpt, tol_rtol, tol_atol, act_rtol, act_atol) in enumerate(results):
-        tol_str = f'Tolerance(rt={tol_rtol:.6f}, at={tol_atol:.6f})'
-        act_str = f'Actual(rt={act_rtol:.6f}, at={act_atol:.6f})'
-        logger.info(f'{i + 1}. {ckpt}: {tol_str} | {act_str}')
+        tol_str = f"Tolerance(rt={tol_rtol:.6f}, at={tol_atol:.6f})"
+        act_str = f"Actual(rt={act_rtol:.6f}, at={act_atol:.6f})"
+        logger.info(f"{i + 1}. {ckpt}: {tol_str} | {act_str}")
 
-    output_image = os.path.join(log_file_dir, f'{operator_name}_accuracy_change.png')
+    output_image = os.path.join(log_file_dir, f"{operator_name}_accuracy_change.png")
     plot_accuracy(results, output_image)
     logger.info(f"\nAccuracy change line chart saved to: {output_image}")
 

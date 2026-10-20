@@ -1,6 +1,6 @@
 ---
 name: precision-binary-search
-description: PyPTO 算子上板二分定位法。通过在 kernel 函数中添加检查点 tensor 作为输入参数进行原地修改，对比中间结果的精度。专注：修改 kernel 签名 → 修改 golden 返回值 → 修改测试函数 → 二分定位首个出错的 op。
+description: PyPTO 算子上板二分定位法。通过在 kernel 函数中添加检查点 tensor 作为输入参数进行原地修改，对比中间结果的精度。专注：修改 kernel 签名 → 修改 golden 返回值 → 修改测试函数 → 二分定位首个出错的 op。触发：上板精度二分定位、通过检查点 tensor 定位首个出错算子时使用。
 ---
 
 # 上板二分定位法

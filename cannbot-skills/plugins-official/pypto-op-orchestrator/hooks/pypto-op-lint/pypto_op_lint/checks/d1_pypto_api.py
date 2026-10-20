@@ -1,6 +1,14 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
-# Copyright (c) Huawei Technologies Co., Ltd. 2024-2026. All rights reserved.
+# ----------------------------------------------------------------------------------------------------------
+# Copyright (c) 2026 Huawei Technologies Co., Ltd.
+# This program is free software, you can redistribute it and/or modify it under the terms and conditions of
+# CANN Open Software License Agreement Version 2.0 (the "License").
+# Please refer to the License for details. You may not use this file except in compliance with the License.
+# THIS SOFTWARE IS PROVIDED ON AN "AS IS" BASIS, WITHOUT WARRANTIES OF ANY KIND, EITHER EXPRESS OR IMPLIED,
+# INCLUDING BUT NOT LIMITED TO NON-INFRINGEMENT, MERCHANTABILITY, OR FITNESS FOR A PARTICULAR PURPOSE.
+# See LICENSE in the root of the software repository for the full text of the License.
+# ----------------------------------------------------------------------------------------------------------
 
 """D1 维度: PyPTO API 存在性检查 (OL55)。
 
@@ -79,7 +87,9 @@ def _format_failures(
             hint = ", ".join(f"pypto.{s}" for s in suggestions)
             lines.append(f"  • pypto.{attr} → does not exist (did you mean: {hint})")
         else:
-            lines.append(f"  • pypto.{attr} → does not exist (no similar-name suggestions)")
+            lines.append(
+                f"  • pypto.{attr} → does not exist (no similar-name suggestions)"
+            )
         if attr in _RAW_TORCH_INPUT_TYPOS:
             # 这类 typo 来自 torch 习惯; PyPTO 没有随机 / 通用 tensor 构造 API。
             lines.append(
@@ -182,7 +192,7 @@ def check_ol55(ctx: CheckContext) -> Finding:
             "OL55",
             "SKIP",
             "PyPTO cannot be imported in the lint environment; skipping the API existence check "
-            "(it will resume automatically once pypto is installed locally)"
+            "(it will resume automatically once pypto is installed locally)",
         )
 
     # 累计违规

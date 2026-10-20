@@ -21,14 +21,18 @@ import unittest
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent))
-from _support import SCRIPTS_DIR, harness  # noqa: E402
+from _support import harness  # noqa: E402
 
 
 def _old_state():
     return {
         "op": "demo",
-        "config": {"tile_bo": True, "bo_free_trials": 3,
-                   "bo_startup_min_feasible": 5, "stagnation_K": 7},
+        "config": {
+            "tile_bo": True,
+            "bo_free_trials": 3,
+            "bo_startup_min_feasible": 5,
+            "stagnation_K": 7,
+        },
         "bo_studies": {"u1": {"trials": [{"value": 51.9}]}},
         "bo_memory": {"u1|abc123": {"trials": [{"value": 47.0}]}},
         "bo_refusals": [{"sig": "F4FFFF|ALLOC_FAILED|TilePass"}],
@@ -36,16 +40,17 @@ def _old_state():
 
 
 class StateKeyMigrationTest(unittest.TestCase):
-
     def test_old_keys_are_renamed_and_values_kept(self):
         st = harness.migrate_keys(_old_state())
         self.assertEqual(st["config"]["bayesian_optimization_tile_search"], True)
         self.assertEqual(st["config"]["bayesian_optimization_free_trials"], 3)
         self.assertEqual(st["config"]["bayesian_optimization_startup_min_feasible"], 5)
         self.assertEqual(
-            st["bayesian_optimization_studies"]["u1"]["trials"][0]["value"], 51.9)
+            st["bayesian_optimization_studies"]["u1"]["trials"][0]["value"], 51.9
+        )
         self.assertEqual(
-            st["bayesian_optimization_memory"]["u1|abc123"]["trials"][0]["value"], 47.0)
+            st["bayesian_optimization_memory"]["u1|abc123"]["trials"][0]["value"], 47.0
+        )
         self.assertEqual(len(st["bayesian_optimization_refusals"]), 1)
 
     def test_old_keys_are_dropped_so_save_cannot_write_them_back(self):
@@ -62,20 +67,27 @@ class StateKeyMigrationTest(unittest.TestCase):
         self.assertEqual(st["op"], "demo")
 
     def test_a_new_state_passes_through_unchanged(self):
-        new = {"config": {"bayesian_optimization_tile_search": False},
-               "bayesian_optimization_studies": {"u2": {}}}
-        self.assertEqual(harness.migrate_keys(dict(new, config=dict(new["config"]))), new)
+        new = {
+            "config": {"bayesian_optimization_tile_search": False},
+            "bayesian_optimization_studies": {"u2": {}},
+        }
+        self.assertEqual(
+            harness.migrate_keys(dict(new, config=dict(new["config"]))), new
+        )
 
     def test_the_new_spelling_wins_if_a_file_carries_both(self):
         """Only reachable by hand-editing, but it must not be the old value."""
         st = harness.migrate_keys(
-            {"config": {"tile_bo": True, "bayesian_optimization_tile_search": False}})
+            {"config": {"tile_bo": True, "bayesian_optimization_tile_search": False}}
+        )
         self.assertIs(st["config"]["bayesian_optimization_tile_search"], False)
         self.assertNotIn("tile_bo", st["config"])
 
     def test_a_state_with_no_config_does_not_raise(self):
-        self.assertEqual(harness.migrate_keys({"bo_studies": {}}),
-                         {"bayesian_optimization_studies": {}})
+        self.assertEqual(
+            harness.migrate_keys({"bo_studies": {}}),
+            {"bayesian_optimization_studies": {}},
+        )
 
 
 if __name__ == "__main__":

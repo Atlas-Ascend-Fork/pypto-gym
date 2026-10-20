@@ -6,6 +6,7 @@
 # INCLUDING BUT NOT LIMITED TO NON-INFRINGEMENT, MERCHANTABILITY, OR FITNESS FOR A PARTICULAR PURPOSE.
 # See LICENSE in the root of the software repository for the full text of the License.
 """Opt-in preparation reuse for deterministic tests with a pure operator golden."""
+
 import contextlib
 import importlib
 import importlib.util
@@ -15,9 +16,9 @@ import types
 
 def signature(value):
     """Include tensor identity/version and complete ordinary argument values."""
-    if hasattr(value, 'detach'):
+    if hasattr(value, "detach"):
         try:
-            version = getattr(value, '_version', None)
+            version = getattr(value, "_version", None)
         except RuntimeError:  # Inference tensors do not expose version counters.
             version = None
         return id(value), version
@@ -30,7 +31,7 @@ def signature(value):
 
 def tensors(value):
     """Find tensor leaves, including nested input and reference outputs."""
-    if hasattr(value, 'detach'):
+    if hasattr(value, "detach"):
         yield value
     elif isinstance(value, (tuple, list)):
         for item in value:
@@ -53,12 +54,18 @@ class PreparedCall:
         self.index += 1
         if index < len(self.entries):
             old_key, value, old_value, snapshots = self.entries[index]
-            if (key == old_key and signature(value) == old_value and
-                    all(self.torch.equal(tensor, saved) for tensor, saved in snapshots)):
+            if (
+                key == old_key
+                and signature(value) == old_value
+                and all(self.torch.equal(tensor, saved) for tensor, saved in snapshots)
+            ):
                 self.hits += 1
                 return value
         value = self.function(*args, **kwargs)
-        snapshots = [(tensor, tensor.detach().clone()) for tensor in tensors((args, kwargs, value))]
+        snapshots = [
+            (tensor, tensor.detach().clone())
+            for tensor in tensors((args, kwargs, value))
+        ]
         entry = key, value, signature(value), snapshots
         if index < len(self.entries):
             self.entries[index] = entry
@@ -80,8 +87,8 @@ class PreparedInputs:
 
     @contextlib.contextmanager
     def correctness(self, config):
-        name = config['op'] + '_golden'
-        if not (Path(config['op_dir']) / (name + '.py')).exists():
+        name = config["op"] + "_golden"
+        if not (Path(config["op_dir"]) / (name + ".py")).exists():
             yield
             return
         module = importlib.import_module(name)
@@ -89,7 +96,7 @@ class PreparedInputs:
         if not callable(original):
             yield
             return
-        torch = importlib.import_module('torch')
+        torch = importlib.import_module("torch")
         random = torch.randn
         if self.random is None:
             self.random = PreparedCall(random, torch)
@@ -107,7 +114,7 @@ class PreparedInputs:
 
     def randn(self, *args, **kwargs):
         """A generator or reference's own randomness keeps its original behavior."""
-        if self.in_reference or kwargs.get('generator') is not None:
+        if self.in_reference or kwargs.get("generator") is not None:
             return self.random.function(*args, **kwargs)
         return self.random(*args, **kwargs)
 
@@ -121,19 +128,21 @@ class PreparedInputs:
 
     def measurement(self, config):
         """Guard reusable profiling inputs before the unchanged measurement routine."""
-        path = Path(config['op_dir']) / 'eval' / 'test_inputs.py'
+        path = Path(config["op_dir"]) / "eval" / "test_inputs.py"
         if not path.exists():
             return None
         if self.inputs is None:
-            spec = importlib.util.spec_from_file_location('prepared_measurement_inputs', path)
+            spec = importlib.util.spec_from_file_location(
+                "prepared_measurement_inputs", path
+            )
             module = importlib.util.module_from_spec(spec)
             spec.loader.exec_module(module)
-            builder = getattr(module, 'build_inputs', None)
+            builder = getattr(module, "build_inputs", None)
             if not callable(builder):
                 return None
-            torch = importlib.import_module('torch')
+            torch = importlib.import_module("torch")
             self.inputs = PreparedCall(builder, torch)
         self.inputs.reset()
-        module = types.ModuleType('prepared_measurement_inputs')
+        module = types.ModuleType("prepared_measurement_inputs")
         module.build_inputs = self.inputs
         return module

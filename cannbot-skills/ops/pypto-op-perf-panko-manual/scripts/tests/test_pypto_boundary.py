@@ -27,12 +27,12 @@ import unittest
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent))
-from _support import SCRIPTS_DIR  # noqa: E402
+from _support import SCRIPTS_DIR  # noqa: F401, E402
 
 import predicates  # noqa: E402
 import bayesian_optimization as bayesian  # noqa: E402
 
-WRAPPER_DOES_CUBE = '''
+WRAPPER_DOES_CUBE = """
 import torch
 import pypto
 
@@ -51,9 +51,9 @@ def demo(x):
     out = torch.empty_like(b)
     demo_kernel(b, out)
     return out
-'''
+"""
 
-KERNEL_DOES_CUBE = '''
+KERNEL_DOES_CUBE = """
 import torch
 import pypto
 
@@ -69,9 +69,9 @@ def demo(x):
     out = torch.empty_like(x)
     demo_kernel(x, out)
     return out
-'''
+"""
 
-WRAPPER_DOES_ELEMENTWISE = '''
+WRAPPER_DOES_ELEMENTWISE = """
 import torch
 import pypto
 
@@ -92,11 +92,10 @@ def demo(x, w):
     out = torch.empty_like(d)
     demo_kernel(d, out)
     return out
-'''
+"""
 
 
 class PredicateBoundaryTest(unittest.TestCase):
-
     def test_wrapper_cube_does_not_open_a_cube_action(self):
         calls = self.pypto_calls(WRAPPER_DOES_CUBE)
         self.assertFalse(calls & predicates.CUBE_CALLS)
@@ -111,9 +110,9 @@ class PredicateBoundaryTest(unittest.TestCase):
         self.assertTrue(calls & predicates.CUBE_CALLS)
 
     def test_an_aliased_import_is_still_pypto(self):
-        aliased = (KERNEL_DOES_CUBE
-                   .replace("import pypto\n", "import pypto as pp\n")
-                   .replace("pypto.", "pp."))
+        aliased = KERNEL_DOES_CUBE.replace(
+            "import pypto\n", "import pypto as pp\n"
+        ).replace("pypto.", "pp.")
         tree = ast.parse(aliased)
         self.assertIn("pp", predicates.pypto_roots(tree))
         self.assertTrue(predicates.pypto_calls(tree) & predicates.CUBE_CALLS)
@@ -127,7 +126,6 @@ class PredicateBoundaryTest(unittest.TestCase):
 
 
 class ResidencyScopeTest(unittest.TestCase):
-
     def test_wrapper_statements_are_not_charged_to_a_tile_site(self):
         """The site holds `t` and `o`: operands + 1 = 2.
 
@@ -135,11 +133,12 @@ class ResidencyScopeTest(unittest.TestCase):
         returned 3 -- a 50% over-estimate of the buffer the site needs, which
         shrinks the per-site cap and rejects legal tiles before the device.
         """
-        self.assertEqual(bayesian.domain.vec_residency(WRAPPER_DOES_ELEMENTWISE),
-                         {"vec#0": 2})
+        self.assertEqual(
+            bayesian.domain.vec_residency(WRAPPER_DOES_ELEMENTWISE), {"vec#0": 2}
+        )
 
     def test_kernel_elementwise_chain_is_still_counted(self):
-        src = '''
+        src = """
 import pypto
 
 
@@ -150,19 +149,19 @@ def demo_kernel(x, w, y):
     b = pypto.view(w, [64, 128])
     c = pypto.add(a, b)
     pypto.assemble(c, y)
-'''
+"""
         res = bayesian.domain.vec_residency(src)
-        self.assertEqual(res, {"vec#0": 3})      # a, b, c
+        self.assertEqual(res, {"vec#0": 3})  # a, b, c
 
     def test_a_file_with_no_jit_function_keeps_the_whole_module_walk(self):
         """Not a PyPTO kernel at all; returning nothing would be a worse answer."""
-        src = '''
+        src = """
 import pypto
 
 pypto.set_vec_tile_shapes(64, 128)
 a = pypto.view(x, [64, 128])
 b = pypto.sigmoid(a)
-'''
+"""
         self.assertEqual(bayesian.domain.vec_residency(src), {"vec#0": 2})
 
 

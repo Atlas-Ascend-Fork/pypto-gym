@@ -31,13 +31,18 @@ import unittest
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent))
-from _support import (CHIP_ENVELOPE_OFFLINE, SCRIPTS_DIR, read_state,  # noqa: E402
-                      run_cli, write_platform_ini)
+from _support import (
+    CHIP_ENVELOPE_OFFLINE,
+    SCRIPTS_DIR,
+    init_argv,
+    read_state,  # noqa: E402
+    run_cli,
+    write_platform_ini,
+)
 
 import chip_profile  # noqa: E402
 
 HARNESS = SCRIPTS_DIR / "panko_harness.py"
-CATALOG = SCRIPTS_DIR.parent / "references" / "action_catalog.json"
 
 KB = 1024
 
@@ -48,23 +53,42 @@ SOC_C = "AscendTestC"
 
 def _write_all(directory):
     """The three synthetic platforms every test in this file reads."""
-    write_platform_ini(directory, SOC_A, cube=4, vector=8, ub=32 * KB,
-                       l0a=8 * KB, l0b=8 * KB, l0c=16 * KB, l1=64 * KB,
-                       arch="1000", short="AscendTest")
-    write_platform_ini(directory, SOC_B, cube=6, vector=12, ub=32 * KB,
-                       l0a=8 * KB, l0b=8 * KB, l0c=16 * KB, l1=64 * KB,
-                       arch="1000", short="AscendTest")
+    for soc, cube, vector in ((SOC_A, 4, 8), (SOC_B, 6, 12)):
+        write_platform_ini(
+            directory,
+            soc,
+            cube=cube,
+            vector=vector,
+            ub=32 * KB,
+            l0a=8 * KB,
+            l0b=8 * KB,
+            l0c=16 * KB,
+            l1=64 * KB,
+            arch="1000",
+            short="AscendTest",
+        )
     # Same L0A / L0B / L1 as the first family and a different UB and L0C -- the
     # shape that lets a transcription survive a generation change unnoticed. Its
     # [VectorCoreSpec] carries a DIFFERENT ub_size, so reading the wrong section
     # cannot pass.
-    write_platform_ini(directory, SOC_C, cube=2, vector=4, ub=64 * KB,
-                       l0a=8 * KB, l0b=8 * KB, l0c=32 * KB, l1=64 * KB,
-                       arch="2000", short="AscendTestZ", vector_ub=128 * KB)
+    write_platform_ini(
+        directory,
+        SOC_C,
+        cube=2,
+        vector=4,
+        ub=64 * KB,
+        l0a=8 * KB,
+        l0b=8 * KB,
+        l0c=32 * KB,
+        l1=64 * KB,
+        arch="2000",
+        short="AscendTestZ",
+        vector_ub=128 * KB,
+    )
     return Path(directory)
 
 
-KERNEL = '''import pypto
+KERNEL = """import pypto
 
 
 @pypto.frontend.jit()
@@ -75,11 +99,10 @@ def k(a, b):
 
 def demo(x):
     return k(x, x)
-'''
+"""
 
 
 class ReadIniTest(unittest.TestCase):
-
     def setUp(self):
         self._tmp = tempfile.TemporaryDirectory()
         self.ini_dir = _write_all(Path(self._tmp.name))
@@ -120,11 +143,13 @@ class ReadIniTest(unittest.TestCase):
             cp = configparser.ConfigParser(strict=False)
             cp.optionxform = str
             cp.read(str(self.ini_dir / f"{soc}.ini"), encoding="utf-8")
-            seen.append((cp.get("version", "NpuArch"),
-                         cp.get("version", "Short_SoC_version")))
+            seen.append(
+                (cp.get("version", "NpuArch"), cp.get("version", "Short_SoC_version"))
+            )
         self.assertEqual(seen[0], seen[1])
-        self.assertNotEqual(self._env(SOC_A)["cube_cores"],
-                            self._env(SOC_B)["cube_cores"])
+        self.assertNotEqual(
+            self._env(SOC_A)["cube_cores"], self._env(SOC_B)["cube_cores"]
+        )
 
     def test_only_some_of_the_figures_move_between_families(self):
         """L0A, L0B and L1 are unchanged here, which is how a transcription
@@ -156,9 +181,12 @@ class ReadIniTest(unittest.TestCase):
 
     def test_a_non_integer_value_is_reported_not_guessed(self):
         odd = write_platform_ini(self.ini_dir, "AscendTestOdd", ub=32 * KB)
-        odd.write_text(odd.read_text(encoding="utf-8")
-                       .replace(f"ub_size={32 * KB}", "ub_size=plenty"),
-                       encoding="utf-8")
+        odd.write_text(
+            odd.read_text(encoding="utf-8").replace(
+                f"ub_size={32 * KB}", "ub_size=plenty"
+            ),
+            encoding="utf-8",
+        )
         env, why = chip_profile.read_ini(str(odd))
         self.assertIsNone(env)
         self.assertIn("ub_size", why)
@@ -179,7 +207,6 @@ class ReadIniTest(unittest.TestCase):
 
 
 class InitResolutionTest(unittest.TestCase):
-
     def setUp(self):
         self._tmp = tempfile.TemporaryDirectory()
         self.root = Path(self._tmp.name)
@@ -201,13 +228,16 @@ class InitResolutionTest(unittest.TestCase):
 
     def test_the_refusal_asks_the_user_and_names_the_ways_out(self):
         res, _ = self._init()
-        self.assertEqual([o["id"] for o in res["ask_user"]["options"]],
-                         ["cann_env", "name_soc", "explicit"])
+        self.assertEqual(
+            [opt["id"] for opt in res["ask_user"]["options"]],
+            ["cann_env", "name_soc", "explicit"],
+        )
         self.assertIn("do not choose for them", res["hint"])
 
     def test_it_derives_from_the_ini_when_the_soc_is_named(self):
-        res, rc = self._init({"ASCEND_TOOLKIT_HOME": str(self.root / "cann"),
-                              "PANKO_SOC_NAME": SOC_C})
+        res, rc = self._init(
+            {"ASCEND_TOOLKIT_HOME": str(self.root / "cann"), "PANKO_SOC_NAME": SOC_C}
+        )
         self.assertEqual(rc, 0)
         env = res["chip_envelope"]
         self.assertEqual((env["cube_cores"], env["vector_cores"]), (2, 4))
@@ -215,16 +245,18 @@ class InitResolutionTest(unittest.TestCase):
         self.assertTrue(env["source"].endswith(f"{SOC_C}.ini"))
 
     def test_the_run_records_which_ini_it_read(self):
-        self._init({"ASCEND_TOOLKIT_HOME": str(self.root / "cann"),
-                    "PANKO_SOC_NAME": SOC_A})
+        self._init(
+            {"ASCEND_TOOLKIT_HOME": str(self.root / "cann"), "PANKO_SOC_NAME": SOC_A}
+        )
         st = read_state(self.op_dir)
         self.assertTrue(st["chip_envelope"]["source"].endswith(f"{SOC_A}.ini"))
         self.assertEqual(st["chip_envelope"]["soc"], SOC_A)
 
     def test_an_explicit_envelope_is_recorded_as_explicit(self):
         """So a report cannot read as derived when the numbers were supplied."""
-        res, rc = self._init(extra=["--chip-envelope",
-                                    json.dumps(CHIP_ENVELOPE_OFFLINE)])
+        res, rc = self._init(
+            extra=["--chip-envelope", json.dumps(CHIP_ENVELOPE_OFFLINE)]
+        )
         self.assertEqual(rc, 0)
         self.assertEqual(res["chip_envelope"]["source"], "explicit:cli")
 
@@ -237,14 +269,17 @@ class InitResolutionTest(unittest.TestCase):
         # The real environment minus anything that would resolve a chip for us,
         # so the CANN variables are the only thing under test. A stripped env
         # would also hide optuna and trip the earlier preflight instead.
-        e = {k: v for k, v in os.environ.items()
-             if not k.startswith("ASCEND") and k != "PANKO_SOC_NAME"}
+        e = {
+            k: v
+            for k, v in os.environ.items()
+            if not k.startswith("ASCEND") and k != "PANKO_SOC_NAME"
+        }
         e.update(env or {})
-        return run_cli("init", "--op-dir", "custom/demo",
-                       "--op", "demo", "--p-ref", "100", "--preopt-p", "500",
-                       "--catalog", str(CATALOG), "--allow-unversioned",
-                       "--op-file", "custom/demo/demo_impl.py", *extra,
-                       cwd=self.root, env=e)
+        return run_cli(
+            *init_argv("custom/demo", "custom/demo/demo_impl.py", *extra),
+            cwd=self.root,
+            env=e,
+        )
 
 
 if __name__ == "__main__":

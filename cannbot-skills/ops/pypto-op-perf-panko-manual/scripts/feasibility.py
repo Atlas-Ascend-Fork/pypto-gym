@@ -36,9 +36,9 @@ Usage:
     ok, reason = check("custom/<op>/<op>_impl.py")
     python3 feasibility.py <impl.py> [--ub-kb 192] [--l1-kb 192] [--m_l1 64] [--k_l1 64]
 """
+
 import argparse
 import ast
-import json
 import re
 import sys
 from dataclasses import dataclass
@@ -47,6 +47,7 @@ import os
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import jsonio  # noqa: E402
+
 # One home for "is this module installed" and "did the runtime refuse": see
 # chip_profile, which owns them because its refusals are load-bearing.
 from chip_profile import optional as _optional, quietly as _quietly  # noqa: E402
@@ -58,8 +59,15 @@ from chip_profile import optional as _optional, quietly as _quietly  # noqa: E40
 # `extract` falls through to its default width, overestimates the footprint, and
 # rejects legal tiles before any device sees them. `DT_FLOAT` is a CANN spelling
 # with no `DataType` member of its own, so it is merged in either way.
-DTYPE_BYTES_OFFLINE = {"DT_FP32": 4, "DT_FLOAT": 4, "DT_FP16": 2, "DT_BF16": 2,
-                       "DT_INT8": 1, "DT_UINT8": 1, "DT_INT32": 4}
+DTYPE_BYTES_OFFLINE = {
+    "DT_FP32": 4,
+    "DT_FLOAT": 4,
+    "DT_FP16": 2,
+    "DT_BF16": 2,
+    "DT_INT8": 1,
+    "DT_UINT8": 1,
+    "DT_INT32": 4,
+}
 _DTYPE_TABLE = None
 
 
@@ -92,16 +100,17 @@ def dtype_bytes_table():
 @dataclass
 class HW:
     """Chip envelope. Unknown fields switch off the rules that need them."""
-    ub_budget_kb: int = 192          # unified buffer available to vector tiles
+
+    ub_budget_kb: int = 192  # unified buffer available to vector tiles
     # 512 KB fixed hardware on A3. This said 192 -- an old conservative estimate
     # that `bayesian_optimization/space.py` had already corrected on its own copy
     # while this one kept the stale number, so the two gates in one run disagreed
     # by a factor of 2.7 and a legal cube tile could be rejected here.
-    l1_budget_kb: int = 512          # L1 available to the two matmul operands
-    m_l1: Optional[int] = None        # None => skip the L0/L1 subdivision rules
+    l1_budget_kb: int = 512  # L1 available to the two matmul operands
+    m_l1: Optional[int] = None  # None => skip the L0/L1 subdivision rules
     k_l1: Optional[int] = None
     n_l1: Optional[int] = None
-    n_buffers: int = 2               # double buffering; 1 if the kernel does not
+    n_buffers: int = 2  # double buffering; 1 if the kernel does not
 
 
 # --------------------------------------------------------------------------
@@ -120,8 +129,11 @@ def _int_env(tree):
         if not isinstance(node, ast.Assign):
             continue
         v = node.value
-        if not (isinstance(v, ast.Constant) and isinstance(v.value, int)
-                and not isinstance(v.value, bool)):
+        if not (
+            isinstance(v, ast.Constant)
+            and isinstance(v.value, int)
+            and not isinstance(v.value, bool)
+        ):
             continue
         for t in node.targets:
             if isinstance(t, ast.Name):
@@ -130,8 +142,11 @@ def _int_env(tree):
 
 
 def _as_int(node, env):
-    if isinstance(node, ast.Constant) and isinstance(node.value, int) \
-            and not isinstance(node.value, bool):
+    if (
+        isinstance(node, ast.Constant)
+        and isinstance(node.value, int)
+        and not isinstance(node.value, bool)
+    ):
         return node.value
     if isinstance(node, ast.Name):
         return env.get(node.id)
@@ -145,7 +160,7 @@ def _const_list(node, env=None):
         for e in node.elts:
             v = _as_int(e, env)
             if v is None:
-                return None            # symbolic entry: not statically known
+                return None  # symbolic entry: not statically known
             out.append(v)
         return out
     return None
@@ -242,8 +257,7 @@ def extract(path):
     # `_` is in the class because `DT_FP8E4M3` and `DT_FP4_E2M1X2` carry one and
     # the old pattern stopped at it, so those names were never looked up.
     table = dtype_bytes_table()
-    widths = [w for w in (table.get(m) for m in re.findall(r"DT_[A-Z0-9_]+", src))
-              if w]
+    widths = [w for w in (table.get(m) for m in re.findall(r"DT_[A-Z0-9_]+", src)) if w]
     info["dtype_bytes"] = min(widths) if widths else 2
     return info
 
@@ -266,21 +280,25 @@ def _vec_rules(info, hw):
         tile_kb = max(_prod(t) for t in info["vec_tiles"]) * db / 1024.0
         total = view_kb + tile_kb * hw.n_buffers
         if total > hw.ub_budget_kb:
-            return False, (f"UB estimate {total:.0f}KB "
-                           f"(view {view_kb:.0f}KB + {hw.n_buffers}x tile "
-                           f"{tile_kb:.0f}KB) > budget {hw.ub_budget_kb}KB")
+            return False, (
+                f"UB estimate {total:.0f}KB "
+                f"(view {view_kb:.0f}KB + {hw.n_buffers}x tile "
+                f"{tile_kb:.0f}KB) > budget {hw.ub_budget_kb}KB"
+            )
     return True, ""
 
 
 def _cube_rules(info, hw):
     db = info["dtype_bytes"]
     for groups in info["cube_tiles"]:
-        flat = [d for g in groups for d in g]
+        flat = []
+        for g in groups:
+            flat.extend(g)
         for d in flat:
             if d % 16 != 0:
                 return False, f"cube tile dim {d} is not 16-aligned"
         if hw.m_l1 is None or hw.k_l1 is None:
-            continue                    # uncalibrated: alignment only
+            continue  # uncalibrated: alignment only
         m, k = groups[0][0], groups[0][1]
         if m > hw.m_l1:
             return False, f"mL0={m} > mL1={hw.m_l1}"
@@ -293,8 +311,7 @@ def _cube_rules(info, hw):
         n = groups[1][1] if len(groups) > 1 and len(groups[1]) > 1 else k
         est_kb = (m * k + k * n) * db / 1024.0
         if est_kb > hw.l1_budget_kb:
-            return False, (f"L1 estimate {est_kb:.0f}KB > "
-                           f"budget {hw.l1_budget_kb}KB")
+            return False, (f"L1 estimate {est_kb:.0f}KB > budget {hw.l1_budget_kb}KB")
     return True, ""
 
 
@@ -385,7 +402,7 @@ def check(path, hw=None):
     hw = hw or HW()
     info = extract(path)
     if "parse_error" in info:
-        return True, ""                 # the compiler will reject it anyway
+        return True, ""  # the compiler will reject it anyway
     ok, why = _vec_rules(info, hw)
     if not ok:
         return False, why
@@ -402,8 +419,13 @@ def main():
     ap.add_argument("--n-buffers", type=int, default=2)
     ap.add_argument("--show", action="store_true", help="dump what was extracted")
     a = ap.parse_args()
-    hw = HW(ub_budget_kb=a.ub_kb, l1_budget_kb=a.l1_kb, m_l1=a.m_l1, k_l1=a.k_l1,
-            n_buffers=a.n_buffers)
+    hw = HW(
+        ub_budget_kb=a.ub_kb,
+        l1_budget_kb=a.l1_kb,
+        m_l1=a.m_l1,
+        k_l1=a.k_l1,
+        n_buffers=a.n_buffers,
+    )
     if a.show:
         jsonio.emit(extract(a.impl), indent=2)
     ok, why = check(a.impl, hw)

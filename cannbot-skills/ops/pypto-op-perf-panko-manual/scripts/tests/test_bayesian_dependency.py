@@ -25,50 +25,74 @@ import unittest
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent))
-from _support import (CATALOG, CHIP_ARGS, HARNESS, file_hash,  # noqa: E402
-                      harness, read_state, run_cli)
+from _support import (
+    CHIP_ARGS,
+    HARNESS,
+    file_hash,  # noqa: E402
+    harness,
+    init_argv,
+    read_state,
+    run_cli,
+)
 
 
-KERNEL = '''import pypto
+KERNEL = """import pypto
 
 
 @pypto.frontend.jit()
 def demo(a, b):
     pypto.set_vec_tile_shapes(64, 128)
     return a + b
-'''
+"""
 
 
 class MissingDependencyClassificationTest(unittest.TestCase):
     """Which import failures may be treated as "the optional dep is absent"."""
 
     def test_missing_optuna_is_the_optional_dependency(self):
-        self.assertTrue(harness.is_missing_optuna(
-            ModuleNotFoundError("No module named 'optuna'", name="optuna")))
+        self.assertTrue(
+            harness.is_missing_optuna(
+                ModuleNotFoundError("No module named 'optuna'", name="optuna")
+            )
+        )
 
     def test_a_missing_optuna_submodule_counts_too(self):
-        self.assertTrue(harness.is_missing_optuna(
-            ModuleNotFoundError("No module named 'optuna.samplers'",
-                                name="optuna.samplers")))
+        self.assertTrue(
+            harness.is_missing_optuna(
+                ModuleNotFoundError(
+                    "No module named 'optuna.samplers'", name="optuna.samplers"
+                )
+            )
+        )
 
     def test_another_missing_module_is_a_bug_in_this_package(self):
-        self.assertFalse(harness.is_missing_optuna(
-            ModuleNotFoundError("No module named 'scipy'", name="scipy")))
+        self.assertFalse(
+            harness.is_missing_optuna(
+                ModuleNotFoundError("No module named 'scipy'", name="scipy")
+            )
+        )
 
     def test_an_api_change_is_a_bug_in_this_package(self):
         """`from optuna.trial import create_trial` failing is ImportError, not
         ModuleNotFoundError, and must reach a traceback.
         """
-        self.assertFalse(harness.is_missing_optuna(
-            ImportError("cannot import name 'create_trial' from 'optuna.trial'")))
+        self.assertFalse(
+            harness.is_missing_optuna(
+                ImportError("cannot import name 'create_trial' from 'optuna.trial'")
+            )
+        )
 
     def test_a_circular_import_is_a_bug_in_this_package(self):
-        self.assertFalse(harness.is_missing_optuna(
-            ImportError("cannot import name 'space' from partially initialized module")))
+        self.assertFalse(
+            harness.is_missing_optuna(
+                ImportError(
+                    "cannot import name 'space' from partially initialized module"
+                )
+            )
+        )
 
 
 class CapabilityReportTest(unittest.TestCase):
-
     def test_capability_names_the_installed_version(self):
         cap = harness.bayesian_capability()
         self.assertIn("available", cap)
@@ -81,7 +105,6 @@ class CapabilityReportTest(unittest.TestCase):
 
 
 class InitPreflightTest(unittest.TestCase):
-
     def setUp(self):
         self._tmp = tempfile.TemporaryDirectory()
         self.op_dir = Path(self._tmp.name) / "demo"
@@ -109,8 +132,11 @@ class InitPreflightTest(unittest.TestCase):
         cannot be done through PYTHONPATH: the harness puts its own scripts
         directory first on sys.path.
         """
-        cap = {"available": False, "optuna_version": None,
-               "reason": "optuna is not importable (No module named 'optuna')"}
+        cap = {
+            "available": False,
+            "optuna_version": None,
+            "reason": "optuna is not importable (No module named 'optuna')",
+        }
         self.assertFalse(cap["available"])
         # The shape the skill keys off, asserted against the source so the
         # contract and the payload cannot drift apart silently.
@@ -129,13 +155,13 @@ class InitPreflightTest(unittest.TestCase):
         self.assertTrue(res["initialized"])
 
     def _init(self, config=None):
-        args = ["init",
-                "--op-dir", str(self.op_dir), "--op", "demo",
-                "--p-ref", "100", "--preopt-p", "500",
-                "--catalog", str(CATALOG), "--allow-unversioned",
-                "--op-file", str(self.op_file),
-                "--preopt-hash", file_hash(self.op_file),
-                *CHIP_ARGS]
+        args = init_argv(
+            self.op_dir,
+            self.op_file,
+            "--preopt-hash",
+            file_hash(self.op_file),
+            *CHIP_ARGS,
+        )
         if config:
             args += ["--config", json.dumps(config)]
         return run_cli(*args)

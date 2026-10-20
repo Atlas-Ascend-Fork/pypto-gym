@@ -96,7 +96,6 @@ class _StubbedPypto:
 
 
 class DtypeTableTest(unittest.TestCase):
-
     def test_widths_come_from_pypto_when_it_is_importable(self):
         with _StubbedPypto(_fake_pypto()):
             table = feasibility.dtype_bytes_table()
@@ -131,19 +130,20 @@ class DtypeTableTest(unittest.TestCase):
 
 def _fake_bindings(cube, vector):
     mod = types.ModuleType("pypto")
-    impl = types.SimpleNamespace(GetAICCoreNum=lambda: cube,
-                                 GetAIVCoreNum=lambda: vector)
+    impl = types.SimpleNamespace(
+        GetAICCoreNum=lambda: cube, GetAIVCoreNum=lambda: vector
+    )
     mod.pypto_impl = impl
     return mod
 
 
 class CoreCountTest(unittest.TestCase):
-
     def setUp(self):
         self._tmp = tempfile.TemporaryDirectory()
         self.dirs = [str(self._tmp.name)]
-        write_platform_ini(Path(self._tmp.name), SOC, cube=4, vector=8,
-                           ub=32 * KB, l1=64 * KB)
+        write_platform_ini(
+            Path(self._tmp.name), SOC, cube=4, vector=8, ub=32 * KB, l1=64 * KB
+        )
         # `resolve` needs a name before it can find an ini, and no driver here
         # will give it one. Named explicitly rather than inherited, so the run
         # does not depend on the caller's environment.
@@ -174,7 +174,8 @@ class CoreCountTest(unittest.TestCase):
         mod = types.ModuleType("pypto")
         mod.pypto_impl = types.SimpleNamespace(
             GetAICCoreNum=lambda: (_ for _ in ()).throw(RuntimeError("no device")),
-            GetAIVCoreNum=lambda: 40)
+            GetAIVCoreNum=lambda: 40,
+        )
         with _StubbedPypto(mod):
             env, _ = chip_profile.resolve(dirs=self.dirs, device=None)
         self.assertEqual(env.get("cube_cores"), 4)
@@ -196,26 +197,29 @@ class CoreCountTest(unittest.TestCase):
 # builds it, because the format is the contract -- a reader that only ever saw
 # its own output would pass while disagreeing with the writer.
 _CORE_HEADER = "Core, TotalTime, " + ", ".join(
-    f"{p}_Time, {p}_Usage" for p in swimlane.PIPES)
+    f"{p}_Time, {p}_Usage" for p in swimlane.PIPES
+)
 
-PIPE_USAGE_CSV = "\n".join([
-    "Total Core Num:3",
-    "AIC: 1",
-    "AIV: 2",
-    "Total Pipe Usage",
-    "Pipe, AverageTime, TotalExecuteTime, AverageUsage",
-    "CUBE, 305.2, 412.5, 73.99%",
-    "VECTOR_ALU, 160.9, 412.5, 39.01%",
-    "MTE_IN, 363.0, 412.5, 88.0%",
-    "MTE1, 49.5, 412.5, 12.0%",
-    "MTE_OUT, 86.6, 412.5, 21.0%",
-    "",
-    "",
-    "AICore Pipe Usage",
-    _CORE_HEADER,
-    "AIC_0, 412.5, 363.0, 88.0%, 49.5, 12.0%, 86.6, 21.0%, 305.2, 73.99%, 0.0, 0.0%",
-    "",
-])
+PIPE_USAGE_CSV = "\n".join(
+    [
+        "Total Core Num:3",
+        "AIC: 1",
+        "AIV: 2",
+        "Total Pipe Usage",
+        "Pipe, AverageTime, TotalExecuteTime, AverageUsage",
+        "CUBE, 305.2, 412.5, 73.99%",
+        "VECTOR_ALU, 160.9, 412.5, 39.01%",
+        "MTE_IN, 363.0, 412.5, 88.0%",
+        "MTE1, 49.5, 412.5, 12.0%",
+        "MTE_OUT, 86.6, 412.5, 21.0%",
+        "",
+        "",
+        "AICore Pipe Usage",
+        _CORE_HEADER,
+        "AIC_0, 412.5, 363.0, 88.0%, 49.5, 12.0%, 86.6, 21.0%, 305.2, 73.99%, 0.0, 0.0%",
+        "",
+    ]
+)
 
 
 class PipeUsageTest(unittest.TestCase):
@@ -226,11 +230,16 @@ class PipeUsageTest(unittest.TestCase):
 
     def test_every_pipe_comes_back_as_a_fraction(self):
         got = swimlane.pipe_usage(str(self._write(PIPE_USAGE_CSV)))
-        self.assertEqual(got, {"pipe_cube_frac": 0.7399,
-                               "pipe_vector_alu_frac": 0.3901,
-                               "pipe_mte_in_frac": 0.88,
-                               "pipe_mte1_frac": 0.12,
-                               "pipe_mte_out_frac": 0.21})
+        self.assertEqual(
+            got,
+            {
+                "pipe_cube_frac": 0.7399,
+                "pipe_vector_alu_frac": 0.3901,
+                "pipe_mte_in_frac": 0.88,
+                "pipe_mte1_frac": 0.12,
+                "pipe_mte_out_frac": 0.21,
+            },
+        )
 
     def test_the_per_core_block_and_the_header_are_not_read_as_pipes(self):
         """Both sit in the same file; one has twelve columns, the other a name
@@ -243,8 +252,9 @@ class PipeUsageTest(unittest.TestCase):
         """The writer divides by a core count and by a span. A symptom must stay
         quiet rather than fire on `inf`.
         """
-        text = PIPE_USAGE_CSV.replace("CUBE, 305.2, 412.5, 73.99%",
-                                      "CUBE, 305.2, 0.0, inf%")
+        text = PIPE_USAGE_CSV.replace(
+            "CUBE, 305.2, 412.5, 73.99%", "CUBE, 305.2, 0.0, inf%"
+        )
         got = swimlane.pipe_usage(str(self._write(text)))
         self.assertIsNone(got.get("pipe_cube_frac"))
         self.assertEqual(got.get("pipe_mte_in_frac"), 0.88)
@@ -307,15 +317,27 @@ class CubeRuleAgreementTest(unittest.TestCase):
     converse does not hold and is not asserted.
     """
 
-    HW = space.HW(calibrated=False, dtype_bytes=2, l0a_kb=64, l0b_kb=64,
-                  l0c_kb=128, l1_budget_kb=512)
+    HW = space.HW(
+        calibrated=False,
+        dtype_bytes=2,
+        l0a_kb=64,
+        l0b_kb=64,
+        l0c_kb=128,
+        l1_budget_kb=512,
+    )
 
     def test_no_config_the_tuner_rejects_passes_our_gate(self):
         hw = self.HW
         checked = 0
         for cfg in self._grid():
-            tile = (cfg["mL0"], cfg["mL1"], cfg["kL0"], cfg["kL1"],
-                    cfg["nL0"], cfg["nL1"])
+            tile = (
+                cfg["mL0"],
+                cfg["mL1"],
+                cfg["kL0"],
+                cfg["kL1"],
+                cfg["nL0"],
+                cfg["nL1"],
+            )
             good = _heuristic_tile_is_good(tile, hw)
             if good:
                 continue
@@ -328,19 +350,31 @@ class CubeRuleAgreementTest(unittest.TestCase):
         hw = self.HW
         agreed = 0
         for cfg in self._grid():
-            tile = (cfg["mL0"], cfg["mL1"], cfg["kL0"], cfg["kL1"],
-                    cfg["nL0"], cfg["nL1"])
+            tile = (
+                cfg["mL0"],
+                cfg["mL1"],
+                cfg["kL0"],
+                cfg["kL1"],
+                cfg["nL0"],
+                cfg["nL1"],
+            )
             if _heuristic_tile_is_good(tile, hw) and _our_gate(cfg, hw):
                 agreed += 1
         self.assertGreater(agreed, 0)
 
     def _grid(self):
-        axes = itertools.product((16, 64, 128, 256), (16, 32, 128),
-                                 (16, 64, 256), (1, 3))
+        axes = itertools.product(
+            (16, 64, 128, 256), (16, 32, 128), (16, 64, 256), (1, 3)
+        )
         for m, k, n, mult in axes:
-            yield {"mL0": m, "mL1": m * mult,
-                   "kL0": k, "kL1": k * mult,
-                   "nL0": n, "nL1": n * mult}
+            yield {
+                "mL0": m,
+                "mL1": m * mult,
+                "kL0": k,
+                "kL1": k * mult,
+                "nL0": n,
+                "nL1": n * mult,
+            }
 
 
 if __name__ == "__main__":

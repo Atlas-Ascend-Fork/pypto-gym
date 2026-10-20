@@ -47,6 +47,7 @@ producer/consumer task pairs therefore inflates wildly (1.18 M "edges" on that
 trace). Cross-pipe traffic is counted per DISTINCT TENSOR instead, which is
 small, interpretable, and matches what an action would act on.
 """
+
 import collections
 import json
 import math
@@ -67,9 +68,11 @@ _SUBGRAPH_RE = re.compile(r"subGraphCount:\s*(\d+)")
 # of these per merge pass, and `tune-swimlane/references/merge-optimization.md`
 # maps each to the pass_option that controls it.
 _MERGE_RE = re.compile(r"(\w+)Info hashOrder:\s*(\S+?),\s*subGraphCount:\s*(\d+)")
-_MERGE_KNOB = {"cubeMerge": "cube_nbuffer_setting",
-               "l1Reuse": "cube_l1_reuse_setting",
-               "vecMerge": "vec_nbuffer_setting"}
+_MERGE_KNOB = {
+    "cubeMerge": "cube_nbuffer_setting",
+    "l1Reuse": "cube_l1_reuse_setting",
+    "vecMerge": "vec_nbuffer_setting",
+}
 
 # A task shorter than this is dominated by the cost of dispatching it. 2 us is
 # the figure the CANNBot write-up uses for the same judgement ("60 % of task
@@ -80,13 +83,19 @@ SHORT_TASK_US = 2.0
 
 def _names_a_thread(e):
     """Is this event the metadata record that gives a thread its name?"""
-    return (e.get("ph") == "M" and e.get("name") == "thread_name"
-            and isinstance(e.get("args"), dict))
+    return (
+        e.get("ph") == "M"
+        and e.get("name") == "thread_name"
+        and isinstance(e.get("args"), dict)
+    )
 
 
 def _lane_names(events):
-    return {(e["pid"], e["tid"]): e["args"].get("name")
-            for e in events if _names_a_thread(e)}
+    return {
+        (e["pid"], e["tid"]): e["args"].get("name")
+        for e in events
+        if _names_a_thread(e)
+    }
 
 
 def _pipe(lane):
@@ -97,12 +106,15 @@ def _pipe(lane):
         return "aic"
     if lane.startswith("AIV"):
         return "aiv"
-    return None            # 'Fake Core_0' is profiler bookkeeping, not a core
+    return None  # 'Fake Core_0' is profiler bookkeeping, not a core
 
 
 def _pipe_features(lanes, span):
     """Per-pipe shape of the work. `lanes` maps lane name -> [(ts, dur), ...]."""
-    durs = [d for v in lanes.values() for _, d in v]
+    durs = []
+    for v in lanes.values():
+        for _, d in v:
+            durs.append(d)
     if not durs:
         return {}
     busy = [sum(d for _, d in v) for v in lanes.values()]
@@ -110,9 +122,11 @@ def _pipe_features(lanes, span):
     gaps = []
     for v in lanes.values():
         ordered = sorted(v)
-        gaps += [b_ts - (a_ts + a_dur)
-                 for (a_ts, a_dur), (b_ts, _) in zip(ordered, ordered[1:])
-                 if b_ts > a_ts + a_dur]
+        gaps += [
+            b_ts - (a_ts + a_dur)
+            for (a_ts, a_dur), (b_ts, _) in zip(ordered, ordered[1:])
+            if b_ts > a_ts + a_dur
+        ]
     f = {
         "n_lanes": len(lanes),
         "n_tasks": len(durs),
@@ -217,8 +231,7 @@ def features(trace_path):
         return None
 
     lane_of = _lane_names(events)
-    tasks = [e for e in events
-             if e.get("ph") == "X" and e.get("dur") is not None]
+    tasks = [e for e in events if e.get("ph") == "X" and e.get("dur") is not None]
     if not tasks:
         return None
 
@@ -370,6 +383,7 @@ def find_trace(*roots):
 
 def main():
     import argparse
+
     ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     ap.add_argument("--trace", help="merged_swimlane.json; default: newest found")
     ap.add_argument("--op-dir", default=None)

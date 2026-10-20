@@ -33,6 +33,7 @@ transcription survived this long without anyone noticing.
 Resolution is direct: `acl.get_soc_name()` returns exactly the ini's basename,
 so `<platform_config>/<soc>.ini` needs no mapping table.
 """
+
 import configparser
 import glob
 import importlib
@@ -83,7 +84,7 @@ def quietly(fn, *args):
     """
     try:
         return fn(*args)
-    except Exception:                                     # noqa: BLE001
+    except Exception:  # noqa: BLE001
         return None
 
 
@@ -114,8 +115,10 @@ def live_soc(device=None):
             return _txt(name), "acl"
     torch_npu = optional("torch_npu")
     if torch_npu is not None:
-        name = quietly(torch_npu.npu.get_device_name,
-                        int(device) if device not in (None, "") else 0)
+        name = quietly(
+            torch_npu.npu.get_device_name,
+            int(device) if device not in (None, "") else 0,
+        )
         if name:
             return _txt(name), "torch_npu"
     return "", ""
@@ -184,8 +187,12 @@ def confirm(expected, device=None):
 
 def _cann_roots():
     roots = []
-    for var in ("ASCEND_TOOLKIT_HOME", "ASCEND_HOME",
-                "ASCEND_HOME_PATH", "ASCEND_CANN_HOME"):
+    for var in (
+        "ASCEND_TOOLKIT_HOME",
+        "ASCEND_HOME",
+        "ASCEND_HOME_PATH",
+        "ASCEND_CANN_HOME",
+    ):
         v = os.environ.get(var)
         if v and v not in roots:
             roots.append(v)
@@ -202,8 +209,10 @@ def _config_dirs_under(root):
     guessed, so both layouts are covered by the same two patterns.
     """
     found = []
-    for pat in (os.path.join(root, "*", "data", "platform_config"),
-                os.path.join(root, "data", "platform_config")):
+    for pat in (
+        os.path.join(root, "*", "data", "platform_config"),
+        os.path.join(root, "data", "platform_config"),
+    ):
         for d in sorted(glob.glob(pat)):
             if os.path.isdir(d):
                 found.append(d)
@@ -232,7 +241,7 @@ def platform_config_dirs():
 
 
 def find_ini(soc, dirs=None):
-    for d in (dirs if dirs is not None else platform_config_dirs()):
+    for d in dirs if dirs is not None else platform_config_dirs():
         p = os.path.join(d, f"{soc}.ini")
         if os.path.isfile(p):
             return p
@@ -285,17 +294,24 @@ def resolve(dirs=None, device=None):
     """
     soc, how = soc_name(device)
     if not soc:
-        return None, ("the SoC could not be resolved: neither `acl.get_soc_name()` "
-                      "nor `torch_npu.npu.get_device_name()` answered for device "
-                      f"{device!r}, and PANKO_SOC_NAME is unset")
+        return None, (
+            "the SoC could not be resolved: neither `acl.get_soc_name()` "
+            "nor `torch_npu.npu.get_device_name()` answered for device "
+            f"{device!r}, and PANKO_SOC_NAME is unset"
+        )
     candidates = dirs if dirs is not None else platform_config_dirs()
     if not candidates:
-        return None, ("no CANN platform_config directory found; set "
-                      "ASCEND_TOOLKIT_HOME or source the CANN set_env.sh")
+        return None, (
+            "no CANN platform_config directory found; set "
+            "ASCEND_TOOLKIT_HOME or source the CANN set_env.sh"
+        )
     path = find_ini(soc, candidates)
     if not path:
-        return None, (f"no {soc}.ini under " + ", ".join(candidates)
-                      + f" (SoC resolved via {how})")
+        return None, (
+            f"no {soc}.ini under "
+            + ", ".join(candidates)
+            + f" (SoC resolved via {how})"
+        )
     env, why = read_ini(path)
     if env is None:
         return None, why

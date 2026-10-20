@@ -1,6 +1,6 @@
 ---
 name: pypto-general-debug
-description: PyPTO debugging router for stuck or opaque failures, including tile-shape/L0/L1/alignment/set_cube_tile_shapes issues; route through DEBUG_GUIDEBOOK.md to the matching topic reference or sub-skill.
+description: PyPTO debugging router for stuck or opaque failures, including tile-shape/L0/L1/alignment/set_cube_tile_shapes issues; route through DEBUG_GUIDEBOOK.md to the matching topic reference or sub-skill. Use when a PyPTO kernel development session is stuck or hits opaque failures and needs routing to the right debug reference.
 ---
 
 # PyPTO Complex Kernel — Debugging

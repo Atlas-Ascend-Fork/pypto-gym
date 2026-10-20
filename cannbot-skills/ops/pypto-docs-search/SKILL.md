@@ -1,6 +1,6 @@
 ---
 name: pypto-docs-search
-description: 检索普通 PyPTO（Tensor）算子开发资源——API 文档、按错误码排障、教程/安装/工具文档、算子参考实现与 golden。当要查 PyPTO 文档、读算子或 API 用法、按错误码排障、找算子参考实现或 golden、或问"这份资源在哪、有哪些"时使用，即使没明说"文档站"也应触发。
+description: 检索普通 PyPTO（Tensor）算子开发资源——API 文档、按错误码排障、教程/安装/工具文档、算子参考实现与 golden。当要查 PyPTO 文档、读算子或 API 用法、按错误码排障、找算子参考实现或 golden、或问"这份资源在哪、有哪些"时使用，即使没明说"文档站"也应触发。触发关键词：查 PyPTO 文档、错误码排障、API 用法、算子参考实现、golden。
 ---
 
 # pypto-docs-search

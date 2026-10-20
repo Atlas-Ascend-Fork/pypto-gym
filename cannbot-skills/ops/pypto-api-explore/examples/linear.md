@@ -4,8 +4,8 @@
 
 ```python
 @pypto.frontend.jit(runtime_options={"run_mode": pypto.RunMode.NPU})
-def linear_kernel(a: pypto.Tensor(sl, pypto_dtype), 
-           b: pypto.Tensor([N, K], pypto_dtype), 
+def linear_kernel(a: pypto.Tensor(sl, pypto_dtype),
+           b: pypto.Tensor([N, K], pypto_dtype),
            bias: pypto.Tensor([N], pypto_dtype),
            out: pypto.Tensor(ol, pypto_dtype)):
     for i in pypto.loop(batch, name="batch", unroll_list=[1]):

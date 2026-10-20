@@ -101,12 +101,18 @@ def _dtype_map():
         import torch
 
         _DTYPES = {
-            "FP32": torch.float32, "FLOAT32": torch.float32,
-            "FP16": torch.float16, "FLOAT16": torch.float16,
-            "BF16": torch.bfloat16, "BFLOAT16": torch.bfloat16,
-            "INT32": torch.int32, "INT64": torch.int64,
-            "INT16": torch.int16, "INT8": torch.int8,
-            "UINT8": torch.uint8, "BOOL": torch.bool,
+            "FP32": torch.float32,
+            "FLOAT32": torch.float32,
+            "FP16": torch.float16,
+            "FLOAT16": torch.float16,
+            "BF16": torch.bfloat16,
+            "BFLOAT16": torch.bfloat16,
+            "INT32": torch.int32,
+            "INT64": torch.int64,
+            "INT16": torch.int16,
+            "INT8": torch.int8,
+            "UINT8": torch.uint8,
+            "BOOL": torch.bool,
         }
     return _DTYPES
 
@@ -143,8 +149,11 @@ def find_jit_kernels(module) -> list:
         obj = getattr(module, name)
         if name.startswith("__"):
             continue
-        if (hasattr(obj, "compile") and hasattr(obj, "_cached_signature")
-                and hasattr(obj, "_create_parser")):
+        if (
+            hasattr(obj, "compile")
+            and hasattr(obj, "_cached_signature")
+            and hasattr(obj, "_create_parser")
+        ):
             kernels.append((name, obj))
     return kernels
 
@@ -152,7 +161,14 @@ def find_jit_kernels(module) -> list:
 # Type-based fallback literals for scalar params that have neither a
 # --scalars entry nor a declared default. Keys are the annotation type (or
 # its name, for impls using `from __future__ import annotations`).
-_FALLBACK_LITERALS = {float: 1.0, int: 1, bool: True, "float": 1.0, "int": 1, "bool": True}
+_FALLBACK_LITERALS = {
+    float: 1.0,
+    int: 1,
+    bool: True,
+    "float": 1.0,
+    "int": 1,
+    "bool": True,
+}
 
 
 def _resolve_scalars(name: str, wrapper, scalars_cfg: dict) -> dict:
@@ -178,11 +194,11 @@ def _resolve_scalars(name: str, wrapper, scalars_cfg: dict) -> dict:
     if unknown:
         raise ValueError(
             f"--scalars entry for {name!r} names unknown non-tensor params "
-            f"{sorted(unknown)}; signature expects {non_tensor}")
+            f"{sorted(unknown)}; signature expects {non_tensor}"
+        )
     defaults = getattr(wrapper, "_cached_non_tensor_defaults", None) or {}
     try:
-        sig_params = inspect.signature(
-            getattr(wrapper, "_original_func")).parameters
+        sig_params = inspect.signature(getattr(wrapper, "_original_func")).parameters
     except (TypeError, ValueError, AttributeError):
         sig_params = {}
     values, missing = {}, []
@@ -206,7 +222,8 @@ def _resolve_scalars(name: str, wrapper, scalars_cfg: dict) -> dict:
             f"default and no type-based fallback; fill the placeholders in "
             f"the --scalars snippet below to trace this kernel "
             f"(skipping trace, import+AST only)",
-            suggestion=f"--scalars '{snippet}'")
+            suggestion=f"--scalars '{snippet}'",
+        )
     return values
 
 
@@ -235,14 +252,17 @@ def build_inputs(name: str, wrapper, shapes_cfg: dict, scalars_cfg: dict):
         if len(spec) != len(tensor_defs):
             raise ValueError(
                 f"--shapes entry for {name!r} has {len(spec)} tensors, "
-                f"signature expects {len(tensor_defs)}")
+                f"signature expects {len(tensor_defs)}"
+            )
         import torch
+
         tensors = []
         for t in spec:
             dt = _dtype_map().get(str(t["dtype"]).upper())
             if dt is None:
-                raise ValueError(f"--shapes entry for {name!r}: unknown "
-                                 f"dtype {t['dtype']!r}")
+                raise ValueError(
+                    f"--shapes entry for {name!r}: unknown dtype {t['dtype']!r}"
+                )
             tensors.append(torch.zeros(list(t["shape"]), dtype=dt))
         return tensors, tensor_defs, scalar_values
     # no --shapes: require fully static shapes before touching torch
@@ -254,8 +274,10 @@ def build_inputs(name: str, wrapper, shapes_cfg: dict, scalars_cfg: dict):
                 f"shape {shape!r} is not fully static; fill the <N> "
                 f"placeholders in the --shapes snippet below to trace "
                 f"this kernel (skipping trace, import+AST only)",
-                suggestion=f"--shapes '{snippet}'")
+                suggestion=f"--shapes '{snippet}'",
+            )
     import torch
+
     tensors = []
     for d in tensor_defs:
         tensors.append(torch.zeros(list(d.shape), dtype=_torch_dtype(d.dtype)))
@@ -266,7 +288,8 @@ def trace_one(name: str, wrapper, shapes_cfg: dict, scalars_cfg: dict) -> dict:
     """Run the frontend trace for one kernel. Returns a result dict."""
     try:
         tensors, tensor_defs, scalar_values = build_inputs(
-            name, wrapper, shapes_cfg, scalars_cfg)
+            name, wrapper, shapes_cfg, scalars_cfg
+        )
     except ValueError as e:
         res = {"kernel": name, "status": "SKIP", "detail": str(e)}
         if isinstance(e, SkipError) and e.suggestion:
@@ -281,9 +304,12 @@ def trace_one(name: str, wrapper, shapes_cfg: dict, scalars_cfg: dict) -> dict:
             wrapper.kwargs = scalar_values
         wrapper.compile(tensors, tensor_defs)
     except Exception as e:  # noqa: BLE001 — report every trace-time failure
-        return {"kernel": name, "status": "ERROR",
-                "detail": f"{type(e).__name__}: {e}",
-                "traceback": traceback.format_exc()}
+        return {
+            "kernel": name,
+            "status": "ERROR",
+            "detail": f"{type(e).__name__}: {e}",
+            "traceback": traceback.format_exc(),
+        }
     return {"kernel": name, "status": "OK"}
 
 
@@ -309,12 +335,7 @@ def import_impl(impl_path, module_name="smoke_impl_under_check"):
     return module
 
 
-def _parse_cli(argv=None) -> argparse.Namespace:
-    ap = argparse.ArgumentParser(
-        description="Host-side smoke check for a pypto impl file "
-                    "(AST + import + frontend trace/codegen; no NPU).",
-        formatter_class=argparse.RawDescriptionHelpFormatter,
-        epilog="""\
+_CLI_EPILOG = """\
 input-spec JSON (only needed when a kernel is SKIPPED — the SKIP notice
 prints a ready-to-paste retry command with the snippet filled in):
   --shapes   {"<kernel>": [{"shape": [64], "dtype": "fp32"}, ...],
@@ -329,38 +350,74 @@ long compiles (large kernels take minutes in compile()):
   python smoke_check_impl.py <impl.py> --bg
   re-launches detached; poll the printed smoke.result file (or
   `tail -f` the smoke.log) instead of blocking a foreground tool call.
-""")
-    ap.add_argument("impl", nargs="?",
-                    help="path to the impl .py file to smoke-check")
-    ap.add_argument("--shapes", default=None,
-                    help="JSON input specs for kernels with non-static "
-                         "shapes, or @file.json")
-    ap.add_argument("--scalars", default=None,
-                    help="JSON values for non-tensor (scalar) params, or "
-                         "@file.json")
-    ap.add_argument("--workdir", default=None,
-                    help="scratch dir for pypto's output/ scratch (default: "
-                         "./_debug/smoke_trace under the current working "
-                         "directory); cleaned up after the run. NOTE: "
-                         "tempfile.TemporaryDirectory() is forbidden here — "
-                         "it lands in the system temporary directory and "
-                         "triggers sandbox prompts.")
-    ap.add_argument("--bg", action="store_true",
-                    help="re-launch detached: log to "
-                         "_debug/smoke_check/smoke.log, final verdict to "
-                         "smoke.result; print both paths and return "
-                         "immediately")
-    ap.add_argument("--strict", action="store_true",
-                    help="treat SKIP (inputs could not be auto-built) as "
-                         "failure (exit 1)")
-    ap.add_argument("--json", action="store_true",
-                    help="print a machine-readable JSON object before the "
-                         "SMOKE RESULT line")
-    ap.add_argument("--self-test", action="store_true",
-                    help="run the script's built-in self-checks and exit")
+"""
+
+
+def _add_input_args(ap) -> None:
+    """Arguments describing the kernel's inputs and scratch space."""
+    ap.add_argument("impl", nargs="?", help="path to the impl .py file to smoke-check")
+    ap.add_argument(
+        "--shapes",
+        default=None,
+        help="JSON input specs for kernels with non-static shapes, or @file.json",
+    )
+    ap.add_argument(
+        "--scalars",
+        default=None,
+        help="JSON values for non-tensor (scalar) params, or @file.json",
+    )
+    ap.add_argument(
+        "--workdir",
+        default=None,
+        help="scratch dir for pypto's output/ scratch (default: "
+        "./_debug/smoke_trace under the current working "
+        "directory); cleaned up after the run. NOTE: "
+        "tempfile.TemporaryDirectory() is forbidden here — "
+        "it lands in the system temporary directory and "
+        "triggers sandbox prompts.",
+    )
+
+
+def _add_mode_args(ap) -> None:
+    """Arguments selecting how the check runs and reports."""
+    ap.add_argument(
+        "--bg",
+        action="store_true",
+        help="re-launch detached: log to "
+        "_debug/smoke_check/smoke.log, final verdict to "
+        "smoke.result; print both paths and return "
+        "immediately",
+    )
+    ap.add_argument(
+        "--strict",
+        action="store_true",
+        help="treat SKIP (inputs could not be auto-built) as failure (exit 1)",
+    )
+    ap.add_argument(
+        "--json",
+        action="store_true",
+        help="print a machine-readable JSON object before the SMOKE RESULT line",
+    )
+    ap.add_argument(
+        "--self-test",
+        action="store_true",
+        help="run the script's built-in self-checks and exit",
+    )
     # internal: set when we are the detached child of a --bg run
-    ap.add_argument("--_fg", dest="fg_child", action="store_true",
-                    help=argparse.SUPPRESS)
+    ap.add_argument(
+        "--_fg", dest="fg_child", action="store_true", help=argparse.SUPPRESS
+    )
+
+
+def _parse_cli(argv=None) -> argparse.Namespace:
+    ap = argparse.ArgumentParser(
+        description="Host-side smoke check for a pypto impl file "
+        "(AST + import + frontend trace/codegen; no NPU).",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog=_CLI_EPILOG,
+    )
+    _add_input_args(ap)
+    _add_mode_args(ap)
     return ap.parse_args(argv)
 
 
@@ -409,8 +466,11 @@ def _ast_precheck(impl: Path) -> bool:
 
 def _prepare_workdir(workdir_arg) -> Path:
     """Create a fresh CWD-local scratch directory to avoid sandbox prompts."""
-    workdir = Path(workdir_arg).resolve() if workdir_arg else (
-        Path.cwd() / "_debug" / "smoke_trace")
+    workdir = (
+        Path(workdir_arg).resolve()
+        if workdir_arg
+        else (Path.cwd() / "_debug" / "smoke_trace")
+    )
     shutil.rmtree(workdir, ignore_errors=True)
     workdir.mkdir(parents=True, exist_ok=True)
     return workdir
@@ -425,13 +485,11 @@ def _cleanup_workdir(workdir: Path, old_cwd: str) -> None:
         pass
 
 
-def _write_result_file(result_path: Path, exit_code: int,
-                       result_line: str) -> None:
+def _write_result_file(result_path: Path, exit_code: int, result_line: str) -> None:
     """Write the --bg verdict atomically (tmp + rename) for pollers."""
     result_path.parent.mkdir(parents=True, exist_ok=True)
     tmp = result_path.with_name(result_path.name + ".tmp")
-    tmp.write_text(f"exit_code={exit_code}\n{result_line}\n",
-                   encoding="utf-8")
+    tmp.write_text(f"exit_code={exit_code}\n{result_line}\n", encoding="utf-8")
     os.replace(tmp, result_path)
 
 
@@ -453,18 +511,26 @@ def _relaunch_detached(args, impl: Path) -> int:
     if args.json:
         cmd.append("--json")
     with open(log_path, "w", encoding="utf-8") as logf:
-        proc = subprocess.Popen(cmd, stdout=logf, stderr=subprocess.STDOUT,
-                                cwd=str(Path.cwd()), start_new_session=True)
+        proc = subprocess.Popen(
+            cmd,
+            stdout=logf,
+            stderr=subprocess.STDOUT,
+            cwd=str(Path.cwd()),
+            start_new_session=True,
+        )
     _log.info(f"[SMOKE] --bg: detached pid={proc.pid}")
     _log.info(f"[SMOKE] --bg: log={log_path}")
-    _log.info(f"[SMOKE] --bg: result={result_path} — appears on completion "
-              "with 'exit_code=N' + the SMOKE RESULT line; poll for it")
+    _log.info(
+        f"[SMOKE] --bg: result={result_path} — appears on completion "
+        "with 'exit_code=N' + the SMOKE RESULT line; poll for it"
+    )
     _log.info(f"[SMOKE] --bg: follow live output with: tail -f {log_path}")
     return 0
 
 
-def _trace_kernels(module, shapes_cfg: dict, scalars_cfg: dict,
-                   retry_base: str) -> tuple:
+def _trace_kernels(
+    module, shapes_cfg: dict, scalars_cfg: dict, retry_base: str
+) -> tuple:
     """Trace every module-level jit kernel.
 
     Returns (results, n_errors, n_skips); every SKIP is followed by a
@@ -476,8 +542,10 @@ def _trace_kernels(module, shapes_cfg: dict, scalars_cfg: dict,
     n_skips = 0
     kernels = find_jit_kernels(module)
     if not kernels:
-        _log.info("[SMOKE] no @pypto.frontend.jit kernel found at module "
-              "level; import+AST only")
+        _log.info(
+            "[SMOKE] no @pypto.frontend.jit kernel found at module "
+            "level; import+AST only"
+        )
     for name, wrapper in kernels:
         res = trace_one(name, wrapper, shapes_cfg, scalars_cfg)
         results.append(res)
@@ -487,8 +555,10 @@ def _trace_kernels(module, shapes_cfg: dict, scalars_cfg: dict,
             n_skips += 1
             _log.info(f"[SMOKE SKIP] kernel={name}: {res['detail']}")
             if res.get("suggestion"):
-                _log.info(f"[SMOKE HINT] kernel={name} retry: "
-                          f"{retry_base} {res['suggestion']}")
+                _log.info(
+                    f"[SMOKE HINT] kernel={name} retry: "
+                    f"{retry_base} {res['suggestion']}"
+                )
         else:
             n_errors += 1
             _log.error(f"[SMOKE ERROR] stage=trace kernel={name}: {res['detail']}")
@@ -497,16 +567,25 @@ def _trace_kernels(module, shapes_cfg: dict, scalars_cfg: dict,
     return results, n_errors, n_skips
 
 
-def _finish(args, exit_code: int, result_line: str,
-            kernels: list | None = None, extra: dict | None = None) -> int:
+def _finish(
+    args,
+    exit_code: int,
+    result_line: str,
+    kernels: list | None = None,
+    extra: dict | None = None,
+) -> int:
     """Emit --json payload + conclusion line; write the --bg result file.
 
     Must be called with the caller's cwd already restored (the result
     file lives under the original cwd, not the trace workdir).
     """
     if args.json:
-        payload = {"file": str(args.impl), "exit_code": exit_code,
-                   "result": result_line, "kernels": kernels or []}
+        payload = {
+            "file": str(args.impl),
+            "exit_code": exit_code,
+            "result": result_line,
+            "kernels": kernels or [],
+        }
         if extra:
             payload.update(extra)
         _log.info(json.dumps(payload, ensure_ascii=False))
@@ -515,13 +594,11 @@ def _finish(args, exit_code: int, result_line: str,
     else:
         _log.info(result_line)
     if args.fg_child:
-        _write_result_file(Path.cwd() / _BG_DIR / _BG_RESULT,
-                           exit_code, result_line)
+        _write_result_file(Path.cwd() / _BG_DIR / _BG_RESULT, exit_code, result_line)
     return exit_code
 
 
-def _conclude(args, impl: Path, results: list, n_errors: int,
-              n_skips: int) -> int:
+def _conclude(args, impl: Path, results: list, n_errors: int, n_skips: int) -> int:
     """Turn trace tallies into the verdict line + exit code."""
     extra = {"errors": n_errors, "skips": n_skips, "strict": args.strict}
     if n_errors or (args.strict and n_skips):
@@ -530,9 +607,9 @@ def _conclude(args, impl: Path, results: list, n_errors: int,
             line += " (--strict: skips count as failure)"
         return _finish(args, 1, line, results, extra)
     note = " (trace skipped for some kernels: import+AST only)" if n_skips else ""
-    return _finish(args, 0,
-                   f"SMOKE RESULT: PASS skips={n_skips}{note} file={impl}",
-                   results, extra)
+    return _finish(
+        args, 0, f"SMOKE RESULT: PASS skips={n_skips}{note} file={impl}", results, extra
+    )
 
 
 def _self_test_cli_basic(root: Path, script: str, check) -> None:
@@ -547,20 +624,31 @@ def _self_test_cli_basic(root: Path, script: str, check) -> None:
         (root / fname).write_text(content, encoding="utf-8")
 
     def run_cli(*cli_args) -> tuple:
-        proc = subprocess.run([sys.executable, script, *cli_args],
-                              cwd=str(root), capture_output=True, text=True,
-                              timeout=120)
+        proc = subprocess.run(
+            [sys.executable, script, *cli_args],
+            cwd=str(root),
+            capture_output=True,
+            text=True,
+            timeout=120,
+        )
         return proc.returncode, proc.stdout
 
     rc, out = run_cli("bad_syntax.py")
-    check("syntax error -> exit 1 + FAIL",
-          rc == 1 and "SMOKE RESULT: FAIL" in out, out[-200:])
+    check(
+        "syntax error -> exit 1 + FAIL",
+        rc == 1 and "SMOKE RESULT: FAIL" in out,
+        out[-200:],
+    )
     rc, out = run_cli("import_error.py")
-    check("import error -> exit 1 + FAIL",
-          rc == 1 and "stage=import" in out, out[-200:])
+    check(
+        "import error -> exit 1 + FAIL", rc == 1 and "stage=import" in out, out[-200:]
+    )
     rc, out = run_cli("no_kernels.py")
-    check("no jit kernels -> exit 0 + PASS",
-          rc == 0 and "SMOKE RESULT: PASS" in out, out[-200:])
+    check(
+        "no jit kernels -> exit 0 + PASS",
+        rc == 0 and "SMOKE RESULT: PASS" in out,
+        out[-200:],
+    )
     rc, out = run_cli("no_kernels.py", "--shapes", "not json")
     check("invalid JSON -> exit 2", rc == 2, out[-200:])
     rc, out = run_cli("no_kernels.py", "--scalars", "[1]")
@@ -573,22 +661,25 @@ def _self_test_cli_basic(root: Path, script: str, check) -> None:
 
 def _self_test_cli_bg(root: Path, script: str, check) -> None:
     """--json and --bg self-checks (subprocess on the no-kernel fixture)."""
+
     def run_cli(*cli_args) -> tuple:
-        proc = subprocess.run([sys.executable, script, *cli_args],
-                              cwd=str(root), capture_output=True, text=True,
-                              timeout=120)
+        proc = subprocess.run(
+            [sys.executable, script, *cli_args],
+            cwd=str(root),
+            capture_output=True,
+            text=True,
+            timeout=120,
+        )
         return proc.returncode, proc.stdout
 
     rc, out = run_cli("no_kernels.py", "--json")
     lines = [ln for ln in out.splitlines() if ln.strip()]
     try:
         payload = json.loads(lines[-2])
-        json_ok = (payload["exit_code"] == 0
-                   and lines[-1].startswith("SMOKE RESULT"))
+        json_ok = payload["exit_code"] == 0 and lines[-1].startswith("SMOKE RESULT")
     except (IndexError, json.JSONDecodeError, KeyError):
         json_ok = False
-    check("--json: JSON object before conclusion line", json_ok,
-          out[-200:])
+    check("--json: JSON object before conclusion line", json_ok, out[-200:])
 
     # --bg: foreground returns at once; result file appears shortly
     rc, out = run_cli("no_kernels.py", "--bg")
@@ -599,13 +690,13 @@ def _self_test_cli_bg(root: Path, script: str, check) -> None:
     bg_ok = rc == 0 and result_path.exists()
     if bg_ok:
         content = result_path.read_text(encoding="utf-8")
-        bg_ok = ("exit_code=0" in content
-                 and "SMOKE RESULT: PASS" in content)
+        bg_ok = "exit_code=0" in content and "SMOKE RESULT: PASS" in content
     check("--bg: result file with exit code + PASS", bg_ok, out[-200:])
 
 
 def _self_test_resolution(check) -> None:
     """In-process checks of scalar/shape resolution with fake wrappers."""
+
     class _FakeWrapper:
         _cached_signature = ([], ["eps", "ratio", "debug"])
         _cached_non_tensor_defaults = {"ratio": 0.5}
@@ -623,8 +714,11 @@ def _self_test_resolution(check) -> None:
             pass
 
     vals = _resolve_scalars("k", _FakeWrapper(), {"eps": 1e-6})
-    check("scalar priority: cli > default > type literal",
-          vals == {"eps": 1e-6, "ratio": 0.5, "debug": True}, repr(vals))
+    check(
+        "scalar priority: cli > default > type literal",
+        vals == {"eps": 1e-6, "ratio": 0.5, "debug": True},
+        repr(vals),
+    )
     try:
         _resolve_scalars("k", _FakeWrapper(), {"nope": 1})
         check("unknown --scalars key rejected", False)
@@ -643,8 +737,11 @@ def _self_test_resolution(check) -> None:
         _resolve_scalars("k", _FakeMissing(), {})
         check("unresolvable scalar -> SkipError with snippet", False)
     except SkipError as e:
-        check("unresolvable scalar -> SkipError with snippet",
-              bool(e.suggestion) and "--scalars" in e.suggestion, str(e))
+        check(
+            "unresolvable scalar -> SkipError with snippet",
+            bool(e.suggestion) and "--scalars" in e.suggestion,
+            str(e),
+        )
 
     class _FakeTensorDef:
         shape = [8, "N"]  # one dynamic dim
@@ -657,9 +754,13 @@ def _self_test_resolution(check) -> None:
         build_inputs("k", _FakeDyn(), {}, {})
         check("dynamic shape -> SkipError with --shapes skeleton", False)
     except SkipError as e:
-        check("dynamic shape -> SkipError with --shapes skeleton",
-              bool(e.suggestion) and "--shapes" in e.suggestion
-              and '"<N>"' in e.suggestion, str(e))
+        check(
+            "dynamic shape -> SkipError with --shapes skeleton",
+            bool(e.suggestion)
+            and "--shapes" in e.suggestion
+            and '"<N>"' in e.suggestion,
+            str(e),
+        )
 
 
 def _self_test() -> int:
@@ -673,7 +774,8 @@ def _self_test() -> int:
         results.append(bool(ok))
         (_log.error if not ok else _log.info)(
             f"[SELF-TEST] {'PASS' if ok else 'FAIL'} {label}"
-            + (f" — {detail}" if detail and not ok else ""))
+            + (f" — {detail}" if detail and not ok else "")
+        )
 
     script = str(Path(__file__).resolve())
     root = Path.cwd() / _BG_DIR / "selftest"
@@ -694,7 +796,8 @@ def _self_test() -> int:
     n_fail = results.count(False)
     (_log.error if n_fail else _log.info)(
         f"SELF-TEST RESULT: {'PASS' if not n_fail else 'FAIL'} "
-        f"checks={len(results)} failures={n_fail}")
+        f"checks={len(results)} failures={n_fail}"
+    )
     return 1 if n_fail else 0
 
 
@@ -703,8 +806,7 @@ def main(argv=None) -> int:
     if args.self_test:
         return _self_test()
     if not args.impl:
-        _log.error("[SMOKE ERROR] missing impl file argument "
-                   "(or run with --self-test)")
+        _log.error("[SMOKE ERROR] missing impl file argument (or run with --self-test)")
         return 2
     impl = Path(args.impl).resolve()
     if not impl.is_file():
@@ -717,8 +819,12 @@ def main(argv=None) -> int:
 
     # ---- 1. AST-level precheck (syntax) ----
     if not _ast_precheck(impl):
-        return _finish(args, 1, f"SMOKE RESULT: FAIL errors=1 file={impl}",
-                       extra={"errors": 1, "skips": 0})
+        return _finish(
+            args,
+            1,
+            f"SMOKE RESULT: FAIL errors=1 file={impl}",
+            extra={"errors": 1, "skips": 0},
+        )
 
     # ---- 2+3. import + trace, inside a throwaway cwd so pypto's output/
     # scratch dir lands there instead of polluting the caller's cwd ----
@@ -736,13 +842,18 @@ def main(argv=None) -> int:
             _log.info("[SMOKE] stage=import: OK")
             retry_base = f"python {Path(__file__).resolve()} {impl} --bg"
             results, n_errors, n_skips = _trace_kernels(
-                module, args.shapes_cfg, args.scalars_cfg, retry_base)
+                module, args.shapes_cfg, args.scalars_cfg, retry_base
+            )
     finally:
         _cleanup_workdir(workdir, old_cwd)
 
     if fatal:
-        return _finish(args, 1, f"SMOKE RESULT: FAIL errors=1 file={impl}",
-                       extra={"errors": 1, "skips": 0})
+        return _finish(
+            args,
+            1,
+            f"SMOKE RESULT: FAIL errors=1 file={impl}",
+            extra={"errors": 1, "skips": 0},
+        )
     return _conclude(args, impl, results, n_errors, n_skips)
 
 

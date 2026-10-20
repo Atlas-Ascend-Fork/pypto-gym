@@ -28,27 +28,27 @@ import unittest
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent))
-from _support import CHIP_ARGS, SCRIPTS_DIR, file_hash, run_cli  # noqa: E402
+from _support import CHIP_ARGS, file_hash, run_cli  # noqa: E402
 
-FEASIBLE_KERNEL = '''import pypto
+FEASIBLE_KERNEL = """import pypto
 
 
 @pypto.frontend.jit(runtime_options={"device_sched_mode": 1})
 def demo(a, b):
     pypto.set_vec_tile_shapes(64, 128)
     return a + b
-'''
+"""
 
 # `cube tile dim 17 is not 16-aligned` -- a certain violation, which is the only
 # kind the static gate is allowed to reject on.
-INFEASIBLE_KERNEL = '''import pypto
+INFEASIBLE_KERNEL = """import pypto
 
 
 @pypto.frontend.jit(runtime_options={"device_sched_mode": 1})
 def demo(a, b):
     pypto.set_cube_tile_shapes([128, 64], [17, 64], [128, 64])
     return a + b
-'''
+"""
 
 INFEASIBLE_K = 2
 
@@ -59,7 +59,6 @@ def _run(*args):
 
 
 class RefineCounterTest(unittest.TestCase):
-
     def setUp(self):
         self._tmp = tempfile.TemporaryDirectory()
         self.op_dir = Path(self._tmp.name) / "demo"
@@ -89,7 +88,7 @@ class RefineCounterTest(unittest.TestCase):
         seen = []
         for i in range(3):
             with self.op_file.open("a", encoding="utf-8") as f:
-                f.write(f"\n# comment {i}\n")     # different bytes, same program
+                f.write(f"\n# comment {i}\n")  # different bytes, same program
             seen.append(self._feasible())
         self.assertTrue(all(r["semantic_noop"] for r in seen))
         self.assertEqual([r["n_noop"] for r in seen], [1, 2, 3])
@@ -114,21 +113,37 @@ class RefineCounterTest(unittest.TestCase):
         self._init(INFEASIBLE_KERNEL)
         self.assertEqual(self._feasible()["n_static"], 1)
         stray = self._feasible(parent=None)
-        self.assertEqual(stray["n_static"], 0)      # nothing attributed
+        self.assertEqual(stray["n_static"], 0)  # nothing attributed
         state = json.loads(
-            (self.op_dir / "optimization" / "search_state.json").read_text(encoding="utf-8"))
+            (self.op_dir / "optimization" / "search_state.json").read_text(
+                encoding="utf-8"
+            )
+        )
         refine = state["progress"]["refine"]
-        self.assertEqual(refine["action"], "u1")    # still u1's
-        self.assertEqual(refine["n_static"], 1)     # and still 1
+        self.assertEqual(refine["action"], "u1")  # still u1's
+        self.assertEqual(refine["n_static"], 1)  # and still 1
         self.assertEqual(self._feasible()["n_static"], 2)
 
     def _init(self, source):
         self.op_file.write_text(source, encoding="utf-8")
         digest = file_hash(self.op_file)
-        res = _run("init", "--op-dir", str(self.op_dir), "--op", "demo",
-                   "--p-ref", "100", "--preopt-p", "100",
-                   "--preopt-hash", digest, "--op-file", str(self.op_file),
-                   "--allow-unversioned", *CHIP_ARGS)
+        res = _run(
+            "init",
+            "--op-dir",
+            str(self.op_dir),
+            "--op",
+            "demo",
+            "--p-ref",
+            "100",
+            "--preopt-p",
+            "100",
+            "--preopt-hash",
+            digest,
+            "--op-file",
+            str(self.op_file),
+            "--allow-unversioned",
+            *CHIP_ARGS,
+        )
         self.assertTrue(res["initialized"])
         state = self.op_dir / "optimization" / "search_state.json"
         st = json.loads(state.read_text(encoding="utf-8"))
@@ -137,8 +152,15 @@ class RefineCounterTest(unittest.TestCase):
         return res
 
     def _feasible(self, parent="u1"):
-        args = ["feasible", "--op-dir", str(self.op_dir),
-                "--op-file", str(self.op_file), "--ub-kb", "192"]
+        args = [
+            "feasible",
+            "--op-dir",
+            str(self.op_dir),
+            "--op-file",
+            str(self.op_file),
+            "--ub-kb",
+            "192",
+        ]
         if parent is not None:
             args += ["--parent", parent]
         return _run(*args)

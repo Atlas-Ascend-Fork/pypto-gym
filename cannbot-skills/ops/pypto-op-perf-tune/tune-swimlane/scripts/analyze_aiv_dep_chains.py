@@ -36,7 +36,7 @@ import logging
 from collections import defaultdict
 from pathlib import Path
 
-logging.basicConfig(level=logging.INFO, format='%(message)s')
+logging.basicConfig(level=logging.INFO, format="%(message)s")
 
 COL_W = 22
 LEAF_INFO_SKIP_OPS = frozenset({"PHASE1", "PHASE2", "SYNC_SRC", "SYNC_DST"})
@@ -51,15 +51,17 @@ def parse_dyn_topo(path):
             if len(row) < 11:
                 continue
             succs = [int(x) for x in row[10:] if x.strip().isdigit()]
-            rows.append({
-                "seqNo": int(row[0]),
-                "taskId": int(row[1]),
-                "opmagic": int(row[4]),
-                "leafHash": row[6],
-                "coreType": int(row[7]),
-                "psgId": int(row[8]),
-                "successors": succs,
-            })
+            rows.append(
+                {
+                    "seqNo": int(row[0]),
+                    "taskId": int(row[1]),
+                    "opmagic": int(row[4]),
+                    "leafHash": row[6],
+                    "coreType": int(row[7]),
+                    "psgId": int(row[8]),
+                    "successors": succs,
+                }
+            )
     return rows
 
 
@@ -140,12 +142,14 @@ def tree_to_levels(tree):
         lvl = []
         nxt = []
         for node in cur:
-            lvl.append({
-                "leafHash": node["leafHash"],
-                "opmagic": node["opmagic"],
-                "psgId": node["psgId"],
-                "n_children": len(node["children"]),
-            })
+            lvl.append(
+                {
+                    "leafHash": node["leafHash"],
+                    "opmagic": node["opmagic"],
+                    "psgId": node["psgId"],
+                    "n_children": len(node["children"]),
+                }
+            )
             nxt.extend(node["children"])
         levels.append(lvl)
         cur = nxt
@@ -154,8 +158,7 @@ def tree_to_levels(tree):
 
 def level_sig(levels):
     return tuple(
-        tuple(sorted((n["leafHash"], n["opmagic"]) for n in lvl))
-        for lvl in levels
+        tuple(sorted((n["leafHash"], n["opmagic"]) for n in lvl)) for lvl in levels
     )
 
 
@@ -170,9 +173,7 @@ def _format_last_annotations(level):
     if len(level) <= 1:
         return None
     annotations = [f"(op={node['opmagic']})" for node in level]
-    return "".join(
-        f"{annotation:<{COL_W}s}" for annotation in annotations
-    ).rstrip()
+    return "".join(f"{annotation:<{COL_W}s}" for annotation in annotations).rstrip()
 
 
 def _single_node_connections(child_count):
@@ -194,7 +195,7 @@ def _mixed_connections(child_counts):
         else:
             connectors.append("     ")
     arrows = [
-        "▼    ▼"[:child_count * 2 - 1] if child_count > 0 else ""
+        "▼    ▼"[: child_count * 2 - 1] if child_count > 0 else ""
         for child_count in child_counts
     ]
     return ["  ".join(connectors), "  ".join(arrows)]
@@ -239,20 +240,26 @@ def load_leaf_info(path):
         leaf_hash = func.get("hash")
         if leaf_hash is None:
             continue
-        operations = [
-            operation.get("opcode") for operation in func.get("operations", [])
-        ]
+        raw_operations = func.get("operations", [])
+        operations = [operation.get("opcode") for operation in raw_operations]
         info[str(leaf_hash)] = {
             "name": func.get("func_magicname", ""),
-            "ops": [opcode for opcode in operations if opcode not in LEAF_INFO_SKIP_OPS],
+            "ops": [op for op in operations if op not in LEAF_INFO_SKIP_OPS],
         }
     return info
 
 
 def extract_core_ops(ops):
     skip_set = {
-        "PHASE1", "PHASE2", "SYNC_SRC", "SYNC_DST",
-        "COPY_IN", "COPY_OUT", "BAR.V", "BAR.M", "EXPAND",
+        "PHASE1",
+        "PHASE2",
+        "SYNC_SRC",
+        "SYNC_DST",
+        "COPY_IN",
+        "COPY_OUT",
+        "BAR.V",
+        "BAR.M",
+        "EXPAND",
     }
     core = []
     for o in ops:
@@ -306,7 +313,9 @@ def print_chain_detail(lvls, leaf_info):
                 seen_h.add(n["leafHash"])
                 li = leaf_info.get(n["leafHash"], {})
                 lb = infer_label(li.get("ops", [])) if li else ""
-                logging.info(f"  {n['leafHash']}: op={n['opmagic']}, psg={n['psgId']}, {lb}")
+                logging.info(
+                    f"  {n['leafHash']}: op={n['opmagic']}, psg={n['psgId']}, {lb}"
+                )
 
 
 def _parse_args():
@@ -339,7 +348,9 @@ def _build_chain_groups(starts, aiv_succ, keyed, stop_set=None):
 def _log_analysis_header(topo, rows, starts, lh_has_cube):
     aiv_count = sum(1 for row in rows if row["coreType"] == 0)
     logging.info("=" * 80)
-    logging.info("AIV Dependency Chain Analysis (sg_set_scope graph merge optimization)")
+    logging.info(
+        "AIV Dependency Chain Analysis (sg_set_scope graph merge optimization)"
+    )
     logging.info("=" * 80)
     logging.info(f"\nData: {topo}")
     logging.info(f"Total tasks: {len(rows)}, AIV: {aiv_count}, Starts: {len(starts)}")
@@ -397,11 +408,13 @@ def _process_original_groups(groups, graph, leaf_info, include_json):
         levels, count = _chain_count(items, graph)
         _log_original_chain(label, count, levels, leaf_info)
         if include_json:
-            json_chains.append({
-                "label": label,
-                "count": count,
-                "levels": _json_levels(levels),
-            })
+            json_chains.append(
+                {
+                    "label": label,
+                    "count": count,
+                    "levels": _json_levels(levels),
+                }
+            )
     return json_chains
 
 
@@ -409,7 +422,9 @@ def _log_suggestion_header():
     logging.info(f"\n{'=' * 80}")
     logging.info("sg_set_scope optimization suggestions")
     logging.info(f"{'=' * 80}")
-    logging.info("\nRule: when an AIV node has cube successors, keep the node but do not expand further")
+    logging.info(
+        "\nRule: when an AIV node has cube successors, keep the node but do not expand further"
+    )
     logging.info(
         "      Chain segments with >=2 nodes after truncation and psgId "
         "changes are suggested to merge with sg_set_scope\n"
@@ -459,8 +474,10 @@ def _log_suggestion(suggestion, leaf_info, lh_has_cube):
         logging.info(f"    {node['leafHash']}: psg={node['psgId']}, {label}{cube_mark}")
 
     if can_merge:
-        merge_path = ' → '.join(str(psg_id) for psg_id in _unique_psg_path(nodes))
-        logging.info(f"    → Suggestion: wrap the vector operations of psgId {merge_path} with sg_set_scope")
+        merge_path = " → ".join(str(psg_id) for psg_id in _unique_psg_path(nodes))
+        logging.info(
+            f"    → Suggestion: wrap the vector operations of psgId {merge_path} with sg_set_scope"
+        )
     else:
         logging.info("    → Single node or psgId unchanged, no sg_set_scope needed")
     if cut_points:
@@ -488,14 +505,16 @@ def _process_suggestion_groups(groups, graph, leaf_info, include_json):
             "cut_points": cut_points,
         }
         _log_suggestion(suggestion, leaf_info, graph["cube_hashes"])
-        suggestions.append({
-            "id": suggestion_id,
-            "count": count,
-            "can_merge": can_merge,
-            "psgid_transition": [node["psgId"] for node in nodes],
-            "cut_points": cut_points,
-            "levels": _json_levels(levels),
-        })
+        suggestions.append(
+            {
+                "id": suggestion_id,
+                "count": count,
+                "can_merge": can_merge,
+                "psgid_transition": [node["psgId"] for node in nodes],
+                "cut_points": cut_points,
+                "levels": _json_levels(levels),
+            }
+        )
     return suggestions if include_json else []
 
 
@@ -523,19 +542,17 @@ def main():
     _log_analysis_header(topo, rows, starts, lh_has_cube)
     groups = _build_chain_groups(starts, aiv_succ, keyed)
     logging.info(f"Deduped chains: {len(groups)}")
-    json_chains = _process_original_groups(
-        groups, graph, leaf_info, bool(args.json)
-    )
+    json_chains = _process_original_groups(groups, graph, leaf_info, bool(args.json))
 
     _log_suggestion_header()
     json_suggestions = []
     if not lh_has_cube:
         logging.info("  No AIV node has cube successors, no truncation needed")
-        logging.info("  For full chains with psgId changes, merge the segments with sg_set_scope")
-    else:
-        cut_groups = _build_chain_groups(
-            starts, aiv_succ, keyed, stop_set=lh_has_cube
+        logging.info(
+            "  For full chains with psgId changes, merge the segments with sg_set_scope"
         )
+    else:
+        cut_groups = _build_chain_groups(starts, aiv_succ, keyed, stop_set=lh_has_cube)
         json_suggestions = _process_suggestion_groups(
             cut_groups, graph, leaf_info, bool(args.json)
         )

@@ -1,6 +1,6 @@
 {
   "name": "pypto-op-orchestrator",
-  "description": "PyPTO 算子 Stage 1-7 多智能体开发工作流，包含状态机和 lint 门禁。",
+  "description": "PyPTO 算子端到端开发 Team。9 智能体状态机编排（planner/mathematician/architect/coder/verifier/debugger/optimizer/auto-tuner-panko），7 阶段驱动，含阶段门禁与状态机，支持断点续跑和失败恢复。",
   "version": "2.0.0",
   "author": {
     "name": "CANNBot"

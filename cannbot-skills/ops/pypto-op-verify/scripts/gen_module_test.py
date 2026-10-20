@@ -1,6 +1,15 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
-# Copyright (c) Huawei Technologies Co., Ltd. 2024-2026. All rights reserved.
+# ----------------------------------------------------------------------------------------------------------
+# Copyright (c) 2026 Huawei Technologies Co., Ltd.
+# This program is free software, you can redistribute it and/or modify it under the terms and conditions of
+# CANN Open Software License Agreement Version 2.0 (the "License").
+# Please refer to the License for details. You may not use this file except in compliance with the License.
+# THIS SOFTWARE IS PROVIDED ON AN "AS IS" BASIS, WITHOUT WARRANTIES OF ANY KIND, EITHER EXPRESS OR IMPLIED,
+# INCLUDING BUT NOT LIMITED TO NON-INFRINGEMENT, MERCHANTABILITY, OR FITNESS FOR A PARTICULAR PURPOSE.
+# See LICENSE in the root of the software repository for the full text of the License.
+# ----------------------------------------------------------------------------------------------------------
+
 """Generate the verification test file (per-module Step C / L0 E2E).
 
 The per-module tests (`modules/test_<op>_module<suffix_k>.py`) and the E2E test
@@ -49,19 +58,24 @@ from pathlib import Path
 _LOGGER = logging.getLogger("gen_module_test")
 
 _DTYPE_MAP = {
-    "float32": "torch.float32", "fp32": "torch.float32",
-    "float16": "torch.float16", "fp16": "torch.float16",
-    "bfloat16": "torch.bfloat16", "bf16": "torch.bfloat16",
-    "int32": "torch.int32", "int64": "torch.int64", "bool": "torch.bool",
+    "float32": "torch.float32",
+    "fp32": "torch.float32",
+    "float16": "torch.float16",
+    "fp16": "torch.float16",
+    "bfloat16": "torch.bfloat16",
+    "bf16": "torch.bfloat16",
+    "int32": "torch.int32",
+    "int64": "torch.int64",
+    "bool": "torch.bool",
 }
 
-_IMPORTS = '''import os
+_IMPORTS = """import os
 import sys
 
 import torch
-import torch_npu  # Register torch.npu on supported installations.  # noqa: F401'''
+import torch_npu  # Register torch.npu on supported installations.  # noqa: F401"""
 
-_BOOTSTRAP = '''# detailed_tensor_compare bootstrap — self-contained: no PYTHONPATH, and no dependency
+_BOOTSTRAP = """# detailed_tensor_compare bootstrap — self-contained: no PYTHONPATH, and no dependency
 # on the agent framework's skills directory (its name varies by framework). The helper is
 # vendored into custom/<op>/ by gen_module_test.py, so the whole custom/<op>/ tree is
 # portable: copy it anywhere and the tests still resolve their imports.
@@ -84,7 +98,7 @@ _compare_module = __import__(
 detailed_tensor_compare = _compare_module.detailed_tensor_compare
 tensor_leaf_pairs = _compare_module.tensor_leaf_pairs
 del _compare_module
-'''
+"""
 
 _HELPER_FILENAME = "detailed_tensor_compare.py"
 
@@ -99,7 +113,9 @@ def _parse_front_matter(content: str) -> dict:
     try:
         import yaml  # type: ignore  # noqa: PLC0415 -- optional CLI dependency
     except ImportError as exc:
-        raise RuntimeError("PyYAML not available; cannot read SPEC front matter.") from exc
+        raise RuntimeError(
+            "PyYAML not available; cannot read SPEC front matter."
+        ) from exc
     return yaml.safe_load("\n".join(lines[1:end])) or {}
 
 
@@ -118,10 +134,18 @@ def _shape_literals(p0_shapes: list) -> tuple[list[int], list[int]]:
     """Return (l1_shape, l0_shape). l0 caps each dim at 16 for a fast smoke."""
     first = None
     for item in p0_shapes or []:
-        if isinstance(item, (list, tuple)) and item and all(isinstance(x, int) for x in item):
+        if (
+            isinstance(item, (list, tuple))
+            and item
+            and all(isinstance(x, int) for x in item)
+        ):
             first = list(item)
             break
-        if isinstance(item, (list, tuple)) and item and isinstance(item[0], (list, tuple)):
+        if (
+            isinstance(item, (list, tuple))
+            and item
+            and isinstance(item[0], (list, tuple))
+        ):
             first = list(item[0])
             break
     if first is None:
@@ -133,6 +157,7 @@ def _shape_literals(p0_shapes: list) -> tuple[list[int], list[int]]:
 @dataclass
 class TestSpec:
     """Grouped inputs for build_test (G.FNM.03: name-wrap correlated args)."""
+
     op: str
     scope: str
     params: list[str]
@@ -168,7 +193,7 @@ def _header_lines(impl_mod, impl_fn, gold_mod, gold_fn, label):
         f"from {impl_mod} import {impl_fn}",
         "",
         _BOOTSTRAP,
-        '_DEVICE = torch.device(f"npu:{int(os.environ.get(\'TILE_FWK_DEVICE_ID\', \'0\'))}")',
+        "_DEVICE = torch.device(f\"npu:{int(os.environ.get('TILE_FWK_DEVICE_ID', '0'))}\")",
         "",
         "",
         "def make_case_inputs(shape, seed=42):",
@@ -186,7 +211,7 @@ def _input_lines(names, torch_dtype):
         expression = "torch.rand(shape, device=_DEVICE) > 0.5"
     else:
         expression = f"torch.randn(shape, dtype={torch_dtype}, device=_DEVICE)"
-    return [f"        \"{name}\": {expression}," for name in names]
+    return [f'        "{name}": {expression},' for name in names]
 
 
 def _runner_lines(impl_fn, gold_fn, label, atol, rtol):
@@ -242,8 +267,9 @@ def build_test(spec: TestSpec) -> str:
     return "\n".join(lines)
 
 
-def _gen_from_args(op: str, scope: str, is_e2e: bool, spec: Path | None,
-                   golden: Path | None) -> str:
+def _gen_from_args(
+    op: str, scope: str, is_e2e: bool, spec: Path | None, golden: Path | None
+) -> str:
     meta = _parse_front_matter(spec.read_text(encoding="utf-8")) if spec else {}
     dtypes = meta.get("supported_dtypes") or ["float32"]
     dtype = dtypes[0] if isinstance(dtypes, list) and dtypes else "float32"
@@ -255,8 +281,9 @@ def _gen_from_args(op: str, scope: str, is_e2e: bool, spec: Path | None,
         rtol = tol.get("rtol", 1e-3)
     gold_fn = f"{op}_golden" if is_e2e else f"{op}_module{scope}_golden"
     params = _golden_params(golden, gold_fn) if golden else []
-    return build_test(TestSpec(op, scope, params, dtype, l1_shape, l0_shape,
-                               atol, rtol, is_e2e))
+    return build_test(
+        TestSpec(op, scope, params, dtype, l1_shape, l0_shape, atol, rtol, is_e2e)
+    )
 
 
 def vendor_compare_helper(op_dir: Path) -> Path:
@@ -267,53 +294,100 @@ def vendor_compare_helper(op_dir: Path) -> Path:
     """
     source = Path(__file__).resolve().parent / _HELPER_FILENAME
     if not source.is_file():
-        raise FileNotFoundError(f"Canonical {_HELPER_FILENAME} missing next to {__file__}")
+        raise FileNotFoundError(
+            f"Canonical {_HELPER_FILENAME} missing next to {__file__}"
+        )
     op_dir.mkdir(parents=True, exist_ok=True)
     destination = op_dir / _HELPER_FILENAME
     destination.write_bytes(source.read_bytes())
     return destination
 
 
-def _self_test() -> int:
-    txt = build_test(TestSpec("relu", "12", ["x"], "float16", [1024, 128],
-                              [16, 16], 1e-3, 1e-3, is_e2e=False))
-    ok = ("from relu_module12_impl import relu_module12_wrapper" in txt
-          and "def test_module12_l0" in txt and "def test_module12_l1" in txt
-          and "tensor_leaf_pairs" in txt and "torch.float16" in txt
-          and "TILE_FWK_DEVICE_ID" in txt
-          # Portability guard: generated tests must not name an agent-framework directory.
-          and ".opencode" not in txt and ".agents" not in txt)
-    compile_ok = True
+def _self_test_module_spec() -> bool:
+    """The per-module template: expected markers present, and it compiles."""
+    txt = build_test(
+        TestSpec(
+            "relu",
+            "12",
+            ["x"],
+            "float16",
+            [1024, 128],
+            [16, 16],
+            1e-3,
+            1e-3,
+            is_e2e=False,
+        )
+    )
+    ok = (
+        "from relu_module12_impl import relu_module12_wrapper" in txt
+        and "def test_module12_l0" in txt
+        and "def test_module12_l1" in txt
+        and "tensor_leaf_pairs" in txt
+        and "torch.float16" in txt
+        and "TILE_FWK_DEVICE_ID" in txt
+        # Portability guard: generated tests must not name an agent-framework directory.
+        and ".opencode" not in txt
+        and ".agents" not in txt
+    )
     try:
         compile(txt, "<gen>", "exec")
     except SyntaxError as exc:
-        compile_ok = False
+        ok = False
         _LOGGER.error("FAIL syntax: %s", exc)
-    e2e = build_test(TestSpec("relu", "", ["x"], "float32", [1024, 128],
-                              [16, 16], 1e-3, 1e-3, is_e2e=True))
-    e2e_ok = ("from relu_impl import relu_wrapper" in e2e
-              and "[PRECISION_PASS]" in e2e and "__main__" in e2e
-              and ".opencode" not in e2e and ".agents" not in e2e)
+    return ok
+
+
+def _self_test_e2e_spec() -> bool:
+    """The e2e template: expected markers present, and it compiles."""
+    e2e = build_test(
+        TestSpec(
+            "relu", "", ["x"], "float32", [1024, 128], [16, 16], 1e-3, 1e-3, is_e2e=True
+        )
+    )
+    e2e_ok = (
+        "from relu_impl import relu_wrapper" in e2e
+        and "[PRECISION_PASS]" in e2e
+        and "__main__" in e2e
+        and ".opencode" not in e2e
+        and ".agents" not in e2e
+    )
     try:
         compile(e2e, "<gen-e2e>", "exec")
     except SyntaxError as exc:
         e2e_ok = False
         _LOGGER.error("FAIL e2e syntax: %s", exc)
-    passed = ok and compile_ok and e2e_ok
-    _LOGGER.error("%s self-test: module_test=%s e2e=%s", "PASS" if passed else "FAIL", ok, e2e_ok)
+    return e2e_ok
+
+
+def _self_test() -> int:
+    ok = _self_test_module_spec()
+    e2e_ok = _self_test_e2e_spec()
+    passed = ok and e2e_ok
+    _LOGGER.error(
+        "%s self-test: module_test=%s e2e=%s", "PASS" if passed else "FAIL", ok, e2e_ok
+    )
     return 0 if passed else 1
 
 
 def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("--op")
-    ap.add_argument("--suffix", default="", help="cumulative phase suffix, e.g. 12 (omit for --e2e)")
-    ap.add_argument("--e2e", action="store_true", help="generate the integrated test_<op>.py")
+    ap.add_argument(
+        "--suffix", default="", help="cumulative phase suffix, e.g. 12 (omit for --e2e)"
+    )
+    ap.add_argument(
+        "--e2e", action="store_true", help="generate the integrated test_<op>.py"
+    )
     ap.add_argument("--spec", type=Path)
-    ap.add_argument("--golden", type=Path, help="golden file for primary-input names (optional)")
-    ap.add_argument("--op-dir", type=Path,
-                    help="operator directory receiving detailed_tensor_compare.py "
-                         "(default: custom/<op>)")
+    ap.add_argument(
+        "--golden", type=Path, help="golden file for primary-input names (optional)"
+    )
+    ap.add_argument(
+        "--op-dir",
+        type=Path,
+        help="operator directory receiving detailed_tensor_compare.py "
+        "(default: custom/<op>)",
+    )
     ap.add_argument("--self-test", action="store_true")
     args = ap.parse_args()
     logging.basicConfig(level=logging.INFO, format="%(message)s", stream=sys.stdout)

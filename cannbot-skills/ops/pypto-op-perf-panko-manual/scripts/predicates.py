@@ -32,26 +32,37 @@ Usage:
     preds = compute("custom/<op>/<op>_impl.py", op_dir="custom/<op>")
     python3 predicates.py <impl.py> [--op-dir <dir>]
 """
+
 import argparse
 import ast
-import json
 import os
 import re
 import sys
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-import feasibility                        # noqa: E402  same directory
-from pypto_ast import pypto_roots         # noqa: E402  same directory
+import feasibility  # noqa: E402  same directory
+from pypto_ast import pypto_roots  # noqa: E402  same directory
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import jsonio  # noqa: E402
 
 # Calls that can only exist if the kernel really has a Cube/matmul operation.
-CUBE_CALLS = {"matmul", "set_cube_tile_shapes", "cube_tile", "batch_matmul",
-              "grouped_matmul", "quant_matmul"}
+CUBE_CALLS = {
+    "matmul",
+    "set_cube_tile_shapes",
+    "cube_tile",
+    "batch_matmul",
+    "grouped_matmul",
+    "quant_matmul",
+}
 # Calls that materialise a broadcast/expand of a low-rank tensor.
-BROADCAST_CALLS = {"expand", "expand_clone", "broadcast", "broadcast_to",
-                   "combine_axis"}
+BROADCAST_CALLS = {
+    "expand",
+    "expand_clone",
+    "broadcast",
+    "broadcast_to",
+    "combine_axis",
+}
 # Calls that write a tile back out to global memory.
 WRITEBACK_CALLS = {"assemble", "copy_out", "store", "scatter"}
 # Layout work the kernel does per tile that the host could do once. A pypto
@@ -82,8 +93,11 @@ def pypto_calls(tree):
     and residency predicates use it -- and this is the one place that did not.
     """
     roots = pypto_roots(tree)
-    return {_call_name(node) for node in ast.walk(tree)
-            if isinstance(node, ast.Call) and _is_pypto_call(node, roots)}
+    return {
+        _call_name(node)
+        for node in ast.walk(tree)
+        if isinstance(node, ast.Call) and _is_pypto_call(node, roots)
+    }
 
 
 def _chunk_loop(node):
@@ -123,9 +137,10 @@ def _chunk_loop(node):
 
 def _chunk_assign(node):
     """An assignment to a chunk-size constant that a loop then uses."""
-    return any(isinstance(t, ast.Name)
-               and re.fullmatch(r"BT|CHUNK(_SIZE)?|chunk_size", t.id)
-               for t in node.targets)
+    return any(
+        isinstance(t, ast.Name) and re.fullmatch(r"BT|CHUNK(_SIZE)?|chunk_size", t.id)
+        for t in node.targets
+    )
 
 
 def _chunk_constant(tree):
@@ -229,7 +244,7 @@ def _events_comprehension(node, out):
         _target_events(gen.target, out)
         for cond in gen.ifs:
             _events(cond, out)
-    for part in (("key", "value") if isinstance(node, ast.DictComp) else ("elt",)):
+    for part in ("key", "value") if isinstance(node, ast.DictComp) else ("elt",):
         _events(getattr(node, part), out)
 
 
@@ -434,15 +449,21 @@ def _materializes_large_intermediate(tree):
     produced = _tile_producers(tree, roots)
     loads = {}
     for node in ast.walk(tree):
-        if isinstance(node, ast.Name) and isinstance(node.ctx, ast.Load) \
-                and node.id in produced:
+        if (
+            isinstance(node, ast.Name)
+            and isinstance(node.ctx, ast.Load)
+            and node.id in produced
+        ):
             loads[node.id] = loads.get(node.id, 0) + 1
     if any(c >= 2 for c in loads.values()):
         return True
 
     def _is_writeback(node):
-        return (isinstance(node, ast.Call) and _is_pypto_call(node, roots)
-                and _call_name(node) in WRITEBACK_CALLS)
+        return (
+            isinstance(node, ast.Call)
+            and _is_pypto_call(node, roots)
+            and _call_name(node) in WRITEBACK_CALLS
+        )
 
     writebacks = sum(1 for node in ast.walk(tree) if _is_writeback(node))
     return writebacks > 1
@@ -466,8 +487,11 @@ def _has_nested_pypto_loop(tree):
     for node in ast.walk(tree):
         if _is_pypto_loop_for(node) is None:
             continue
-        if any(_is_pypto_loop_for(inner) is not None
-               for stmt in node.body for inner in ast.walk(stmt)):
+        if any(
+            _is_pypto_loop_for(inner) is not None
+            for stmt in node.body
+            for inner in ast.walk(stmt)
+        ):
             return True
     return False
 
@@ -475,9 +499,12 @@ def _has_nested_pypto_loop(tree):
 def _has_inkernel_layout_op(tree):
     """Does the kernel reshape / expand / transpose / concat a tile itself?"""
     roots = pypto_roots(tree)
-    return any(isinstance(n, ast.Call) and _is_pypto_call(n, roots)
-               and _call_name(n) in LAYOUT_CALLS
-               for n in ast.walk(tree))
+    return any(
+        isinstance(n, ast.Call)
+        and _is_pypto_call(n, roots)
+        and _call_name(n) in LAYOUT_CALLS
+        for n in ast.walk(tree)
+    )
 
 
 def compute(impl_path, op_dir=None):
@@ -492,15 +519,18 @@ def compute(impl_path, op_dir=None):
     # the run.
     except (OSError, SyntaxError, RecursionError):
         # Cannot tell anything: admit everything.
-        return {"has_cube_op": True, "has_broadcast": True,
-                "has_chunked_scan": True,
-                "has_inkernel_layout_op": True,
-                "has_nested_pypto_loop": True,
-                "materializes_large_intermediate": True,
-                "module_count": None,
-                "ub_occupancy": None,
-                "l1_occupancy": None,
-                "determined": False}
+        return {
+            "has_cube_op": True,
+            "has_broadcast": True,
+            "has_chunked_scan": True,
+            "has_inkernel_layout_op": True,
+            "has_nested_pypto_loop": True,
+            "materializes_large_intermediate": True,
+            "module_count": None,
+            "ub_occupancy": None,
+            "l1_occupancy": None,
+            "determined": False,
+        }
 
     calls = pypto_calls(tree)
     return {

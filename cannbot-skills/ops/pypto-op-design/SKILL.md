@@ -1,6 +1,6 @@
 ---
 name: pypto-op-design
-description: 根据算子规格和 golden 完成 DESIGN.md 与模块接口；按需检索 API、约束和计算模式，形成可实现、可验证的设计。
+description: 根据算子规格和 golden 完成 DESIGN.md 与模块接口；按需检索 API、约束和计算模式，形成可实现、可验证的设计。触发：根据算子规格与 golden 进行算子设计、生成 DESIGN.md 与模块接口时使用。
 ---
 
 # PyPTO 算子设计

@@ -1,6 +1,14 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
-# Copyright (c) Huawei Technologies Co., Ltd. 2024-2026. All rights reserved.
+# ----------------------------------------------------------------------------------------------------------
+# Copyright (c) 2026 Huawei Technologies Co., Ltd.
+# This program is free software, you can redistribute it and/or modify it under the terms and conditions of
+# CANN Open Software License Agreement Version 2.0 (the "License").
+# Please refer to the License for details. You may not use this file except in compliance with the License.
+# THIS SOFTWARE IS PROVIDED ON AN "AS IS" BASIS, WITHOUT WARRANTIES OF ANY KIND, EITHER EXPRESS OR IMPLIED,
+# INCLUDING BUT NOT LIMITED TO NON-INFRINGEMENT, MERCHANTABILITY, OR FITNESS FOR A PARTICULAR PURPOSE.
+# See LICENSE in the root of the software repository for the full text of the License.
+# ----------------------------------------------------------------------------------------------------------
 
 from __future__ import annotations
 
@@ -40,8 +48,23 @@ GOLDEN_PERF_REPORT_FILE = "GOLDEN_PERF_REPORT.md"
 OP_WORKSPACE_DIR = "pypto"
 
 IMPL_RULE_IDS = [
-    "OL01", "OL02", "OL03", "OL04", "OL05", "OL06", "OL07", "OL08",
-    "OL16", "OL23", "OL25", "OL26", "OL28", "OL29", "OL37", "OL48", "OL49",
+    "OL01",
+    "OL02",
+    "OL03",
+    "OL04",
+    "OL05",
+    "OL06",
+    "OL07",
+    "OL08",
+    "OL16",
+    "OL23",
+    "OL25",
+    "OL26",
+    "OL28",
+    "OL29",
+    "OL37",
+    "OL48",
+    "OL49",
     "OL55",  # PyPTO API 存在性 (typo 防止: pypto.empty 等)
     "OL56",  # Stage 6 之前 unroll_list 只能含单一值 (默认 [1])
     "OL57",  # JIT 图代码内允许 pypto.loop / pypto.loop_unroll / range 循环 (禁止 while 和非 range 的 for)
@@ -60,7 +83,17 @@ GOLDEN_RULE_IDS = ["OL15"]
 
 TEST_RULE_IDS = ["OL17", "OL18", "OL19", "OL20", "OL21", "OL22", "OL42", "OL60"]
 
-CONSISTENCY_RULE_IDS = ["OL30", "OL31", "OL32", "OL33", "OL34", "OL39", "OL40", "OL41", "OL43"]
+CONSISTENCY_RULE_IDS = [
+    "OL30",
+    "OL31",
+    "OL32",
+    "OL33",
+    "OL34",
+    "OL39",
+    "OL40",
+    "OL41",
+    "OL43",
+]
 
 # Subset of CONSISTENCY_RULE_IDS safe for post-edit: only rules that check
 # the edited file itself, not cross-file dependencies.  Cross-file rules
@@ -162,8 +195,9 @@ class CheckContext:
                 return r
         return {}
 
-    def make_finding(self, rule_id: str, status: str, message: str,
-                     file: str = "", line: int = 0) -> Finding:
+    def make_finding(
+        self, rule_id: str, status: str, message: str, file: str = "", line: int = 0
+    ) -> Finding:
         rule = self.get_rule(rule_id)
         return Finding(
             rule_id=rule_id,
@@ -182,9 +216,11 @@ CHECKERS: dict[str, Callable[[CheckContext], Finding]] = {}
 
 def register(rule_id: str):
     """装饰器：将检查函数注册到规则 ID"""
+
     def decorator(fn: Callable[[CheckContext], Finding]):
         CHECKERS[rule_id] = fn
         return fn
+
     return decorator
 
 
@@ -194,7 +230,9 @@ def _load_rules() -> list[dict[str, Any]]:
         with open(rules_path, "r", encoding="utf-8") as f:
             data = json.load(f)
     except (json.JSONDecodeError, OSError) as e:
-        logging.getLogger(__name__).error("[pypto-op-lint FATAL] failed to load rules.json: %s", e)
+        logging.getLogger(__name__).error(
+            "[pypto-op-lint FATAL] failed to load rules.json: %s", e
+        )
         return []
     return data.get("rules", [])
 
@@ -213,7 +251,9 @@ def _run_checks(ctx: CheckContext, rule_ids: list[str]) -> tuple[list[Finding], 
             start = time.perf_counter()
             rule = ctx.get_rule(rid)
             if ctx.stage not in rule.get("stages", []):
-                finding = ctx.make_finding(rid, "SKIP", "not applicable at the current stage")
+                finding = ctx.make_finding(
+                    rid, "SKIP", "not applicable at the current stage"
+                )
                 findings.append(finding)
                 dur = (time.perf_counter() - start) * 1000
                 total_duration_ms += dur

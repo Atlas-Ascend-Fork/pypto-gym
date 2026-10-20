@@ -46,6 +46,7 @@ callables. Without it the comparison still catches reformatting and comment
 edits, and folds nothing -- absent knowledge produces a weaker check, never a
 wrong one.
 """
+
 import ast
 import inspect
 
@@ -146,14 +147,18 @@ class _FoldDefaults(ast.NodeTransformer):
             return node
         keep = []
         for kw in node.keywords:
-            named_default = (kw.arg is not None and kw.arg in known
-                             and isinstance(kw.value, ast.Constant))
+            named_default = (
+                kw.arg is not None
+                and kw.arg in known
+                and isinstance(kw.value, ast.Constant)
+            )
             # `is` on the types too: `False == 0` and `True == 1` in Python, so
             # a plain `==` would fold `run_mode=0` against a default of `False`,
             # which are not the same request.
             restates_it = named_default and (
                 type(kw.value.value) is type(known[kw.arg])
-                and kw.value.value == known[kw.arg])
+                and kw.value.value == known[kw.arg]
+            )
             if restates_it:
                 self.folded.append(f"{name}({kw.arg}={kw.value.value!r})")
                 continue

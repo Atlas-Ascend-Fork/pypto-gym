@@ -1,9 +1,14 @@
 #!/usr/bin/env python3
 # coding: utf-8
-# Copyright (c) 2025-2026 Huawei Technologies Co., Ltd.
-# This program is free software; you can redistribute it and/or modify it under the terms and conditions of
+# ----------------------------------------------------------------------------------------------------------
+# Copyright (c) 2026 Huawei Technologies Co., Ltd.
+# This program is free software, you can redistribute it and/or modify it under the terms and conditions of
 # CANN Open Software License Agreement Version 2.0 (the "License").
+# Please refer to the License for details. You may not use this file except in compliance with the License.
+# THIS SOFTWARE IS PROVIDED ON AN "AS IS" BASIS, WITHOUT WARRANTIES OF ANY KIND, EITHER EXPRESS OR IMPLIED,
+# INCLUDING BUT NOT LIMITED TO NON-INFRINGEMENT, MERCHANTABILITY, OR FITNESS FOR A PARTICULAR PURPOSE.
 # See LICENSE in the root of the software repository for the full text of the License.
+# ----------------------------------------------------------------------------------------------------------
 
 """
 Analyze core usage rate per leafHash from swimlane data.
@@ -38,7 +43,7 @@ import os
 import re
 from collections import defaultdict
 
-logging.basicConfig(level=logging.INFO, format='%(message)s')
+logging.basicConfig(level=logging.INFO, format="%(message)s")
 
 
 def get_theoretical_cores(device_id):
@@ -100,11 +105,17 @@ def parse_swimlane(events):
 
 def _parse_args():
     parser = argparse.ArgumentParser(
-        description="Analyze per-leafHash core usage rate from swimlane data.")
-    parser.add_argument("output_dir",
-                        help="Path to output directory containing merged_swimlane.json")
-    parser.add_argument("--device-id", type=int, default=0,
-                        help="NPU device ID for querying theoretical core count (default: 0)")
+        description="Analyze per-leafHash core usage rate from swimlane data."
+    )
+    parser.add_argument(
+        "output_dir", help="Path to output directory containing merged_swimlane.json"
+    )
+    parser.add_argument(
+        "--device-id",
+        type=int,
+        default=0,
+        help="NPU device ID for querying theoretical core count (default: 0)",
+    )
     return parser.parse_args()
 
 
@@ -122,8 +133,11 @@ def _resolve_theoretical_cores(tid_to_core, device_id):
     aic_theoretical, aiv_theoretical = get_theoretical_cores(device_id)
 
     if aic_theoretical is None or aiv_theoretical is None:
-        all_real = {tid_to_core[tid] for tid in tid_to_core
-                    if "Fake" not in tid_to_core.get(tid, "")}
+        all_real = {
+            tid_to_core[tid]
+            for tid in tid_to_core
+            if "Fake" not in tid_to_core.get(tid, "")
+        }
         aic_theoretical = len([c for c in all_real if "AIC" in c])
         aiv_theoretical = len([c for c in all_real if "AIV" in c])
     return aic_theoretical, aiv_theoretical
@@ -157,7 +171,9 @@ def _make_usage_record(info, cores, aic_theoretical, aiv_theoretical):
     }
 
 
-def _collect_usage_records(leafhash_cores, leafhash_info, aic_theoretical, aiv_theoretical):
+def _collect_usage_records(
+    leafhash_cores, leafhash_info, aic_theoretical, aiv_theoretical
+):
     ordered_hashes = sorted(
         leafhash_info,
         key=lambda leaf_hash: leafhash_info[leaf_hash]["total_dur"],
@@ -177,9 +193,11 @@ def _collect_usage_records(leafhash_cores, leafhash_info, aic_theoretical, aiv_t
 
 
 def _table_header():
-    header = (f'{"psgId":>5} | {"type":>4} | {"tasks":>5} | '
-              f'{"used/total (usage%)":>22} | {"avg(us)":>8} | {"total(us)":>9} | '
-              f'{"status":>9} | suggestion')
+    header = (
+        f"{'psgId':>5} | {'type':>4} | {'tasks':>5} | "
+        f"{'used/total (usage%)':>22} | {'avg(us)':>8} | {'total(us)':>9} | "
+        f"{'status':>9} | suggestion"
+    )
     return header
 
 
@@ -191,8 +209,7 @@ def _log_usage_table(records, header):
     not_full_items = []
     for record in records:
         cores_str = (
-            f"{record['used']}/{record['theoretical']} "
-            f"({record['usage_pct']:.0f}%)"
+            f"{record['used']}/{record['theoretical']} ({record['usage_pct']:.0f}%)"
         )
         status = "FULL" if record["is_full"] else "NOT FULL"
         if record["is_full"]:
@@ -200,16 +217,22 @@ def _log_usage_table(records, header):
             full_items.append(record["psgId"])
         else:
             suggestion = "FILL CORES FIRST (reduce TileShape)"
-            not_full_items.append((
-                record["psgId"], record["core_type"], record["used"],
-                record["theoretical"], record["total_dur"],
-            ))
+            not_full_items.append(
+                (
+                    record["psgId"],
+                    record["core_type"],
+                    record["used"],
+                    record["theoretical"],
+                    record["total_dur"],
+                )
+            )
 
         logging.info(
-            f'{record["psgId"]:>5} | {record["core_type"]:>4} | '
-            f'{record["cnt"]:>5} | {cores_str:>22} | '
-            f'{record["average"]:>8.1f} | {record["total_dur"]:>9.1f} | '
-            f'{status:>9} | {suggestion}')
+            f"{record['psgId']:>5} | {record['core_type']:>4} | "
+            f"{record['cnt']:>5} | {cores_str:>22} | "
+            f"{record['average']:>8.1f} | {record['total_dur']:>9.1f} | "
+            f"{status:>9} | {suggestion}"
+        )
     return full_items, not_full_items
 
 
@@ -219,17 +242,25 @@ def _log_summary(header, full_items, not_full_items):
     logging.info("Summary:")
     logging.info(f"  NOT FULL (fill cores first): {len(not_full_items)} leafHash(es)")
     for psg_id, ct, used, total, dur in not_full_items:
-        logging.info(f"    - psgId={psg_id} ({ct}): {used}/{total} cores, total={dur:.1f}us")
+        logging.info(
+            f"    - psgId={psg_id} ({ct}): {used}/{total} cores, total={dur:.1f}us"
+        )
     logging.info(f"  FULL (can merge): {len(full_items)} leafHash(es)")
     for psg_id in full_items:
         logging.info(f"    - psgId={psg_id}")
     logging.info("")
 
     if not_full_items:
-        logging.info("Next step: For NOT FULL leafHashes, use leafhash_to_code.py to map to frontend code,")
-        logging.info("           then adjust set_cube_tile_shapes() to increase task count.")
+        logging.info(
+            "Next step: For NOT FULL leafHashes, use leafhash_to_code.py to map to frontend code,"
+        )
+        logging.info(
+            "           then adjust set_cube_tile_shapes() to increase task count."
+        )
     else:
-        logging.info("Next step: All cores are FULL. Proceed to merge tuning (L1Reuse / CubeNBuffer / VecNBuffer).")
+        logging.info(
+            "Next step: All cores are FULL. Proceed to merge tuning (L1Reuse / CubeNBuffer / VecNBuffer)."
+        )
 
 
 def main():

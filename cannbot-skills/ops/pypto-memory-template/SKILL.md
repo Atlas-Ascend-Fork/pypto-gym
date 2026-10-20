@@ -1,6 +1,6 @@
 ---
 name: pypto-memory-template
-description: Template for the operator-specific memory file (custom/<op>/MEMORY.md). Defines required sections, machine-readable fields, and update cadence.
+description: PyPTO 算子开发中算子专属 memory 文件模板（custom/OP_NAME/MEMORY.md）。定义必备章节、机器可读字段与更新节奏。触发：创建或更新算子的 MEMORY.md 时使用。
 ---
 
 # PyPTO Complex Kernel — Memory Template

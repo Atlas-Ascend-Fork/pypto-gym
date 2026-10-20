@@ -1,3 +1,13 @@
+// ----------------------------------------------------------------------------------------------------------
+// Copyright (c) 2026 Huawei Technologies Co., Ltd.
+// This program is free software, you can redistribute it and/or modify it under the terms and conditions of
+// CANN Open Software License Agreement Version 2.0 (the "License").
+// Please refer to the License for details. You may not use this file except in compliance with the License.
+// THIS SOFTWARE IS PROVIDED ON AN "AS IS" BASIS, WITHOUT WARRANTIES OF ANY KIND, EITHER EXPRESS OR IMPLIED,
+// INCLUDING BUT NOT LIMITED TO NON-INFRINGEMENT, MERCHANTABILITY, OR FITNESS FOR A PARTICULAR PURPOSE.
+// See LICENSE in the root of the software repository for the full text of the License.
+// ----------------------------------------------------------------------------------------------------------
+
 // state-transition-core.ts — schema v2.0
 //
 // Stages are 1..max_stage. max_stage is dynamic (default 7 for the
@@ -13,8 +23,9 @@
 // incremented, stage5_phases is wiped (modules may be re-decomposed),
 // and an entry is appended to rollback_history (append-only).
 //
-// All write actions are restricted to pypto-op-orchestrator at the
-// plugin boundary; this file only enforces the state-machine invariants.
+// All write actions are restricted to pypto-op-orchestrator (or the harness
+// generic executor/verifier agents) at the plugin boundary; this file only
+// enforces the state-machine invariants.
 
 export type TransitionAction =
   | "init"

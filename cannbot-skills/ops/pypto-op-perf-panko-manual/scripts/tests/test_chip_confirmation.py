@@ -28,7 +28,7 @@ import unittest.mock
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent))
-from _support import SCRIPTS_DIR, harness  # noqa: E402
+from _support import harness  # noqa: E402
 
 import chip_profile  # noqa: E402
 
@@ -57,7 +57,6 @@ class FakeAcl:
 
 
 class _Stubbed(unittest.TestCase):
-
     def stub(self, acl):
         mod = types.ModuleType("acl")
         mod.get_soc_name = acl.get_soc_name
@@ -74,12 +73,11 @@ class _Stubbed(unittest.TestCase):
 
 
 class LiveSocTest(_Stubbed):
-
     def test_the_soc_is_resolved_for_the_device_being_measured(self):
-        acl = self.stub(FakeAcl({0: "AscendTestA", 1: "AscendTestB"},
-                                box="AscendTestA"))
-        self.assertEqual(chip_profile.live_soc(1), ("AscendTestB",
-                                                    "acl(device=1)"))
+        acl = self.stub(
+            FakeAcl({0: "AscendTestA", 1: "AscendTestB"}, box="AscendTestA")
+        )
+        self.assertEqual(chip_profile.live_soc(1), ("AscendTestB", "acl(device=1)"))
         self.assertEqual(acl.calls, [1])
 
     def test_a_build_that_rejects_the_device_falls_back_and_says_so(self):
@@ -95,8 +93,7 @@ class LiveSocTest(_Stubbed):
         against itself is not a check.
         """
         self.stub(FakeAcl({0: "AscendTestB"}))
-        with unittest.mock.patch.dict("os.environ",
-                                      {"PANKO_SOC_NAME": "AscendTestA"}):
+        with unittest.mock.patch.dict("os.environ", {"PANKO_SOC_NAME": "AscendTestA"}):
             self.assertEqual(chip_profile.soc_name(0)[1], "PANKO_SOC_NAME")
             self.assertEqual(chip_profile.live_soc(0)[0], "AscendTestB")
 
@@ -108,7 +105,6 @@ class LiveSocTest(_Stubbed):
 
 
 class ConfirmTest(_Stubbed):
-
     def test_the_names_agreeing_is_ok(self):
         self.stub(FakeAcl({0: "AscendTestA"}))
         self.assertEqual(chip_profile.confirm("AscendTestA", 0)[0], "ok")
@@ -134,7 +130,8 @@ class GateTest(unittest.TestCase):
     def test_a_match_records_the_confirmation_and_does_not_stop(self):
         st = self._st()
         bad = harness.confirm_chip(
-            st, "0", probe=lambda e, d: ("ok", "AscendTestA", "acl(device=0)"))
+            st, "0", probe=lambda e, d: ("ok", "AscendTestA", "acl(device=0)")
+        )
         self.assertIsNone(bad)
         c = st["chip_envelope"]["confirmed"]
         self.assertEqual(c["verdict"], "ok")
@@ -145,14 +142,16 @@ class GateTest(unittest.TestCase):
         or only against a name.
         """
         st = self._st()
-        self.assertIsNone(harness.confirm_chip(
-            st, "0", probe=lambda e, d: ("unknown", "", "")))
+        self.assertIsNone(
+            harness.confirm_chip(st, "0", probe=lambda e, d: ("unknown", "", ""))
+        )
         self.assertEqual(st["chip_envelope"]["confirmed"]["verdict"], "unknown")
 
     def test_a_mismatch_halts_and_names_both_chips(self):
         st = self._st()
         bad = harness.confirm_chip(
-            st, "0", probe=lambda e, d: ("mismatch", "AscendTestB", "acl(device=0)"))
+            st, "0", probe=lambda e, d: ("mismatch", "AscendTestB", "acl(device=0)")
+        )
         self.assertIsNotNone(bad)
         self.assertEqual(bad["error"], "chip_mismatch")
         self.assertEqual(bad["expected_soc"], "AscendTestA")
@@ -165,9 +164,12 @@ class GateTest(unittest.TestCase):
         """
         st = self._st()
         bad = harness.confirm_chip(
-            st, "0", probe=lambda e, d: ("mismatch", "AscendTestC", "acl"))
-        self.assertEqual([o["id"] for o in bad["ask_user"]["options"]],
-                         ["re_init", "other_device"])
+            st, "0", probe=lambda e, d: ("mismatch", "AscendTestC", "acl")
+        )
+        self.assertEqual(
+            [opt["id"] for opt in bad["ask_user"]["options"]],
+            ["re_init", "other_device"],
+        )
         self.assertIn("do not choose for them", bad["hint"])
 
     def test_it_reports_where_the_envelope_came_from(self):
@@ -177,7 +179,8 @@ class GateTest(unittest.TestCase):
         """
         st = self._st(source="/p/AscendTestA.ini", via="PANKO_SOC_NAME")
         bad = harness.confirm_chip(
-            st, "0", probe=lambda e, d: ("mismatch", "AscendTestB", "acl"))
+            st, "0", probe=lambda e, d: ("mismatch", "AscendTestB", "acl")
+        )
         self.assertEqual(bad["envelope_source"], "/p/AscendTestA.ini")
         self.assertEqual(st["chip_envelope"]["soc_via"], "PANKO_SOC_NAME")
 
@@ -189,9 +192,15 @@ class GateTest(unittest.TestCase):
         which is what it is.
         """
         st = {"chip_envelope": {"source": "explicit:cli", "cube_cores": 28}}
-        self.assertIsNone(harness.confirm_chip(
-            st, "0", probe=lambda e, d: ("mismatch", "AscendTestA", "acl")
-            if e else ("unknown", "AscendTestA", "acl")))
+        self.assertIsNone(
+            harness.confirm_chip(
+                st,
+                "0",
+                probe=lambda e, d: ("mismatch", "AscendTestA", "acl")
+                if e
+                else ("unknown", "AscendTestA", "acl"),
+            )
+        )
         self.assertEqual(st["chip_envelope"]["confirmed"]["verdict"], "unknown")
 
     def test_a_state_with_no_recorded_soc_is_unknown_not_a_mismatch(self):
@@ -199,13 +208,19 @@ class GateTest(unittest.TestCase):
         against, and inventing a failure there would strand the campaign.
         """
         st = {"chip_envelope": {"source": "transcribed:910B3"}}
-        self.assertIsNone(harness.confirm_chip(
-            st, "0", probe=chip_profile.confirm))
+        self.assertIsNone(harness.confirm_chip(st, "0", probe=chip_profile.confirm))
         self.assertEqual(st["chip_envelope"]["confirmed"]["verdict"], "unknown")
 
     def _st(self, soc="AscendTestA", source="/p/AscendTestA.ini", via="acl"):
-        return {"chip_envelope": {"soc": soc, "source": source, "soc_via": via,
-                                  "cube_cores": 20, "vector_cores": 40}}
+        return {
+            "chip_envelope": {
+                "soc": soc,
+                "source": source,
+                "soc_via": via,
+                "cube_cores": 20,
+                "vector_cores": 40,
+            }
+        }
 
 
 if __name__ == "__main__":

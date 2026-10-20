@@ -1,6 +1,14 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
-# Copyright (c) Huawei Technologies Co., Ltd. 2024-2026. All rights reserved.
+# ----------------------------------------------------------------------------------------------------------
+# Copyright (c) 2026 Huawei Technologies Co., Ltd.
+# This program is free software, you can redistribute it and/or modify it under the terms and conditions of
+# CANN Open Software License Agreement Version 2.0 (the "License").
+# Please refer to the License for details. You may not use this file except in compliance with the License.
+# THIS SOFTWARE IS PROVIDED ON AN "AS IS" BASIS, WITHOUT WARRANTIES OF ANY KIND, EITHER EXPRESS OR IMPLIED,
+# INCLUDING BUT NOT LIMITED TO NON-INFRINGEMENT, MERCHANTABILITY, OR FITNESS FOR A PARTICULAR PURPOSE.
+# See LICENSE in the root of the software repository for the full text of the License.
+# ----------------------------------------------------------------------------------------------------------
 
 from __future__ import annotations
 
@@ -20,27 +28,56 @@ NPU_SMI_BIN = shutil.which("npu-smi") or "npu-smi"
 def _check_npu_available() -> bool:
     """通过 npu-smi info 检测 NPU 环境是否可用"""
     try:
-        result = subprocess.run(
-            [NPU_SMI_BIN, "info"], capture_output=True, timeout=10)
+        result = subprocess.run([NPU_SMI_BIN, "info"], capture_output=True, timeout=10)
         return result.returncode == 0
     except (FileNotFoundError, subprocess.TimeoutExpired):
         return False
 
 
 DTYPE_ALIASES: dict[str, str] = {
-    "float32": "fp32", "fp32": "fp32", "dt_fp32": "fp32", "torch.float32": "fp32",
-    "float16": "fp16", "fp16": "fp16", "dt_fp16": "fp16", "torch.float16": "fp16",
-    "bfloat16": "bf16", "bf16": "bf16", "dt_bf16": "bf16", "torch.bfloat16": "bf16",
-    "float64": "fp64", "fp64": "fp64", "dt_fp64": "fp64", "torch.float64": "fp64",
-    "int8": "int8", "dt_int8": "int8", "torch.int8": "int8",
-    "int16": "int16", "dt_int16": "int16", "torch.int16": "int16",
-    "int32": "int32", "dt_int32": "int32", "torch.int32": "int32",
-    "int64": "int64", "dt_int64": "int64", "torch.int64": "int64",
-    "uint8": "uint8", "dt_uint8": "uint8", "torch.uint8": "uint8",
-    "uint16": "uint16", "dt_uint16": "uint16", "torch.uint16": "uint16",
-    "uint32": "uint32", "dt_uint32": "uint32", "torch.uint32": "uint32",
-    "uint64": "uint64", "dt_uint64": "uint64", "torch.uint64": "uint64",
-    "bool": "bool", "dt_bool": "bool", "torch.bool": "bool",
+    "float32": "fp32",
+    "fp32": "fp32",
+    "dt_fp32": "fp32",
+    "torch.float32": "fp32",
+    "float16": "fp16",
+    "fp16": "fp16",
+    "dt_fp16": "fp16",
+    "torch.float16": "fp16",
+    "bfloat16": "bf16",
+    "bf16": "bf16",
+    "dt_bf16": "bf16",
+    "torch.bfloat16": "bf16",
+    "float64": "fp64",
+    "fp64": "fp64",
+    "dt_fp64": "fp64",
+    "torch.float64": "fp64",
+    "int8": "int8",
+    "dt_int8": "int8",
+    "torch.int8": "int8",
+    "int16": "int16",
+    "dt_int16": "int16",
+    "torch.int16": "int16",
+    "int32": "int32",
+    "dt_int32": "int32",
+    "torch.int32": "int32",
+    "int64": "int64",
+    "dt_int64": "int64",
+    "torch.int64": "int64",
+    "uint8": "uint8",
+    "dt_uint8": "uint8",
+    "torch.uint8": "uint8",
+    "uint16": "uint16",
+    "dt_uint16": "uint16",
+    "torch.uint16": "uint16",
+    "uint32": "uint32",
+    "dt_uint32": "uint32",
+    "torch.uint32": "uint32",
+    "uint64": "uint64",
+    "dt_uint64": "uint64",
+    "torch.uint64": "uint64",
+    "bool": "bool",
+    "dt_bool": "bool",
+    "torch.bool": "bool",
 }
 
 
@@ -116,7 +153,8 @@ def _split_front_matter(content: str) -> tuple[str, str] | None:
     end = content.find("\n---\n", 4)
     if end < 0:
         return None
-    return content[4:end], content[end + 5:]
+    body_start = end + 5
+    return content[4:end], content[body_start:]
 
 
 def _load_yaml_mapping(header: str) -> dict[str, Any] | None:
@@ -211,13 +249,22 @@ def _validate_tolerance(tol: dict[str, Any]) -> list[str]:
             return []  # 匹配成功
 
     # 所有模式都不匹配，列出可接受的模式
-    modes = [f"{s.get('mode', '?')}({', '.join(s.get('required', []))})" for s in schemas]
+    modes = [
+        f"{schema.get('mode', '?')}({', '.join(schema.get('required', []))})"
+        for schema in schemas
+    ]
     return [f"tolerance must match one of: {' | '.join(modes)}"]
 
 
 def _validate_doc_schema(doc_type: str, meta: dict[str, Any]) -> list[str]:
     required: dict[str, list[str]] = {
-        "SPEC": ["schema_version", "op_name", "supported_dtypes", "p0_shapes", "tolerance"],
+        "SPEC": [
+            "schema_version",
+            "op_name",
+            "supported_dtypes",
+            "p0_shapes",
+            "tolerance",
+        ],
         "DESIGN": ["schema_version", "op_name", "dynamic_axes"],
         "API_REPORT": ["schema_version", "op_name"],
     }
@@ -226,7 +273,9 @@ def _validate_doc_schema(doc_type: str, meta: dict[str, Any]) -> list[str]:
         if key not in meta or meta[key] in (None, "", []):
             errors.append(f"missing field: {key}")
     if doc_type == "SPEC":
-        if "supported_dtypes" in meta and not isinstance(meta.get("supported_dtypes"), list):
+        if "supported_dtypes" in meta and not isinstance(
+            meta.get("supported_dtypes"), list
+        ):
             errors.append("invalid type: supported_dtypes must be list")
         if "p0_shapes" in meta and not isinstance(meta.get("p0_shapes"), list):
             errors.append("invalid type: p0_shapes must be list")
@@ -300,7 +349,7 @@ def _extract_tolerance(content: str, key: str) -> list[float]:
 def _extract_shapes_from_text(content: str) -> set[tuple[int, ...]]:
     """从文本中提取 shape 元组，如 [1, 2048, 4096] 或 (1, 2048, 4096)"""
     shapes: set[tuple[int, ...]] = set()
-    for m in re.finditer(r'[\[\(](\d+(?:\s*,\s*\d+)+)[\]\)]', content):
+    for m in re.finditer(r"[\[\(](\d+(?:\s*,\s*\d+)+)[\]\)]", content):
         try:
             dims = tuple(int(x.strip()) for x in m.group(1).split(","))
             if len(dims) >= 2:
@@ -352,7 +401,9 @@ def _extract_section_text(content: str, heading_keyword: str) -> str:
     return "\n".join(buff).strip()
 
 
-def _syntax_error_finding(ctx: CheckContext, rule_id: str, filename: str) -> Optional[Finding]:
+def _syntax_error_finding(
+    ctx: CheckContext, rule_id: str, filename: str
+) -> Optional[Finding]:
     tree = ctx.parse_file(filename)
     if tree is not None:
         return None
@@ -489,9 +540,30 @@ def _extract_design_identifiers(content: str) -> set[str]:
 
     tokens = set(re.findall(r"\b[a-z_][a-z0-9_]{2,}\b", scoped_text))
     blacklist = {
-        "input", "output", "tensor", "shape", "dtype", "dynamic", "algorithm",
-        "default", "stage", "spec", "design", "report", "loop", "tiling",
-        "step", "max", "min", "round", "clamp", "cast", "mul", "add", "sub", "div",
+        "input",
+        "output",
+        "tensor",
+        "shape",
+        "dtype",
+        "dynamic",
+        "algorithm",
+        "default",
+        "stage",
+        "spec",
+        "design",
+        "report",
+        "loop",
+        "tiling",
+        "step",
+        "max",
+        "min",
+        "round",
+        "clamp",
+        "cast",
+        "mul",
+        "add",
+        "sub",
+        "div",
     }
     # 只保留更像“中间变量”的命名（snake_case 优先），减少误报
     return {t for t in tokens if t not in blacklist and ("_" in t or len(t) >= 6)}

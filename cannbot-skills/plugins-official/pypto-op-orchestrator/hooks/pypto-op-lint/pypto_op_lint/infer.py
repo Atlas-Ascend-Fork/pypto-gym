@@ -1,6 +1,14 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
-# Copyright (c) Huawei Technologies Co., Ltd. 2024-2026. All rights reserved.
+# ----------------------------------------------------------------------------------------------------------
+# Copyright (c) 2026 Huawei Technologies Co., Ltd.
+# This program is free software, you can redistribute it and/or modify it under the terms and conditions of
+# CANN Open Software License Agreement Version 2.0 (the "License").
+# Please refer to the License for details. You may not use this file except in compliance with the License.
+# THIS SOFTWARE IS PROVIDED ON AN "AS IS" BASIS, WITHOUT WARRANTIES OF ANY KIND, EITHER EXPRESS OR IMPLIED,
+# INCLUDING BUT NOT LIMITED TO NON-INFRINGEMENT, MERCHANTABILITY, OR FITNESS FOR A PARTICULAR PURPOSE.
+# See LICENSE in the root of the software repository for the full text of the License.
+# ----------------------------------------------------------------------------------------------------------
 
 from __future__ import annotations
 
@@ -64,11 +72,13 @@ def _infer_op_dir(file_path: str) -> Optional[str]:
 
 def _infer_op_name_from_filename(filename: str) -> str:
     if filename.startswith("test_") and filename.endswith(".py"):
-        return filename[len("test_"):-len(".py")]
+        name_start = len("test_")
+        name_end = -len(".py")
+        return filename[name_start:name_end]
     if filename.endswith("_impl.py"):
-        return filename[:-len("_impl.py")]
+        return filename[: -len("_impl.py")]
     if filename.endswith("_golden.py"):
-        return filename[:-len("_golden.py")]
+        return filename[: -len("_golden.py")]
     return ""
 
 
@@ -98,7 +108,9 @@ def _infer_stage_from_filename(filename: str) -> int:
         return 4
     if filename.endswith("_golden.py"):
         return 3
-    if filename.endswith("_impl.py") or (filename.startswith("test_") and filename.endswith(".py")):
+    if filename.endswith("_impl.py") or (
+        filename.startswith("test_") and filename.endswith(".py")
+    ):
         return 5
     return 0
 

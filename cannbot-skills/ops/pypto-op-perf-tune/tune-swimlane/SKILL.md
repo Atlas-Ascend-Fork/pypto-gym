@@ -82,6 +82,8 @@ Stitch 配置决定了多少个 root function 被同时下发调度。
 
 > **⛔ 执行 TileShape 深度调优时，必须加载 [TileShape 深度调优](references/tileshape-deep-tuning.md) 获取完整指南。**
 
+Matmul TileShape 调优决策树（分支细节与示例见该参考 §1）：M、N 足够大（可同时分满两轴）→ Compute Bound，取 mL1=nL1=128~256，最大化算数强度；M 或 N 一维较小 → Memory Bound，小维不切分（mL1=M / nL1=N），kAL1/kBL1 独立配置让大矩阵驻留 L1、最小化重复载入；M、N 均小而 K 极大 → K 轴分核（`enable_split_k=True`）增加并行度。
+
 ### 3. 核使用率分析与负载均衡（合图前置条件）
 
 > **⛔ ⛔ 合图调优前，必须加载 [核使用率分析与负载均衡](references/core-usage-load-balancing.md) 完成核使用率分析。未完成本步骤禁止进入第 4 节合图。**

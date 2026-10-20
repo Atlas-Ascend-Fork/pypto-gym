@@ -43,17 +43,34 @@ harness = importlib.util.module_from_spec(_spec)
 _spec.loader.exec_module(harness)
 
 CHIP_ENVELOPE_OFFLINE = {
-    "ub_kb": 192, "l1_kb": 512, "l0a_kb": 64, "l0b_kb": 64,
-    "l0c_kb": 128, "cube_cores": 20, "vector_cores": 40,
+    "ub_kb": 192,
+    "l1_kb": 512,
+    "l0a_kb": 64,
+    "l0b_kb": 64,
+    "l0c_kb": 128,
+    "cube_cores": 20,
+    "vector_cores": 40,
 }
 
 # Append to any `init` argv in a test.
 CHIP_ARGS = ["--chip-envelope", json.dumps(CHIP_ENVELOPE_OFFLINE)]
 
 
-def write_platform_ini(directory, soc, *, cube=4, vector=8, ub=32768,
-                       l0a=8192, l0b=8192, l0c=16384, l1=65536,
-                       arch="0000", short=None, vector_ub=None):
+def write_platform_ini(
+    directory,
+    soc,
+    *,
+    cube=4,
+    vector=8,
+    ub=32768,
+    l0a=8192,
+    l0b=8192,
+    l0c=16384,
+    l1=65536,
+    arch="0000",
+    short=None,
+    vector_ub=None,
+):
     """Write `<soc>.ini` into `directory` and return its path.
 
     The sections and option names are the ones `chip_profile.FIELDS` and
@@ -81,11 +98,69 @@ def write_platform_ini(directory, soc, *, cube=4, vector=8, ub=32768,
     ]
     if vector_ub is not None:
         body += ["[VectorCoreSpec]", f"ub_size={vector_ub}", ""]
-    body += ["[version]", f"SoC_version={soc}",
-             f"Short_SoC_version={short or soc}", f"NpuArch={arch}", ""]
+    body += [
+        "[version]",
+        f"SoC_version={soc}",
+        f"Short_SoC_version={short or soc}",
+        f"NpuArch={arch}",
+        "",
+    ]
     path = directory / f"{soc}.ini"
     path.write_text("\n".join(body), encoding="utf-8")
     return path
+
+
+def init_argv(op_dir, op_file, *extra, catalog=CATALOG):
+    """The standard `init` argv of a demo campaign: the reference numbers every
+    test shares, `--catalog` included unless catalog=None (the path-resolution
+    tests omit it on purpose, because the default is the thing under test).
+    Extra flags go last.
+    """
+    argv = [
+        "init",
+        "--op-dir",
+        str(op_dir),
+        "--op",
+        "demo",
+        "--p-ref",
+        "100",
+        "--preopt-p",
+        "500",
+    ]
+    if catalog is not None:
+        argv += ["--catalog", str(catalog)]
+    argv += ["--allow-unversioned", "--op-file", str(op_file)]
+    return argv + list(extra)
+
+
+def record_argv(op_dir, digest, p):
+    """The `record` argv of one measured candidate of the demo campaign."""
+    return [
+        "record",
+        "--op-dir",
+        str(op_dir),
+        "--parent",
+        "u1",
+        "--code-hash",
+        digest,
+        "--s",
+        "1",
+        "--p",
+        p,
+    ]
+
+
+def feasible_argv(op_dir, op_file):
+    """The `feasible` argv of one candidate of the demo campaign."""
+    return [
+        "feasible",
+        "--op-dir",
+        str(op_dir),
+        "--parent",
+        "u1",
+        "--op-file",
+        str(op_file),
+    ]
 
 
 def run_cli(*args, cwd=None, env=None):
@@ -98,8 +173,13 @@ def run_cli(*args, cwd=None, env=None):
     symlink -- builds its own argv, because which script runs is the thing those
     tests are about.
     """
-    r = subprocess.run([sys.executable, str(HARNESS), *args],
-                       cwd=cwd, env=env, capture_output=True, text=True)
+    r = subprocess.run(
+        [sys.executable, str(HARNESS), *args],
+        cwd=cwd,
+        env=env,
+        capture_output=True,
+        text=True,
+    )
     return json.loads(r.stdout), r.returncode
 
 
@@ -110,5 +190,8 @@ def file_hash(path):
 
 def read_state(op_dir):
     """The search state the harness wrote under `op_dir`."""
-    return json.loads((Path(op_dir) / "optimization" / "search_state.json")
-                      .read_text(encoding="utf-8"))
+    return json.loads(
+        (Path(op_dir) / "optimization" / "search_state.json").read_text(
+            encoding="utf-8"
+        )
+    )

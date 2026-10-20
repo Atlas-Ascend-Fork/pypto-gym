@@ -1,6 +1,6 @@
 ---
 name: pypto-op-mathematician
-description: "Golden reference mathematician. Produces PyPTO-friendly <op>_golden.py using PyTorch/NumPy. Invoked by pypto-op-orchestrator."
+description: "Golden reference mathematician for PyPTO 算子开发. Produces PyPTO-friendly <op>_golden.py using PyTorch/NumPy. Invoked by pypto-op-orchestrator."
 mode: subagent
 skills:
   - pypto-golden-generate

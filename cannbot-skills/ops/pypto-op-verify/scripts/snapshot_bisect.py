@@ -1,7 +1,15 @@
 #!/usr/bin/env python3
 # coding: utf-8
-# Copyright (c) Huawei Technologies Co., Ltd. 2024-2026. All rights reserved.
-# -----------------------------------------------------------------------------
+# ----------------------------------------------------------------------------------------------------------
+# Copyright (c) 2026 Huawei Technologies Co., Ltd.
+# This program is free software, you can redistribute it and/or modify it under the terms and conditions of
+# CANN Open Software License Agreement Version 2.0 (the "License").
+# Please refer to the License for details. You may not use this file except in compliance with the License.
+# THIS SOFTWARE IS PROVIDED ON AN "AS IS" BASIS, WITHOUT WARRANTIES OF ANY KIND, EITHER EXPRESS OR IMPLIED,
+# INCLUDING BUT NOT LIMITED TO NON-INFRINGEMENT, MERCHANTABILITY, OR FITNESS FOR A PARTICULAR PURPOSE.
+# See LICENSE in the root of the software repository for the full text of the License.
+# ----------------------------------------------------------------------------------------------------------
+
 # snapshot_bisect.py
 #
 # Per-iteration bisection runner for the snapshot automation pipeline.
@@ -26,9 +34,11 @@
 from __future__ import annotations
 
 import argparse
+import ast
 import importlib.util
 import json
 import logging
+import operator
 import os
 import sys
 import time
@@ -64,7 +74,7 @@ def _load_from_path(module_name: str, path: Path):
         raise ImportError(f"cannot load {module_name} from {path}")
     mod = importlib.util.module_from_spec(spec)
     sys.modules[module_name] = mod
-    spec.loader.exec_module(mod)   # type: ignore[union-attr]
+    spec.loader.exec_module(mod)  # type: ignore[union-attr]
     return mod
 
 
@@ -83,16 +93,21 @@ def _set_run_mode(impl_module, mode: str) -> None:
     # attribute does not leak into the rest of this module.
     for name in dir(impl_module):
         obj = getattr(impl_module, name)
-        runtime_options = vars(obj).get("_runtime_options") if hasattr(obj, "__dict__") else None
+        runtime_options = (
+            vars(obj).get("_runtime_options") if hasattr(obj, "__dict__") else None
+        )
         if isinstance(runtime_options, dict):
             runtime_options["run_mode"] = rm.value
             return
-    raise RuntimeError(f"could not locate JIT wrapper in {impl_module.__name__} to set run_mode={mode}")
+    raise RuntimeError(
+        f"could not locate JIT wrapper in {impl_module.__name__} to set run_mode={mode}"
+    )
 
 
 # -----------------------------------------------------------------------------
 # Inspection buffer allocation
 # -----------------------------------------------------------------------------
+
 
 @dataclass(frozen=True)
 class InspectionLayout:
@@ -103,16 +118,58 @@ class InspectionLayout:
     device: str
 
 
+_SHAPE_BINOPS = {
+    ast.Add: operator.add,
+    ast.Sub: operator.sub,
+    ast.Mult: operator.mul,
+    ast.FloorDiv: operator.floordiv,
+    ast.Mod: operator.mod,
+    ast.Pow: operator.pow,
+}
+
+# Cap on ** exponents so a manifest token cannot trigger a huge integer blowup.
+_MAX_POW_EXPONENT = 64
+
+
+def _eval_shape_expr(node, shape_env):
+    """Whitelisted evaluator for shape expressions (Constant/Name/BinOp/UnaryOp)."""
+    if isinstance(node, ast.Expression):
+        return _eval_shape_expr(node.body, shape_env)
+    if isinstance(node, ast.Constant):
+        if isinstance(node.value, bool) or not isinstance(node.value, int):
+            raise ValueError(f"shape constant must be an int, got {node.value!r}")
+        return node.value
+    if isinstance(node, ast.Name):
+        if node.id in shape_env:
+            return int(shape_env[node.id])
+        raise ValueError(f"unknown shape variable {node.id!r}")
+    if isinstance(node, ast.BinOp) and type(node.op) in _SHAPE_BINOPS:
+        left = _eval_shape_expr(node.left, shape_env)
+        right = _eval_shape_expr(node.right, shape_env)
+        if isinstance(node.op, ast.Pow) and abs(right) > _MAX_POW_EXPONENT:
+            raise ValueError(
+                f"exponent {right} exceeds the allowed limit {_MAX_POW_EXPONENT}"
+            )
+        return _SHAPE_BINOPS[type(node.op)](left, right)
+    if isinstance(node, ast.UnaryOp) and isinstance(node.op, (ast.USub, ast.UAdd)):
+        operand = _eval_shape_expr(node.operand, shape_env)
+        return -operand if isinstance(node.op, ast.USub) else operand
+    raise ValueError(f"unsupported shape expression: {ast.dump(node)}")
+
+
 def _resolve_shape_token(token, shape_env):
     if isinstance(token, int):
         return token
     if isinstance(token, str) and token in shape_env:
         return int(shape_env[token])
     try:
-        return int(eval(str(token), {"__builtins__": {}}, shape_env))
+        tree = ast.parse(str(token), mode="eval")
+        return int(_eval_shape_expr(tree, shape_env))
     except Exception as exc:
         keys = list(shape_env.keys())
-        raise ValueError(f"cannot resolve shape token {token!r} with env keys {keys}") from exc
+        raise ValueError(
+            f"cannot resolve shape token {token!r} with env keys {keys}"
+        ) from exc
 
 
 def _alloc_inspection_buffers(intermediates, layout):
@@ -122,9 +179,17 @@ def _alloc_inspection_buffers(intermediates, layout):
     """
     buffers: Dict[str, torch.Tensor] = {}
     for entry in intermediates:
-        concrete = [_resolve_shape_token(token, layout.shape_env) for token in entry["shape"]]
+        concrete = [
+            _resolve_shape_token(shape_token, layout.shape_env)
+            for shape_token in entry["shape"]
+        ]
         if entry["probe_point"] == "inside_nt_loop":
-            shape = [layout.batch_size, layout.head_count, layout.iteration_count, *concrete]
+            shape = [
+                layout.batch_size,
+                layout.head_count,
+                layout.iteration_count,
+                *concrete,
+            ]
         else:
             shape = [layout.batch_size, layout.head_count, *concrete]
         buffers[f"inspection_{entry['name']}"] = torch.zeros(
@@ -136,6 +201,7 @@ def _alloc_inspection_buffers(intermediates, layout):
 # -----------------------------------------------------------------------------
 # Per-mode execution
 # -----------------------------------------------------------------------------
+
 
 def _run_mode(
     impl_module,
@@ -159,7 +225,11 @@ def _run_mode(
             return ("SKIPPED_NO_NPU_ENV", {}, "ASCEND_HOME_PATH not set")
         try:
             if not torch.npu.is_available():
-                return ("SKIPPED_NO_NPU_DEVICE", {}, "torch.npu.is_available() == False")
+                return (
+                    "SKIPPED_NO_NPU_DEVICE",
+                    {},
+                    "torch.npu.is_available() == False",
+                )
         except Exception as e:
             return ("SKIPPED_NO_NPU_DEVICE", {}, f"{e}")
     t0 = time.time()
@@ -175,6 +245,7 @@ def _run_mode(
 # -----------------------------------------------------------------------------
 # Per-iteration compare
 # -----------------------------------------------------------------------------
+
 
 def _comparison_metrics(impl, gold, atol, rtol):
     if impl.numel() == 0:
@@ -217,13 +288,26 @@ def _compare_per_iter(
     impl = impl_tensor.float()
     gold = gold_tensor.float()
     if impl.shape != gold.shape:
-        return [{"iter": -1, "max_abs_diff": float("inf"), "max_rel_diff": float("inf"),
-                 "all_close": False, "error": f"shape mismatch {impl.shape} vs {gold.shape}"}]
+        return [
+            {
+                "iter": -1,
+                "max_abs_diff": float("inf"),
+                "max_rel_diff": float("inf"),
+                "all_close": False,
+                "error": f"shape mismatch {impl.shape} vs {gold.shape}",
+            }
+        ]
 
     if not has_iter_axis:
         max_diff, max_rel, tol_ok = _comparison_metrics(impl, gold, atol, rtol)
-        return [{"iter": -1, "max_abs_diff": max_diff,
-                 "max_rel_diff": max_rel, "all_close": tol_ok}]
+        return [
+            {
+                "iter": -1,
+                "max_abs_diff": max_diff,
+                "max_rel_diff": max_rel,
+                "all_close": tol_ok,
+            }
+        ]
 
     # axis=2 is the NT axis; iterate over it.
     iteration_count = impl.shape[2]
@@ -232,12 +316,14 @@ def _compare_per_iter(
         max_diff, max_rel, tol_ok = _comparison_metrics(
             impl[:, :, iteration], gold[:, :, iteration], atol, rtol
         )
-        out.append({
-            "iter": iteration,
-            "max_abs_diff": max_diff,
-            "max_rel_diff": max_rel,
-            "all_close": tol_ok,
-        })
+        out.append(
+            {
+                "iter": iteration,
+                "max_abs_diff": max_diff,
+                "max_rel_diff": max_rel,
+                "all_close": tol_ok,
+            }
+        )
     return out
 
 
@@ -252,6 +338,7 @@ def _drift_onset(per_iter: List[Dict[str, Any]]) -> Optional[int]:
 # -----------------------------------------------------------------------------
 # Main driver
 # -----------------------------------------------------------------------------
+
 
 @dataclass(frozen=True)
 class SnapshotPaths:
@@ -371,7 +458,9 @@ def _run_modes(request):
     mode_buffers: Dict[str, Dict[str, torch.Tensor]] = {}
     mode_logs: Dict[str, str] = {}
     mode_statuses: Dict[str, str] = {}
-    device_str = f"npu:{request.device}" if os.environ.get("ASCEND_HOME_PATH") else "cpu"
+    device_str = (
+        f"npu:{request.device}" if os.environ.get("ASCEND_HOME_PATH") else "cpu"
+    )
     for mode in request.modes:
         layout = InspectionLayout(
             request.dimensions.batch_size,
@@ -381,7 +470,9 @@ def _run_modes(request):
             device_str,
         )
         buffers = _alloc_inspection_buffers(request.manifest["intermediates"], layout)
-        status, cpu_buffers, log = _run_mode(request.impl_module, mode, request.inputs, buffers)
+        status, cpu_buffers, log = _run_mode(
+            request.impl_module, mode, request.inputs, buffers
+        )
         mode_statuses[mode] = status
         mode_logs[mode] = log
         mode_buffers[mode] = cpu_buffers
@@ -433,7 +524,7 @@ def _intermediate_comparison(entry, context):
         return {
             "status": "GOLDEN_STUB_UNFILLED",
             "note": "module_<k>_inspect returned None for this intermediate. "
-                    "@pypto-op-debugger must fill in the per-iteration capture before bisecting.",
+            "@pypto-op-debugger must fill in the per-iteration capture before bisecting.",
         }
     return {
         "per_mode": {
@@ -462,7 +553,9 @@ def _log_drift_summary(report):
     logging.info("\n%s", "=" * 72)
     logging.info(
         "Drift-onset summary — %s/%s, case %s",
-        report["op"], report["module"], report["case"],
+        report["op"],
+        report["module"],
+        report["case"],
     )
     logging.info("=" * 72)
     header = "{:<28s} " + " ".join("{:>16s}".format(mode) for mode in modes)
@@ -471,19 +564,35 @@ def _log_drift_summary(report):
         if "per_mode" not in entry_report:
             logging.info("%-28s [%s]", name, entry_report.get("status"))
             continue
-        cells = [_summary_cell(entry_report["per_mode"].get(mode, {})) for mode in modes]
-        row = "{:<28s} ".format(name) + " ".join("{:>16s}".format(cell) for cell in cells)
+        per_mode = entry_report["per_mode"]
+        cells = [_summary_cell(per_mode.get(mode, {})) for mode in modes]
+        row = "{:<28s} ".format(name) + " ".join(
+            "{:>16s}".format(cell) for cell in cells
+        )
         logging.info(row)
     logging.info("=" * 72)
     logging.info("Drift-onset interpretation:")
-    logging.info("  * If intermediate X drifts first at iter K under `npu` but passes under `sim`,")
-    logging.info("    the bug is NPU-specific in the expression that produces X (tile/pipe/memory).")
-    logging.info("  * If all intermediates drift under both modes at the same iter, the bug is in")
-    logging.info("    the shared expression upstream — narrow by eyeballing which expression they all depend on.")
+    logging.info(
+        "  * If intermediate X drifts first at iter K under `npu` but passes under `sim`,"
+    )
+    logging.info(
+        "    the bug is NPU-specific in the expression that produces X (tile/pipe/memory)."
+    )
+    logging.info(
+        "  * If all intermediates drift under both modes at the same iter, the bug is in"
+    )
+    logging.info(
+        "    the shared expression upstream — narrow by eyeballing which expression they all depend on."
+    )
 
 
-def run(manifest_path: str | Path, *, modes_override: Optional[List[str]] = None,
-        device: str = "9", verbose: bool = True) -> Dict[str, Any]:
+def run(
+    manifest_path: str | Path,
+    *,
+    modes_override: Optional[List[str]] = None,
+    device: str = "9",
+    verbose: bool = True,
+) -> Dict[str, Any]:
     manifest = load_manifest(manifest_path)
     op, module, case_id = manifest["op"], manifest["module"], manifest["case"]
     modes = modes_override or manifest["modes"]
@@ -493,11 +602,13 @@ def run(manifest_path: str | Path, *, modes_override: Optional[List[str]] = None
     inputs = test_inputs_mod.make_inputs(case)
     dimensions = _inspection_dimensions(case)
 
-    per_mode_status, per_mode_log, per_mode_buffers = _run_modes(ModeRunRequest(
-        manifest, modes, impl_mod, inputs, dimensions, device, verbose
-    ))
+    per_mode_status, per_mode_log, per_mode_buffers = _run_modes(
+        ModeRunRequest(manifest, modes, impl_mod, inputs, dimensions, device, verbose)
+    )
 
-    gold_intermediates = _run_golden_inspection(golden_mod, paths.golden, module, inputs)
+    gold_intermediates = _run_golden_inspection(
+        golden_mod, paths.golden, module, inputs
+    )
 
     comparison_context = ComparisonContext(
         modes,
@@ -509,8 +620,11 @@ def run(manifest_path: str | Path, *, modes_override: Optional[List[str]] = None
         verbose,
     )
     report: Dict[str, Any] = {
-        "op": op, "module": module, "case": case_id,
-        "modes": modes, "per_mode_status": per_mode_status,
+        "op": op,
+        "module": module,
+        "case": case_id,
+        "modes": modes,
+        "per_mode_status": per_mode_status,
         "per_mode_log": per_mode_log,
         "intermediates": _compare_intermediates(
             manifest["intermediates"], comparison_context
@@ -532,17 +646,35 @@ def run(manifest_path: str | Path, *, modes_override: Optional[List[str]] = None
 # CLI
 # -----------------------------------------------------------------------------
 
+
 def _main() -> int:
     logging.basicConfig(level=logging.INFO, format="%(message)s")
     ap = argparse.ArgumentParser(description="Per-iteration snapshot bisection runner.")
-    ap.add_argument("--manifest", required=True, help="path to custom/<op>/_debug/snapshot_manifest.yaml")
-    ap.add_argument("--modes", default=None, help="comma-separated subset of {sim,npu} (default: from manifest)")
+    ap.add_argument(
+        "--manifest",
+        required=True,
+        help="path to custom/<op>/_debug/snapshot_manifest.yaml",
+    )
+    ap.add_argument(
+        "--modes",
+        default=None,
+        help="comma-separated subset of {sim,npu} (default: from manifest)",
+    )
     ap.add_argument("--device", default="9", help="NPU device id (default: 9)")
-    ap.add_argument("--quiet", action="store_true", help="suppress stdout prints; still writes JSON report")
+    ap.add_argument(
+        "--quiet",
+        action="store_true",
+        help="suppress stdout prints; still writes JSON report",
+    )
     args = ap.parse_args()
     modes = args.modes.split(",") if args.modes else None
     try:
-        run(args.manifest, modes_override=modes, device=args.device, verbose=not args.quiet)
+        run(
+            args.manifest,
+            modes_override=modes,
+            device=args.device,
+            verbose=not args.quiet,
+        )
     except Exception as e:
         logging.error("[snapshot_bisect FAILED] %s", e)
         traceback.print_exc()

@@ -32,11 +32,16 @@ import logging
 from collections import defaultdict
 from pathlib import Path
 
-logging.basicConfig(level=logging.INFO, format='%(message)s')
+logging.basicConfig(level=logging.INFO, format="%(message)s")
 
-SKIP_OPS = frozenset([
-    "PHASE1", "PHASE2", "SYNC_SRC", "SYNC_DST",
-])
+SKIP_OPS = frozenset(
+    [
+        "PHASE1",
+        "PHASE2",
+        "SYNC_SRC",
+        "SYNC_DST",
+    ]
+)
 
 
 def _collect_file_lines(operations):
@@ -60,7 +65,8 @@ def _program_entry(func):
         "incasts": func.get("incasts", []),
         "outcasts": func.get("outcasts", []),
         "rawtensor_symbols": [
-            tensor.get("symbol", "") for tensor in func.get("rawtensors", [])
+            tensor.get("symbol", "")
+            for tensor in func.get("rawtensors", [])
             if tensor.get("symbol")
         ],
         "subfunc_symbols": [
@@ -109,10 +115,19 @@ def load_dyn_topo_info(topo_path):
 
 def extract_compute_ops(ops):
     """过滤掉框架指令，保留实际计算指令。"""
-    skip = frozenset([
-        "PHASE1", "PHASE2", "SYNC_SRC", "SYNC_DST",
-        "COPY_IN", "COPY_OUT", "BAR.V", "BAR.M", "EXPAND",
-    ])
+    skip = frozenset(
+        [
+            "PHASE1",
+            "PHASE2",
+            "SYNC_SRC",
+            "SYNC_DST",
+            "COPY_IN",
+            "COPY_OUT",
+            "BAR.V",
+            "BAR.M",
+            "EXPAND",
+        ]
+    )
     return [o for o in ops if o not in skip and not o.startswith("L1_TO_L0")]
 
 
@@ -149,12 +164,11 @@ def format_code_location(code_ranges):
 
 
 def _parse_args():
-    parser = argparse.ArgumentParser(
-        description="leafHash → 前端代码行映射工具"
-    )
+    parser = argparse.ArgumentParser(description="leafHash → 前端代码行映射工具")
     parser.add_argument("output_dir", help="包含 merged_swimlane.json 的输出目录路径")
-    parser.add_argument("--leafhash", default=None,
-                        help="只显示指定 leafHash 的映射（可选）")
+    parser.add_argument(
+        "--leafhash", default=None, help="只显示指定 leafHash 的映射（可选）"
+    )
     parser.add_argument("--json", default=None, help="输出 JSON 文件路径（可选）")
     return parser.parse_args()
 
@@ -204,7 +218,9 @@ def _log_leaf(leaf_hash, info, details):
             f"  Execution count: {details['taskCount']}, "
             f"rootIndex: {details['rootIndex']}, psgId: {details['psgIds']}"
         )
-    compute_text = ' + '.join(details["compute_ops"]) if details["compute_ops"] else '(none)'
+    compute_text = (
+        " + ".join(details["compute_ops"]) if details["compute_ops"] else "(none)"
+    )
     logging.info(f"  Compute ops: {compute_text}")
     logging.info(f"  Code location: {details['location']}")
 

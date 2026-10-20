@@ -109,8 +109,10 @@ class TimeoutConfig:
             try:
                 return float(raw)
             except ValueError:
-                _log.warning(f"[run_kernel_test] WARNING: ${name}={raw!r} "
-                             f"not a number; using default {default}")
+                _log.warning(
+                    f"[run_kernel_test] WARNING: ${name}={raw!r} "
+                    f"not a number; using default {default}"
+                )
                 return default
 
         return cls(
@@ -258,7 +260,8 @@ def _read_proc_stat(pid: str) -> tuple | None:
         return None
     # comm may contain spaces/parens; everything after the last ')' is fields
     # 3..: state ppid pgrp session ... utime(14) stime(15)
-    rest = text[text.rfind(")") + 2:].split()
+    fields_start = text.rfind(")") + 2
+    rest = text[fields_start:].split()
     if len(rest) < 13:
         return None
     state = rest[0]
@@ -293,8 +296,11 @@ def group_cpu_jiffies(pgid: int) -> int:
 def cache_dirs() -> list:
     """Existing compile-cache dirs on the host; empty means CPU-only probing."""
     home = Path.home()
-    candidates = [home / ".ascend", home / ".cache" / "ascend",
-                  home / ".cache" / "cann"]
+    candidates = [
+        home / ".ascend",
+        home / ".cache" / "ascend",
+        home / ".cache" / "cann",
+    ]
     extra = os.environ.get("ASCEND_CACHE_PATH")
     if extra:
         candidates.append(Path(extra))
@@ -312,8 +318,7 @@ def _is_newer_than(path: str, since_epoch: float) -> bool:
 def _dir_has_new_artifacts(since_epoch: float, directory: str) -> bool:
     """True if any file under one cache dir is newer than `since_epoch`."""
     for root, _subdirs, files in os.walk(directory):
-        if any(_is_newer_than(os.path.join(root, name), since_epoch)
-               for name in files):
+        if any(_is_newer_than(os.path.join(root, name), since_epoch) for name in files):
             return True
     return False
 
@@ -329,8 +334,9 @@ def run_probe(child: MonitoredProcess, window: float) -> ProbeResult:
     cpu_before = group_cpu_jiffies(child.pgid)
     dirs = cache_dirs()
     if not dirs:
-        _log.info("[run_kernel_test] no compile-cache dir found; "
-              "CPU-activity criterion only")
+        _log.info(
+            "[run_kernel_test] no compile-cache dir found; CPU-activity criterion only"
+        )
     else:
         _log.info(f"[run_kernel_test] watching compile-cache dirs: {','.join(dirs)}")
 
@@ -348,8 +354,10 @@ def run_probe(child: MonitoredProcess, window: float) -> ProbeResult:
         cache_dirs=dirs,
         finished_during_probe=finished,
     )
-    _log.info(f"[run_kernel_test] probe: cpu_jiffies_delta={result.cpu_jiffies_delta} "
-          f"cache_new_artifacts={int(result.cache_new_artifacts)}")
+    _log.info(
+        f"[run_kernel_test] probe: cpu_jiffies_delta={result.cpu_jiffies_delta} "
+        f"cache_new_artifacts={int(result.cache_new_artifacts)}"
+    )
     return result
 
 
@@ -368,19 +376,25 @@ class FinishedRun:
     command: list
 
 
-def decide_exit_verdict(run: FinishedRun, cfg: TimeoutConfig,
-                        probe: ProbeResult | None = None) -> TestResult:
+def decide_exit_verdict(
+    run: FinishedRun, cfg: TimeoutConfig, probe: ProbeResult | None = None
+) -> TestResult:
     """Verdict for a test that exited on its own."""
     if run.returncode == 0:
         verdict = Verdict.PASS if probe is None else Verdict.PASS_SLOW_COMPILE
         note = ""
         if probe is not None:
-            note = ("finished during probe" if probe.finished_during_probe
-                    else "slow_compile risk: check unroll/codegen bloat")
-        return TestResult(verdict, 0, run.elapsed, run.log_file, run.command,
-                          cfg, probe, note)
-    return TestResult(Verdict.FAIL, run.returncode, run.elapsed, run.log_file,
-                      run.command, cfg, probe)
+            note = (
+                "finished during probe"
+                if probe.finished_during_probe
+                else "slow_compile risk: check unroll/codegen bloat"
+            )
+        return TestResult(
+            verdict, 0, run.elapsed, run.log_file, run.command, cfg, probe, note
+        )
+    return TestResult(
+        Verdict.FAIL, run.returncode, run.elapsed, run.log_file, run.command, cfg, probe
+    )
 
 
 # --------------------------------------------------------------------------
@@ -396,23 +410,28 @@ def run_test(command: list, log_prefix: str, cfg: TimeoutConfig) -> TestResult:
     """
     log_file = Path(f"{log_prefix}.log")
     _log.info(f"[run_kernel_test] cmd: {' '.join(command)}")
-    _log.info(f"[run_kernel_test] log: {log_file}  timeout={cfg.initial:.0f}s "
-          f"probe={cfg.probe:.0f}s extend={cfg.extend:.0f}s")
+    _log.info(
+        f"[run_kernel_test] log: {log_file}  timeout={cfg.initial:.0f}s "
+        f"probe={cfg.probe:.0f}s extend={cfg.extend:.0f}s"
+    )
 
     start = time.time()
     child = MonitoredProcess(command, log_file)
 
     def finished_run() -> FinishedRun:
-        return FinishedRun(child.returncode, time.time() - start,
-                           str(log_file), command)
+        return FinishedRun(
+            child.returncode, time.time() - start, str(log_file), command
+        )
 
     try:
         if child.wait_up_to(cfg.initial):
             return decide_exit_verdict(finished_run(), cfg)
 
         # ---- initial timeout hit: enter the liveness probe ----
-        _log.info(f"[run_kernel_test] initial timeout {cfg.initial:.0f}s hit; "
-              f"probing liveness for {cfg.probe:.0f}s ...")
+        _log.info(
+            f"[run_kernel_test] initial timeout {cfg.initial:.0f}s hit; "
+            f"probing liveness for {cfg.probe:.0f}s ..."
+        )
         probe = run_probe(child, cfg.probe)
 
         if probe.finished_during_probe:
@@ -421,8 +440,10 @@ def run_test(command: list, log_prefix: str, cfg: TimeoutConfig) -> TestResult:
         if probe.alive:
             # Host side is alive -> genuine slow compile; extend ONCE.
             _log.info("COMPILE_SLOW")
-            _log.info(f"[run_kernel_test] liveness detected -> COMPILE_SLOW; "
-                  f"extending once by {cfg.extend:.0f}s (one-shot)")
+            _log.info(
+                f"[run_kernel_test] liveness detected -> COMPILE_SLOW; "
+                f"extending once by {cfg.extend:.0f}s (one-shot)"
+            )
             if child.wait_up_to(cfg.extend):
                 return decide_exit_verdict(finished_run(), cfg, probe)
             _log.info("[run_kernel_test] still stuck after one extension -> stall")
@@ -431,11 +452,18 @@ def run_test(command: list, log_prefix: str, cfg: TimeoutConfig) -> TestResult:
 
         child.kill_tree()
         return TestResult(
-            Verdict.JIT_STALL_SUSPECTED, STALL_EXIT_CODE, time.time() - start,
-            str(log_file), command, cfg, probe,
-            note=(f"host cpu_delta={probe.cpu_jiffies_delta} "
-                  f"cache_new={int(probe.cache_new_artifacts)}; "
-                  "report failure_category=jit_stall"),
+            Verdict.JIT_STALL_SUSPECTED,
+            STALL_EXIT_CODE,
+            time.time() - start,
+            str(log_file),
+            command,
+            cfg,
+            probe,
+            note=(
+                f"host cpu_delta={probe.cpu_jiffies_delta} "
+                f"cache_new={int(probe.cache_new_artifacts)}; "
+                "report failure_category=jit_stall"
+            ),
         )
     finally:
         if child.running:
@@ -460,29 +488,48 @@ def _self_test_scenarios(fake_cache: Path) -> list:
     py = sys.executable
     return [
         ("normal_pass", [py, "-c", "pass"], {}, Verdict.PASS, 0),
-        ("precision_fail", [py, "-c", "import sys; sys.exit(1)"], {},
-         Verdict.FAIL, 1),
-        ("stall_killed", [py, "-c", "import time; time.sleep(60)"], {},
-         Verdict.JIT_STALL_SUSPECTED, STALL_EXIT_CODE),
+        ("precision_fail", [py, "-c", "import sys; sys.exit(1)"], {}, Verdict.FAIL, 1),
+        (
+            "stall_killed",
+            [py, "-c", "import time; time.sleep(60)"],
+            {},
+            Verdict.JIT_STALL_SUSPECTED,
+            STALL_EXIT_CODE,
+        ),
         # Busy CPU through the probe window -> COMPILE_SLOW -> finishes
         # inside the one-shot extension -> PASS_SLOW_COMPILE.
-        ("slow_compile_extend",
-         [py, "-c", "import time\n"
-                    "t0 = time.time()\n"
-                    "while time.time() - t0 < 4.5:\n"
-                    "    pass"],
-         {}, Verdict.PASS_SLOW_COMPILE, 0),
+        (
+            "slow_compile_extend",
+            [
+                py,
+                "-c",
+                "import time\n"
+                "t0 = time.time()\n"
+                "while time.time() - t0 < 4.5:\n"
+                "    pass",
+            ],
+            {},
+            Verdict.PASS_SLOW_COMPILE,
+            0,
+        ),
         # No CPU burn, but a cache artifact appears during the probe window
         # -> cache criterion fallback counts as liveness -> COMPILE_SLOW ->
         # finishes inside the extension -> PASS_SLOW_COMPILE.
-        ("cache_fallback",
-         [py, "-c", "import pathlib, sys, time\n"
-                    "time.sleep(2.5)\n"
-                    "pathlib.Path(sys.argv[1], 'kernel.o').write_text('x')\n"
-                    "time.sleep(3.0)",
-          str(fake_cache)],
-         {"ASCEND_CACHE_PATH": str(fake_cache)},
-         Verdict.PASS_SLOW_COMPILE, 0),
+        (
+            "cache_fallback",
+            [
+                py,
+                "-c",
+                "import pathlib, sys, time\n"
+                "time.sleep(2.5)\n"
+                "pathlib.Path(sys.argv[1], 'kernel.o').write_text('x')\n"
+                "time.sleep(3.0)",
+                str(fake_cache),
+            ],
+            {"ASCEND_CACHE_PATH": str(fake_cache)},
+            Verdict.PASS_SLOW_COMPILE,
+            0,
+        ),
     ]
 
 
@@ -495,8 +542,9 @@ def _restore_env(saved: dict) -> None:
             os.environ[key] = old
 
 
-def _run_scenario(argv: list, env_add: dict, log_prefix: str,
-                  cfg: TimeoutConfig) -> TestResult:
+def _run_scenario(
+    argv: list, env_add: dict, log_prefix: str, cfg: TimeoutConfig
+) -> TestResult:
     """Run one scenario with the env additions temporarily applied."""
     saved = {key: os.environ.get(key) for key in env_add}
     os.environ.update(env_add)
@@ -512,10 +560,12 @@ def _check_scenario(scenario: tuple, work: Path, cfg: TimeoutConfig) -> bool:
     result = _run_scenario(argv, env_add, str(work / name), cfg)
     emit_result(result, as_json=False)
     ok = result.verdict == want_verdict and result.exit_code == want_exit
-    _log.error(f"SELFTEST {'PASS' if ok else 'FAIL'} {name}: "
-          f"verdict={result.verdict.value} "
-          f"(want {want_verdict.value}) exit={result.exit_code} "
-          f"(want {want_exit})")
+    _log.error(
+        f"SELFTEST {'PASS' if ok else 'FAIL'} {name}: "
+        f"verdict={result.verdict.value} "
+        f"(want {want_verdict.value}) exit={result.exit_code} "
+        f"(want {want_exit})"
+    )
     # Structured result must round-trip through JSON.
     json.dumps(result.to_dict())
     return ok
@@ -553,8 +603,10 @@ def _self_test() -> int:
         except OSError:
             pass
 
-    _log.error(f"SELFTEST {'PASS' if not bad else 'FAIL'}: "
-          f"{len(scenarios) - bad}/{len(scenarios)} scenarios passed")
+    _log.error(
+        f"SELFTEST {'PASS' if not bad else 'FAIL'}: "
+        f"{len(scenarios) - bad}/{len(scenarios)} scenarios passed"
+    )
     return 1 if bad else 0
 
 
@@ -570,26 +622,33 @@ def main() -> int:
     command: list = []
     if "--" in argv:
         sep = argv.index("--")
-        argv, command = argv[:sep], argv[sep + 1:]
+        cmd_start = sep + 1
+        argv, command = argv[:sep], argv[cmd_start:]
 
     ap = argparse.ArgumentParser(
         description="Two-tier timeout + liveness-probe wrapper for device-side "
-                    "kernel tests (see module docstring).")
-    ap.add_argument("log_prefix", nargs="?",
-                    help="prefix for the <prefix>.log output file")
-    ap.add_argument("--json", action="store_true",
-                    help="print a machine-readable JSON result before the "
-                         "RESULT line")
-    ap.add_argument("--self-test", action="store_true",
-                    help="run the host-side self-test (fake commands, no device)")
+        "kernel tests (see module docstring)."
+    )
+    ap.add_argument(
+        "log_prefix", nargs="?", help="prefix for the <prefix>.log output file"
+    )
+    ap.add_argument(
+        "--json",
+        action="store_true",
+        help="print a machine-readable JSON result before the RESULT line",
+    )
+    ap.add_argument(
+        "--self-test",
+        action="store_true",
+        help="run the host-side self-test (fake commands, no device)",
+    )
     args = ap.parse_args(argv)
 
     if args.self_test:
         return _self_test()
 
     if not args.log_prefix or not command:
-        ap.error("usage: run_kernel_test.py <log_prefix> [--json] -- "
-                 "<test command...>")
+        ap.error("usage: run_kernel_test.py <log_prefix> [--json] -- <test command...>")
 
     cfg = TimeoutConfig.from_env()
     result = run_test(command, args.log_prefix, cfg)

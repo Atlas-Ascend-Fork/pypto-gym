@@ -12,6 +12,7 @@
 PyPTO 精度检查点文件对比工具
 自动检测检查点并对比 jit 和 golden 的中间结果
 """
+
 import argparse
 import glob
 import logging
@@ -26,28 +27,40 @@ import torch
 # PyPTO 数据类型映射
 # 参考：https://raw.gitcode.com/cann/pypto/raw/master/docs/zh/api/datatype/DataType.md
 DTYPE_MAP = {
-    0: ('int4', torch.int8, 1),            # DT_INT4: 4位有符号整数，2个元素打包成1个int8存储
-    1: ('int8', torch.int8, 1),            # DT_INT8: 8位有符号整数
-    2: ('int16', torch.int16, 2),          # DT_INT16: 16位有符号整数
-    3: ('int32', torch.int32, 4),          # DT_INT32: 32位有符号整数
-    4: ('int64', torch.int64, 8),          # DT_INT64: 64位有符号整数
-    5: ('fp8', torch.float8_e4m3fn, 1),    # DT_FP8: 8位浮点数（通用）
-    6: ('fp16', torch.float16, 2),         # DT_FP16: 16位半精度浮点数
-    7: ('fp32', torch.float32, 4),         # DT_FP32: 32位单精度浮点数
-    8: ('bf16', torch.bfloat16, 2),        # DT_BF16: 16位Brain Float格式
-    9: ('hf4', torch.uint8, 1),            # DT_HF4: 4位Half Float格式，2个元素打包成1个uint8存储
-    10: ('hf8', torch.uint8, 1),           # DT_HF8: 8位Half Float格式，原始字节存储
-    11: ('uint8', torch.uint8, 1),         # DT_UINT8: 8位无符号整数
-    12: ('uint16', torch.uint16, 2),       # DT_UINT16: 16位无符号整数
-    13: ('uint32', torch.uint32, 4),       # DT_UINT32: 32位无符号整数
-    14: ('uint64', torch.uint64, 8),       # DT_UINT64: 64位无符号整数
-    15: ('bool', torch.bool, 1),           # DT_BOOL: 布尔类型
-    16: ('double', torch.float64, 8),      # DT_DOUBLE: 64位双精度浮点数
-    17: ('fp8_e4m3', torch.float8_e4m3fn, 1),  # DT_FP8E4M3: 8位浮点数，4位指数，3位尾数
-    18: ('fp8_e5m2', torch.float8_e5m2, 1),    # DT_FP8E5M2: 8位浮点数，5位指数，2位尾数
-    19: ('fp8_e8m0', torch.uint8, 1),          # DT_FP8E8M0: 8位浮点数，8位指数，0位尾数（scale专用）
-    20: ('fp4_e2m1x2', torch.uint8, 1),        # DT_FP4_E2M1X2: 4位浮点数，2位指数，1位尾数，x2打包
-    21: ('fp4_e1m2x2', torch.uint8, 1),        # DT_FP4_E1M2X2: 4位浮点数，1位指数，2位尾数，x2打包
+    0: ("int4", torch.int8, 1),  # DT_INT4: 4位有符号整数，2个元素打包成1个int8存储
+    1: ("int8", torch.int8, 1),  # DT_INT8: 8位有符号整数
+    2: ("int16", torch.int16, 2),  # DT_INT16: 16位有符号整数
+    3: ("int32", torch.int32, 4),  # DT_INT32: 32位有符号整数
+    4: ("int64", torch.int64, 8),  # DT_INT64: 64位有符号整数
+    5: ("fp8", torch.float8_e4m3fn, 1),  # DT_FP8: 8位浮点数（通用）
+    6: ("fp16", torch.float16, 2),  # DT_FP16: 16位半精度浮点数
+    7: ("fp32", torch.float32, 4),  # DT_FP32: 32位单精度浮点数
+    8: ("bf16", torch.bfloat16, 2),  # DT_BF16: 16位Brain Float格式
+    9: ("hf4", torch.uint8, 1),  # DT_HF4: 4位Half Float格式，2个元素打包成1个uint8存储
+    10: ("hf8", torch.uint8, 1),  # DT_HF8: 8位Half Float格式，原始字节存储
+    11: ("uint8", torch.uint8, 1),  # DT_UINT8: 8位无符号整数
+    12: ("uint16", torch.uint16, 2),  # DT_UINT16: 16位无符号整数
+    13: ("uint32", torch.uint32, 4),  # DT_UINT32: 32位无符号整数
+    14: ("uint64", torch.uint64, 8),  # DT_UINT64: 64位无符号整数
+    15: ("bool", torch.bool, 1),  # DT_BOOL: 布尔类型
+    16: ("double", torch.float64, 8),  # DT_DOUBLE: 64位双精度浮点数
+    17: ("fp8_e4m3", torch.float8_e4m3fn, 1),  # DT_FP8E4M3: 8位浮点数，4位指数，3位尾数
+    18: ("fp8_e5m2", torch.float8_e5m2, 1),  # DT_FP8E5M2: 8位浮点数，5位指数，2位尾数
+    19: (
+        "fp8_e8m0",
+        torch.uint8,
+        1,
+    ),  # DT_FP8E8M0: 8位浮点数，8位指数，0位尾数（scale专用）
+    20: (
+        "fp4_e2m1x2",
+        torch.uint8,
+        1,
+    ),  # DT_FP4_E2M1X2: 4位浮点数，2位指数，1位尾数，x2打包
+    21: (
+        "fp4_e1m2x2",
+        torch.uint8,
+        1,
+    ),  # DT_FP4_E1M2X2: 4位浮点数，1位指数，2位尾数，x2打包
 }
 
 UNSUPPORTED_PACKED_DTYPES = {0, 9, 20, 21}
@@ -55,22 +68,22 @@ UNSUPPORTED_PACKED_DTYPES = {0, 9, 20, 21}
 # 容差标准映射表（基于 PyPTO 代码库实践）
 # 参考：verify.md、examples、models 中的实际使用标准
 TOLERANCE_MAP = {
-    0: (0, 1e-4),      # INT4:  整数类型，允许极少误差点
-    1: (0, 1e-4),      # INT8:  整数类型，允许极少误差点
-    2: (0, 1e-4),      # INT16: 整数类型，允许极少误差点
-    3: (0, 1e-4),      # INT32: 整数类型，允许极少误差点
-    4: (0, 1e-4),      # INT64: 整数类型，允许极少误差点
-    5: (1e-1, 1e-2),   # FP8:   8位浮点，量化场景精度较低
-    6: (1e-3, 1e-3),   # FP16: 半精度浮点，mantissa=10bits
-    7: (1e-3, 1e-4),   # FP32: 单精度浮点，高精度基准
-    8: (5e-3, 5e-2),   # BF16: BFloat16，mantissa=7bits，广泛使用于attention
-    9: (1e-1, 1e-2),   # HF4:  4位Half Float，低精度量化
+    0: (0, 1e-4),  # INT4:  整数类型，允许极少误差点
+    1: (0, 1e-4),  # INT8:  整数类型，允许极少误差点
+    2: (0, 1e-4),  # INT16: 整数类型，允许极少误差点
+    3: (0, 1e-4),  # INT32: 整数类型，允许极少误差点
+    4: (0, 1e-4),  # INT64: 整数类型，允许极少误差点
+    5: (1e-1, 1e-2),  # FP8:   8位浮点，量化场景精度较低
+    6: (1e-3, 1e-3),  # FP16: 半精度浮点，mantissa=10bits
+    7: (1e-3, 1e-4),  # FP32: 单精度浮点，高精度基准
+    8: (5e-3, 5e-2),  # BF16: BFloat16，mantissa=7bits，广泛使用于attention
+    9: (1e-1, 1e-2),  # HF4:  4位Half Float，低精度量化
     10: (1e-1, 1e-2),  # HF8:  8位Half Float，低精度量化
-    11: (0, 1e-4),     # UINT8:  无符号整数，允许极少误差点
-    12: (0, 1e-4),     # UINT16: 无符号整数，允许极少误差点
-    13: (0, 1e-4),     # UINT32: 无符号整数，允许极少误差点
-    14: (0, 1e-4),     # UINT64: 无符号整数，允许极少误差点
-    15: (0, 1e-4),     # BOOL:   布尔类型，允许极少误差点
+    11: (0, 1e-4),  # UINT8:  无符号整数，允许极少误差点
+    12: (0, 1e-4),  # UINT16: 无符号整数，允许极少误差点
+    13: (0, 1e-4),  # UINT32: 无符号整数，允许极少误差点
+    14: (0, 1e-4),  # UINT64: 无符号整数，允许极少误差点
+    15: (0, 1e-4),  # BOOL:   布尔类型，允许极少误差点
     16: (1e-6, 1e-6),  # DOUBLE: 64位双精度浮点，高精度
     17: (1e-1, 1e-2),  # FP8E4M3: 8位浮点(4位指数,3位尾数)，量化场景
     18: (1e-1, 1e-2),  # FP8E5M2: 8位浮点(5位指数,2位尾数)，量化场景
@@ -82,8 +95,8 @@ TOLERANCE_MAP = {
 # 初始化日志
 logging.basicConfig(
     level=logging.INFO,
-    format='%(message)s',
-    handlers=[logging.StreamHandler(sys.stdout)]
+    format="%(message)s",
+    handlers=[logging.StreamHandler(sys.stdout)],
 )
 logger = logging.getLogger(__name__)
 
@@ -108,7 +121,9 @@ def find_latest_output_dir(work_dir="."):
     if not output_dirs:
         return None
 
-    output_dirs.sort(key=lambda x: os.path.getmtime(os.path.join(output_base, x)), reverse=True)
+    output_dirs.sort(
+        key=lambda x: os.path.getmtime(os.path.join(output_base, x)), reverse=True
+    )
     return output_dirs[0]
 
 
@@ -122,14 +137,14 @@ def scan_checkpoints_from_dir(tensor_dir):
 
     for data_file in data_files:
         basename = os.path.basename(data_file)
-        parts = basename.rsplit('_', 1)
-        if len(parts) == 2 and parts[1].replace('.data', '').isdigit():
+        parts = basename.rsplit("_", 1)
+        if len(parts) == 2 and parts[1].replace(".data", "").isdigit():
             checkpoint_name = parts[0]
             checkpoints.add(checkpoint_name)
 
     def get_sort_key(name):
-        match = re.match(r'^(\d+)', name)
-        return int(match.group(1)) if match else float('inf')
+        match = re.match(r"^(\d+)", name)
+        return int(match.group(1)) if match else float("inf")
 
     return sorted(list(checkpoints), key=get_sort_key)
 
@@ -146,18 +161,18 @@ def _read_jit_metadata(csv_file):
     shape = None
     if not os.path.exists(csv_file):
         return dtype, shape
-    with open(csv_file, 'r', encoding='utf-8') as metadata:
+    with open(csv_file, "r", encoding="utf-8") as metadata:
         for line in metadata:
-            if line.startswith('dtype,'):
-                dtype = int(line.split(',')[1].strip())
-            elif line.startswith('shape,'):
-                shape = tuple(map(int, line.split(',')[1].strip().split('x')))
+            if line.startswith("dtype,"):
+                dtype = int(line.split(",")[1].strip())
+            elif line.startswith("shape,"):
+                shape = tuple(map(int, line.split(",")[1].strip().split("x")))
     return dtype, shape
 
 
 def read_jit_data(filename):
     """读取 jit 生成的数据文件，自动检测数据类型"""
-    dtype, shape = _read_jit_metadata(filename.replace('.data', '.csv'))
+    dtype, shape = _read_jit_metadata(filename.replace(".data", ".csv"))
 
     if dtype is None:
         logger.warning("  Warning: CSV file not found, cannot determine data type")
@@ -168,7 +183,9 @@ def read_jit_data(filename):
         return None, None
     if dtype in UNSUPPORTED_PACKED_DTYPES:
         type_name = DTYPE_MAP[dtype][0]
-        logger.warning(f"  Warning: unpacking data type {type_name} not supported yet (dtype={dtype})")
+        logger.warning(
+            f"  Warning: unpacking data type {type_name} not supported yet (dtype={dtype})"
+        )
         return None, dtype
 
     _type_name, torch_dtype, _bytes_per_element = DTYPE_MAP[dtype]
@@ -181,17 +198,18 @@ def read_jit_data(filename):
         if data_tensor.numel() != expected_elements:
             logger.warning(
                 "  Warning: data element count does not match shape: file=%s, shape=%s",
-                data_tensor.numel(), shape,
+                data_tensor.numel(),
+                shape,
             )
             return None, dtype
         data_tensor = data_tensor.reshape(shape)
-    
+
     return data_tensor, dtype
 
 
 def read_golden_data(filename, dtype):
     """读取 golden 数据文件（仅支持 .pt 格式）"""
-    golden_tensor = torch.load(filename, map_location='cpu')
+    golden_tensor = torch.load(filename, map_location="cpu", weights_only=True)
     return golden_tensor
 
 
@@ -216,11 +234,15 @@ def _resolve_comparison_options(options, legacy_values, legacy_options):
 def _check_tensor_layout(jit_data, golden_data, name):
     if jit_data.dtype != golden_data.dtype:
         logger.warning(f"\n{name}: ✗ FAIL")
-        logger.warning(f"  Data type mismatch: jit={jit_data.dtype}, golden={golden_data.dtype}")
+        logger.warning(
+            f"  Data type mismatch: jit={jit_data.dtype}, golden={golden_data.dtype}"
+        )
         return False
     if jit_data.shape != golden_data.shape:
         logger.warning(f"\n{name}: ✗ FAIL")
-        logger.warning(f"  Data shape mismatch: jit={jit_data.shape}, golden={golden_data.shape}")
+        logger.warning(
+            f"  Data shape mismatch: jit={jit_data.shape}, golden={golden_data.shape}"
+        )
         return False
     return True
 
@@ -273,7 +295,9 @@ def _calculate_comparison(jit_data, golden_data, rtol, atol):
     rel_diff = torch.where(eligible_mask, 2 * diff / abs_sum, 0.0)
     relative_error = float("inf") if invalid_count else torch.max(rel_diff).item()
     error_threshold = max(16, int((total_count - zero_count) ** 0.5) // 2)
-    error_threshold = min(error_threshold, int((total_count - zero_count) * min(rtol, atol)))
+    error_threshold = min(
+        error_threshold, int((total_count - zero_count) * min(rtol, atol))
+    )
     return {
         "total_count": total_count,
         "warn_count": warn_count,
@@ -295,11 +319,16 @@ def _log_comparison(name, stats, options, rtol, atol):
     # Warn告警点(允许有error_threshold个离群值)； Fail失败点(差异过大直接失败)
     logger.info(
         "  Warn: %s/%s, Fail: %s/%s",
-        stats["warn_count"], stats["total_count"], stats["fail_count"], stats["total_count"],
+        stats["warn_count"],
+        stats["total_count"],
+        stats["fail_count"],
+        stats["total_count"],
     )
     logger.info(f"  Threshold: warn<={stats['error_threshold']}, fail=0")
     logger.info(f"  Tolerance: rtol={rtol}, atol={atol} (dtype={options.dtype})")
-    logger.info(f"  Actual: rtol={stats['actual_rtol']:.6f}, atol={stats['actual_atol']:.6f}")
+    logger.info(
+        f"  Actual: rtol={stats['actual_rtol']:.6f}, atol={stats['actual_atol']:.6f}"
+    )
 
 
 def _log_mismatched_elements(jit_data, golden_data, total_count):
@@ -311,7 +340,10 @@ def _log_mismatched_elements(jit_data, golden_data, total_count):
         golden_val = golden_flat[index].item()
         logger.info(
             "    [%d] jit=%.6f, golden=%.6f, diff=%.6f",
-            index, jit_val, golden_val, abs(jit_val - golden_val),
+            index,
+            jit_val,
+            golden_val,
+            abs(jit_val - golden_val),
         )
 
 
@@ -329,7 +361,9 @@ def compare_with_golden(
     if options.dtype is None:
         rtol, atol = 1e-3, 1e-3
     else:
-        rtol, atol = get_tolerance_by_dtype(options.dtype, options.custom_rtol, options.custom_atol)
+        rtol, atol = get_tolerance_by_dtype(
+            options.dtype, options.custom_rtol, options.custom_atol
+        )
     if options.verbose:
         logger.info(f"  Data type: {jit_data.dtype}")
         logger.info(f"  Data shape: {jit_data.shape}")
@@ -362,25 +396,35 @@ def analyze_results(results):
     if first_fail_idx == 0:
         logger.info(f"✗ The first checkpoint ({fail_name}) already mismatches")
         logger.info("→ The problem may be in: input data or the first computation step")
-        logger.info("→ Suggestion: check whether the input data is correct, or insert checkpoints earlier")
+        logger.info(
+            "→ Suggestion: check whether the input data is correct, or insert checkpoints earlier"
+        )
     else:
         prev_name = results[first_fail_idx - 1][0]
         logger.info(f"✗ Checkpoint {prev_name} matches, but {fail_name} does not")
-        logger.info(f"→ Problem location: operations between {prev_name} and {fail_name}")
-        logger.info("→ Suggestion: insert new checkpoints between these two checkpoints to further locate the problem")
+        logger.info(
+            f"→ Problem location: operations between {prev_name} and {fail_name}"
+        )
+        logger.info(
+            "→ Suggestion: insert new checkpoints between these two checkpoints to further locate the problem"
+        )
 
 
 def setup_logging(work_dir, golden_dir):
     """Configure log output"""
-    log_formatter = logging.Formatter('%(message)s')
+    log_formatter = logging.Formatter("%(message)s")
     console_handler = logging.StreamHandler(sys.stdout)
     console_handler.setFormatter(log_formatter)
 
-    operator_dir = os.path.dirname(os.path.abspath(golden_dir)) if golden_dir else os.path.abspath(work_dir)
+    operator_dir = (
+        os.path.dirname(os.path.abspath(golden_dir))
+        if golden_dir
+        else os.path.abspath(work_dir)
+    )
     operator_name = os.path.basename(operator_dir)
-    log_file = os.path.join(operator_dir, f'{operator_name}_verify_result.log')
+    log_file = os.path.join(operator_dir, f"{operator_name}_verify_result.log")
 
-    file_handler = logging.FileHandler(log_file, mode='w', encoding='utf-8')
+    file_handler = logging.FileHandler(log_file, mode="w", encoding="utf-8")
     file_handler.setFormatter(log_formatter)
 
     logger.handlers = [console_handler, file_handler]
@@ -389,14 +433,40 @@ def setup_logging(work_dir, golden_dir):
 
 
 def _parse_args():
-    parser = argparse.ArgumentParser(description='PyPTO 精度检查点文件对比工具')
-    parser.add_argument('--work-dir', '-w', default='.', help='工作目录（默认为当前目录）')
-    parser.add_argument('--output-dir', '-o', default=None, help='指定 output 目录名（不指定则自动检测最新的）')
-    parser.add_argument('--golden-dir', '-g', default=None, help='指定 golden 文件所在目录（默认从工作目录查找）')
-    parser.add_argument('--verbose', '-v', action='store_true', help='显示详细的元素级对比')
-    parser.add_argument('--list', '-l', action='store_true', help='只列出检查点，不进行对比')
-    parser.add_argument('--rtol', type=float, default=None, help='自定义相对容差（用于量化场景，推荐值：0.0078125）')
-    parser.add_argument('--atol', type=float, default=None, help='自定义绝对容差（用于量化场景，推荐值：0.0001）')
+    parser = argparse.ArgumentParser(description="PyPTO 精度检查点文件对比工具")
+    parser.add_argument(
+        "--work-dir", "-w", default=".", help="工作目录（默认为当前目录）"
+    )
+    parser.add_argument(
+        "--output-dir",
+        "-o",
+        default=None,
+        help="指定 output 目录名（不指定则自动检测最新的）",
+    )
+    parser.add_argument(
+        "--golden-dir",
+        "-g",
+        default=None,
+        help="指定 golden 文件所在目录（默认从工作目录查找）",
+    )
+    parser.add_argument(
+        "--verbose", "-v", action="store_true", help="显示详细的元素级对比"
+    )
+    parser.add_argument(
+        "--list", "-l", action="store_true", help="只列出检查点，不进行对比"
+    )
+    parser.add_argument(
+        "--rtol",
+        type=float,
+        default=None,
+        help="自定义相对容差（用于量化场景，推荐值：0.0078125）",
+    )
+    parser.add_argument(
+        "--atol",
+        type=float,
+        default=None,
+        help="自定义绝对容差（用于量化场景，推荐值：0.0001）",
+    )
     return parser.parse_args()
 
 
@@ -416,7 +486,9 @@ def _compare_checkpoint(tensor_dir, golden_base_dir, checkpoint_name, options):
         return False
     golden_file, golden_pattern = _find_golden_file(golden_base_dir, checkpoint_name)
     if golden_file is None:
-        logger.warning(f"\n{checkpoint_name}: ✗ golden file not found ({golden_pattern})")
+        logger.warning(
+            f"\n{checkpoint_name}: ✗ golden file not found ({golden_pattern})"
+        )
         return False
 
     jit_file = jit_files[0]

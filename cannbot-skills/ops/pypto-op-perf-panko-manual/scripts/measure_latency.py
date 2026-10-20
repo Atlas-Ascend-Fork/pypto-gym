@@ -24,6 +24,7 @@ Only the on-device AICore time is used — never wall-clock (which includes host
 The measurement MECHANICS below are the frozen part. The op-specific `run_once()` (build inputs +
 one wrapper call + synchronize) is supplied by the caller / CLI.
 """
+
 import argparse
 import glob
 import importlib.util
@@ -44,7 +45,7 @@ import jsonio  # noqa: E402
 # owns them because it is where the refusals are load-bearing.
 from chip_profile import optional as _optional, quietly as _quietly  # noqa: E402
 
-leaked_capture = []           # capture files a cleanup could not remove
+leaked_capture = []  # capture files a cleanup could not remove
 
 
 def _read_text(path, errors="replace"):
@@ -63,7 +64,8 @@ AICORE_RE = re.compile(r"AICore End-to-End Time:\s*([\d.]+)")
 CORE_RE = re.compile(
     r"\[(AIC_\d+|AIV_\d+)\] Execute task num:(\d+)\s+"
     r"Core Total Work Time: ([\d.]+)\s+Total Wait Time: ([\d.]+)\s+"
-    r"Wait Schedule Time: ([\d.]+)\s+Wait Predecessor Time: ([\d.]+)")
+    r"Wait Schedule Time: ([\d.]+)\s+Wait Predecessor Time: ([\d.]+)"
+)
 UTIL_RE = re.compile(r"AICore Utilization:\s*([\d.]+)")
 BUBBLE_RE = re.compile(r"[Bb]ubble(?:\s*[Rr]ate)?:\s*([\d.]+)")
 
@@ -94,8 +96,7 @@ def _bubble_from_log(path):
         busy = work - wait
         utils.append(busy / (busy + wait) * 100 if busy + wait else 0.0)
         bubbles.append(sched / (busy + sched) * 100 if busy + sched else 0.0)
-    return (round(sum(bubbles) / len(bubbles), 4),
-            round(sum(utils) / len(utils), 4))
+    return (round(sum(bubbles) / len(bubbles), 4), round(sum(utils) / len(utils), 4))
 
 
 def _pipes_from_log(path):
@@ -126,8 +127,9 @@ def _pipes_from_log(path):
     for name, n, work, wait, sched, pred in rows:
         work, wait, sched, pred = float(work), float(wait), float(sched), float(pred)
         busy = work - wait
-        d = acc.setdefault(name.split("_")[0],
-                           {"u": [], "b": [], "s": [], "cores": 0, "tasks": 0})
+        d = acc.setdefault(
+            name.split("_")[0], {"u": [], "b": [], "s": [], "cores": 0, "tasks": 0}
+        )
         d["u"].append(busy / (busy + wait) * 100 if busy + wait else 0.0)
         # `bubble_rate`'s own formula, per pipe rather than averaged over both.
         d["b"].append(sched / (busy + sched) * 100 if busy + sched else 0.0)
@@ -135,11 +137,16 @@ def _pipes_from_log(path):
         d["s"].append(pred / (busy + pred) * 100 if busy + pred else 0.0)
         d["cores"] += 1
         d["tasks"] += int(n)
-    return {p: {"util": round(sum(d["u"]) / len(d["u"]), 2),
-                "bubble": round(sum(d["b"]) / len(d["b"]), 2),
-                "pred_stall": round(sum(d["s"]) / len(d["s"]), 2),
-                "cores": d["cores"], "tasks": d["tasks"]}
-            for p, d in sorted(acc.items())}
+    return {
+        p: {
+            "util": round(sum(d["u"]) / len(d["u"]), 2),
+            "bubble": round(sum(d["b"]) / len(d["b"]), 2),
+            "pred_stall": round(sum(d["s"]) / len(d["s"]), 2),
+            "cores": d["cores"],
+            "tasks": d["tasks"],
+        }
+        for p, d in sorted(acc.items())
+    }
 
 
 def _newest(roots, since, name):
@@ -227,9 +234,15 @@ def _pipes_from_prof(path):
     acc, span = _core_totals(cores)
     if not span:
         return {}
-    return {p: {"util": round(d["busy"] / (d["cores"] * span) * 100, 2),
-                "cores": d["cores"], "tasks": d["tasks"]}
-            for p, d in sorted(acc.items()) if d["cores"]}
+    return {
+        p: {
+            "util": round(d["busy"] / (d["cores"] * span) * 100, 2),
+            "cores": d["cores"],
+            "tasks": d["tasks"],
+        }
+        for p, d in sorted(acc.items())
+        if d["cores"]
+    }
 
 
 def _agg(vals, how):
@@ -245,7 +258,7 @@ def _capture(run_once, total):
     through `sys.stdout`. Returns everything it printed.
     """
     sys.stdout.flush()
-    sys.stderr.flush()   # don't let pre-existing buffered output leak into capture
+    sys.stderr.flush()  # don't let pre-existing buffered output leak into capture
     saved_out, saved_err = os.dup(1), os.dup(2)
     tf = tempfile.NamedTemporaryFile(mode="w+", suffix=".prof", delete=False)
     try:
@@ -279,12 +292,17 @@ def _pipe_readings(op_dir, t0):
     log_bubble, log_util = _bubble_from_log(log) if log else (None, None)
     pipes = _pipes_from_log(log) if log else {}
     source = "bubble_analysis.log" if pipes else None
-    if not pipes:                      # the swimlane fast path skipped the log
+    if not pipes:  # the swimlane fast path skipped the log
         prof = _newest([op_dir, os.getcwd()], t0, "tilefwk_L1_prof_data.json")
         pipes = _pipes_from_prof(prof) if prof else {}
         source = "tilefwk_L1_prof_data.json" if pipes else None
-    return {"log": log, "log_bubble": log_bubble, "log_util": log_util,
-            "pipes": pipes, "source": source}
+    return {
+        "log": log,
+        "log_bubble": log_bubble,
+        "log_util": log_util,
+        "pipes": pipes,
+        "source": source,
+    }
 
 
 def measure(run_once, warmup=1, runs=3, agg="min", op_dir=None):
@@ -293,7 +311,7 @@ def measure(run_once, warmup=1, runs=3, agg="min", op_dir=None):
     call (+ device sync) and let the profiler print its summary. Returns {p, util, bubble, samples}.
     """
     total = max(1, warmup) + max(1, runs)
-    t0 = time.time() - 1.0          # tolerate coarse mtime granularity
+    t0 = time.time() - 1.0  # tolerate coarse mtime granularity
     text = _capture(run_once, total)
     lat = [float(x) for x in AICORE_RE.findall(text)]
     util = [float(x) for x in UTIL_RE.findall(text)]
@@ -306,30 +324,35 @@ def measure(run_once, warmup=1, runs=3, agg="min", op_dir=None):
     read = _pipe_readings(op_dir, t0)
     log_bubble = read["log_bubble"]
     aic, aiv = read["pipes"].get("AIC") or {}, read["pipes"].get("AIV") or {}
-    return {"p": _agg(warm_lat, agg),
-            "util": _agg(warm_util, "median"),
-            "bubble": log_bubble if log_bubble is not None else _agg(warm_bub, "median"),
-            "bubble_source": "bubble_analysis.log" if log_bubble is not None else "stdout",
-            "bubble_log": read["log"],
-            "util_from_log": read["log_util"],
-            # Per-pipe. Absent (None) when no log was produced -- the installed
-            # draw_swim_lane.py carries a latency-only fast path that exits
-            # before writing one, so this is missing far more often than `util`
-            # is, and "not measured" must stay distinguishable from "zero".
-            "aic_util": aic.get("util"),
-            "aiv_util": aiv.get("util"),
-            # `bubble` above is a mean over both pipes. Per pipe it separates a
-            # scheduler that cannot feed the cores from one that can: widening
-            # a vec tile can drop AIV utilisation and raise AIV bubble while
-            # latency ROSE, which is the signature of fewer, larger tasks
-            # starving the vector cores rather than of more work.
-            "aic_bubble": aic.get("bubble"),
-            "aiv_bubble": aiv.get("bubble"),
-            "pred_stall": max([d["pred_stall"] for d in read["pipes"].values()
-                               if "pred_stall" in d], default=None),
-            "pipes": read["pipes"],
-            "pipe_source": read["source"],
-            "samples": warm_lat, "raw_count": len(lat)}
+    return {
+        "p": _agg(warm_lat, agg),
+        "util": _agg(warm_util, "median"),
+        "bubble": log_bubble if log_bubble is not None else _agg(warm_bub, "median"),
+        "bubble_source": "bubble_analysis.log" if log_bubble is not None else "stdout",
+        "bubble_log": read["log"],
+        "util_from_log": read["log_util"],
+        # Per-pipe. Absent (None) when no log was produced -- the installed
+        # draw_swim_lane.py carries a latency-only fast path that exits
+        # before writing one, so this is missing far more often than `util`
+        # is, and "not measured" must stay distinguishable from "zero".
+        "aic_util": aic.get("util"),
+        "aiv_util": aiv.get("util"),
+        # `bubble` above is a mean over both pipes. Per pipe it separates a
+        # scheduler that cannot feed the cores from one that can: widening
+        # a vec tile can drop AIV utilisation and raise AIV bubble while
+        # latency ROSE, which is the signature of fewer, larger tasks
+        # starving the vector cores rather than of more work.
+        "aic_bubble": aic.get("bubble"),
+        "aiv_bubble": aiv.get("bubble"),
+        "pred_stall": max(
+            [d["pred_stall"] for d in read["pipes"].values() if "pred_stall" in d],
+            default=None,
+        ),
+        "pipes": read["pipes"],
+        "pipe_source": read["source"],
+        "samples": warm_lat,
+        "raw_count": len(lat),
+    }
 
 
 # --------------------------------------------------------------------------- CLI, by convention
@@ -347,13 +370,18 @@ def _build_run_once(op_dir, op, op_file, device, inputs_file=None):
     in `measure()` stay frozen regardless.
     """
     import torch  # noqa
+
     # Importing torch_npu is what registers the NPU backend; on a box without it
     # there is nothing to register and the caller finds out at the first device
     # call, with a message about the device rather than about an import.
     _optional("torch_npu")
     os.environ["TILE_FWK_DEVICE_ID"] = str(device)
     _quietly(torch.npu.set_device, int(device))
-    impl = op_file if isinstance(op_file, types.ModuleType) else _load_module(op_file, "op_impl")
+    impl = (
+        op_file
+        if isinstance(op_file, types.ModuleType)
+        else _load_module(op_file, "op_impl")
+    )
     # `<op>_wrapper` is the more common convention in this repo, but `--op` names
     # the operator, not the callable. Without the fallback every trial on such a
     # kernel raises AttributeError inside the measurement subprocess, which the
@@ -370,8 +398,13 @@ def _build_run_once(op_dir, op, op_file, device, inputs_file=None):
     # then drawn on a shape where the tile makes the loop run exactly once,
     # which it does not do at the declared size -- so the campaign optimises a
     # loop that is not there.
-    ti = inputs_file if isinstance(inputs_file, types.ModuleType) else _load_module(
-        inputs_file or os.path.join(op_dir, "eval", "test_inputs.py"), "test_inputs")
+    ti = (
+        inputs_file
+        if isinstance(inputs_file, types.ModuleType)
+        else _load_module(
+            inputs_file or os.path.join(op_dir, "eval", "test_inputs.py"), "test_inputs"
+        )
+    )
     builder = getattr(ti, "build_inputs", None)
     inputs = builder(device) if callable(builder) else getattr(ti, "INPUTS")
     args = inputs if isinstance(inputs, (list, tuple)) else [inputs]
@@ -390,7 +423,9 @@ capture_output = _capture
 
 
 def main():
-    ap = argparse.ArgumentParser(description="Frozen warm-latency measure for PANKO E(x).")
+    ap = argparse.ArgumentParser(
+        description="Frozen warm-latency measure for PANKO E(x)."
+    )
     ap.add_argument("--op-dir", required=True)
     ap.add_argument("--op", required=True)
     ap.add_argument("--op-file", required=True)
@@ -398,11 +433,14 @@ def main():
     ap.add_argument("--warmup", type=int, default=1)
     ap.add_argument("--runs", type=int, default=3)
     ap.add_argument("--agg", choices=["median", "min"], default="min")
-    ap.add_argument("--inputs", default=None,
-                    help="alternative build_inputs module; defaults to "
-                         "<op-dir>/eval/test_inputs.py. Re-measurement only -- "
-                         "passing it means the number is NOT comparable to the "
-                         "campaign's recorded latencies.")
+    ap.add_argument(
+        "--inputs",
+        default=None,
+        help="alternative build_inputs module; defaults to "
+        "<op-dir>/eval/test_inputs.py. Re-measurement only -- "
+        "passing it means the number is NOT comparable to the "
+        "campaign's recorded latencies.",
+    )
     a = ap.parse_args()
     run_once = _build_run_once(a.op_dir, a.op, a.op_file, a.device, a.inputs)
     jsonio.emit(measure(run_once, a.warmup, a.runs, a.agg, op_dir=a.op_dir))

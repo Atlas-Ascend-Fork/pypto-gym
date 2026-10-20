@@ -1,5 +1,13 @@
 # -*- coding: utf-8 -*-
-# Copyright (c) Huawei Technologies Co., Ltd. 2024-2025. All rights reserved.
+# ----------------------------------------------------------------------------------------------------------
+# Copyright (c) 2026 Huawei Technologies Co., Ltd.
+# This program is free software, you can redistribute it and/or modify it under the terms and conditions of
+# CANN Open Software License Agreement Version 2.0 (the "License").
+# Please refer to the License for details. You may not use this file except in compliance with the License.
+# THIS SOFTWARE IS PROVIDED ON AN "AS IS" BASIS, WITHOUT WARRANTIES OF ANY KIND, EITHER EXPRESS OR IMPLIED,
+# INCLUDING BUT NOT LIMITED TO NON-INFRINGEMENT, MERCHANTABILITY, OR FITNESS FOR A PARTICULAR PURPOSE.
+# See LICENSE in the root of the software repository for the full text of the License.
+# ----------------------------------------------------------------------------------------------------------
 
 import importlib.util
 import json
@@ -86,7 +94,9 @@ def build_stateless_op_dir(base: Path, op_name: str = "demo") -> Path:
     write_file(op_dir / "DESIGN.md", DESIGN_TEMPLATE.replace("demo", op_name))
     write_file(op_dir / "API_REPORT.md", API_TEMPLATE.replace("demo", op_name))
     write_file(op_dir / f"{op_name}_impl.py", IMPL_TEMPLATE.replace("demo", op_name))
-    write_file(op_dir / f"{op_name}_golden.py", GOLDEN_TEMPLATE.replace("demo", op_name))
+    write_file(
+        op_dir / f"{op_name}_golden.py", GOLDEN_TEMPLATE.replace("demo", op_name)
+    )
     write_file(op_dir / f"test_{op_name}.py", TEST_TEMPLATE)
     write_file(op_dir / "README.md", "# readme\n")
     return op_dir

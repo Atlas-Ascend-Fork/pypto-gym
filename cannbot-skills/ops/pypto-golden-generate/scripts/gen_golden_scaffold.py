@@ -1,6 +1,15 @@
 #!/usr/bin/env python3
 # coding: utf-8
-# Copyright (c) Huawei Technologies Co., Ltd. 2024-2026. All rights reserved.
+# ----------------------------------------------------------------------------------------------------------
+# Copyright (c) 2026 Huawei Technologies Co., Ltd.
+# This program is free software, you can redistribute it and/or modify it under the terms and conditions of
+# CANN Open Software License Agreement Version 2.0 (the "License").
+# Please refer to the License for details. You may not use this file except in compliance with the License.
+# THIS SOFTWARE IS PROVIDED ON AN "AS IS" BASIS, WITHOUT WARRANTIES OF ANY KIND, EITHER EXPRESS OR IMPLIED,
+# INCLUDING BUT NOT LIMITED TO NON-INFRINGEMENT, MERCHANTABILITY, OR FITNESS FOR A PARTICULAR PURPOSE.
+# See LICENSE in the root of the software repository for the full text of the License.
+# ----------------------------------------------------------------------------------------------------------
+
 """Deterministic Stage-2 golden scaffold generator (CPU-only).
 
 Reads a structured SPEC.md (YAML front matter + §5 input/output tables) and the
@@ -17,6 +26,7 @@ property checks stay as `# TODO:` markers for the mathematician (LLM) to fill.
 
 Pure standard library (re / ast / json). No torch, no NPU — runs anywhere.
 """
+
 from __future__ import annotations
 
 import argparse
@@ -36,6 +46,7 @@ _LOGGER = logging.getLogger("gen_golden_scaffold")
 # Front matter parsing (minimal YAML subset: scalars, [lists], {dicts})
 # ---------------------------------------------------------------------------
 
+
 def _coerce(val: str) -> Any:
     val = val.strip().strip("`")
     if not val:
@@ -45,13 +56,13 @@ def _coerce(val: str) -> Any:
     except (ValueError, SyntaxError):
         pass
     # Quote bareword dict keys so `{eps: 1e-5}` and JSON `{"k": false}` both load.
-    fixed = re.sub(r'([{,]\s*)([A-Za-z_]\w*)\s*:', r'\1"\2":', val)
+    fixed = re.sub(r"([{,]\s*)([A-Za-z_]\w*)\s*:", r'\1"\2":', val)
     for loader in (lambda s: ast.literal_eval(s), json.loads):
         try:
             return loader(fixed)
         except (ValueError, SyntaxError, TypeError):
             continue
-    return val.strip('"\'')
+    return val.strip("\"'")
 
 
 def parse_front_matter(text: str) -> dict:
@@ -74,16 +85,31 @@ def parse_front_matter(text: str) -> dict:
 # ---------------------------------------------------------------------------
 
 _DTYPE_MAP = {
-    "bfloat16": "torch.bfloat16", "bf16": "torch.bfloat16",
-    "float16": "torch.float16", "fp16": "torch.float16", "half": "torch.float16",
-    "float32": "torch.float32", "fp32": "torch.float32", "float": "torch.float32",
-    "float64": "torch.float64", "fp64": "torch.float64",
-    "int8": "torch.int8", "uint8": "torch.uint8",
-    "int16": "torch.int16", "int32": "torch.int32", "int64": "torch.int64",
+    "bfloat16": "torch.bfloat16",
+    "bf16": "torch.bfloat16",
+    "float16": "torch.float16",
+    "fp16": "torch.float16",
+    "half": "torch.float16",
+    "float32": "torch.float32",
+    "fp32": "torch.float32",
+    "float": "torch.float32",
+    "float64": "torch.float64",
+    "fp64": "torch.float64",
+    "int8": "torch.int8",
+    "uint8": "torch.uint8",
+    "int16": "torch.int16",
+    "int32": "torch.int32",
+    "int64": "torch.int64",
     "bool": "torch.bool",
 }
-_INT_DTYPES = {"torch.int8", "torch.uint8", "torch.int16", "torch.int32",
-               "torch.int64", "torch.bool"}
+_INT_DTYPES = {
+    "torch.int8",
+    "torch.uint8",
+    "torch.int16",
+    "torch.int32",
+    "torch.int64",
+    "torch.bool",
+}
 
 
 def _norm_name(cell: str) -> str:
@@ -94,7 +120,7 @@ def _norm_name(cell: str) -> str:
 
 def _norm_dtype(cell: str) -> str:
     key = cell.replace("`", "").strip().lower().split()[0] if cell.strip() else ""
-    key = key.replace("torch.", "")           # torch.float32 -> float32
+    key = key.replace("torch.", "")  # torch.float32 -> float32
     return _DTYPE_MAP.get(key, "torch.float32")
 
 
@@ -132,11 +158,13 @@ def _table_rows(lines: list[str], header_index: int, cols: dict) -> list[dict]:
     while index < len(lines) and lines[index].lstrip().startswith("|"):
         cells = _split_row(lines[index])
         if len(cells) > max(cols.values()):
-            rows.append({
-                "name": _norm_name(cells[cols["name"]]),
-                "shape": cells[cols["shape"]].replace("`", "").strip(),
-                "dtype": _norm_dtype(cells[cols["dtype"]]),
-            })
+            rows.append(
+                {
+                    "name": _norm_name(cells[cols["name"]]),
+                    "shape": cells[cols["shape"]].replace("`", "").strip(),
+                    "dtype": _norm_dtype(cells[cols["dtype"]]),
+                }
+            )
         index += 1
     return rows
 
@@ -167,7 +195,8 @@ def _parse_table_after(text: str, header_regex: str) -> list[dict]:
     # (e.g. an input row cell mentioning "nn.Parameter" must not be treated as
     # a parameter-table heading, which would then capture the 输出规格 table.)
     matches = [
-        index for index, line in enumerate(lines)
+        index
+        for index, line in enumerate(lines)
         if re.search(header_regex, line) and not line.lstrip().startswith("|")
     ]
     for heading_index in matches:
@@ -181,6 +210,7 @@ def _parse_table_after(text: str, header_regex: str) -> list[dict]:
 # ---------------------------------------------------------------------------
 # Codegen helpers
 # ---------------------------------------------------------------------------
+
 
 def _ctor(shape: list[int], dtype: str) -> tuple[str, bool]:
     """Return (constructor_expr, needs_constraint_todo)."""
@@ -201,29 +231,39 @@ def _build_signature(op: str, tensors: list[dict], kwargs: dict) -> str:
     for t in tensors:
         lines.append(f"    {t['name']}: torch.Tensor,")
     for k, v in kwargs.items():
-        ann = "int" if isinstance(v, int) and not isinstance(v, bool) else \
-              "bool" if isinstance(v, bool) else \
-              "float" if isinstance(v, float) else "object"
+        ann = (
+            "int"
+            if isinstance(v, int) and not isinstance(v, bool)
+            else "bool"
+            if isinstance(v, bool)
+            else "float"
+            if isinstance(v, float)
+            else "object"
+        )
         lines.append(f"    {k}: {ann} = {v!r},")
     lines.append("):")
     return "\n".join(lines)
 
 
 def _build_make_inputs(tensors: list[dict], kwargs: dict) -> str:
-    body = ["def _make_inputs(device):",
-            '    """Construct the P0 case. Tensor shapes are taken verbatim from',
-            "    SPEC.md front-matter p0_shapes / the §5 nn.Parameter table.",
-            "",
-            "    NOTE: integer tensors below are emitted as generic randint and are",
-            "    flagged `# TODO: constrain` — indices / quantized / cache tensors",
-            "    usually need legal values (see golden-generate SKILL §4).",
-            '    """']
+    body = [
+        "def _make_inputs(device):",
+        '    """Construct the P0 case. Tensor shapes are taken verbatim from',
+        "    SPEC.md front-matter p0_shapes / the §5 nn.Parameter table.",
+        "",
+        "    NOTE: integer tensors below are emitted as generic randint and are",
+        "    flagged `# TODO: constrain` — indices / quantized / cache tensors",
+        "    usually need legal values (see golden-generate SKILL §4).",
+        '    """',
+    ]
     names = []
     for t in tensors:
         shape = t.get("concrete")
         if shape is None:
-            body.append(f"    # TODO: resolve concrete shape for "
-                        f"{t['name']} (symbolic {t['shape']})")
+            body.append(
+                f"    # TODO: resolve concrete shape for "
+                f"{t['name']} (symbolic {t['shape']})"
+            )
             body.append(f"    {t['name']} = None  # TODO")
             names.append(t["name"])
             continue
@@ -239,37 +279,39 @@ def _build_make_inputs(tensors: list[dict], kwargs: dict) -> str:
 
 
 def _build_validate(op: str) -> str:
-    return "\n".join([
-        "def _validate():",
-        '    """Deterministic harness: run golden on the P0 case + finiteness.',
-        "    Fill op-specific property/range checks at the TODO markers below.",
-        '    """',
-        "    device = _get_device()",
-        "    print('=' * 60)",
-        f"    print('{op}_golden validation report')",
-        "    print('=' * 60)",
-        "    print(f'Device: {device}')",
-        "",
-        "    args, kwargs = _make_inputs(device)",
-        f"    outs = {op}_golden(*args, **kwargs)",
-        "    outs = outs if isinstance(outs, (tuple, list)) else (outs,)",
-        "",
-        "    print('\\n[finiteness]')",
-        "    for i, o in enumerate(outs):",
-        "        ok = torch.isfinite(o).all().item()",
-        "        print(f'  out[{i}] shape={tuple(o.shape)} finite={ok} '",
-        "              f'... {\"PASS\" if ok else \"FAIL\"}')",
-        "        assert ok, f'out[{i}] contains NaN/Inf'",
-        "",
-        "    # TODO: output shape-equality vs SPEC §5 output table",
-        "    # TODO: value-range checks derived from the formula (§6)",
-        "    # TODO: math properties (monotonicity / symmetry / conservation)",
-        "    # TODO: generalization sampling over dynamic axes",
-        "",
-        "    print('\\n' + '=' * 60)",
-        "    print('validation complete')",
-        "    print('=' * 60)",
-    ])
+    return "\n".join(
+        [
+            "def _validate():",
+            '    """Deterministic harness: run golden on the P0 case + finiteness.',
+            "    Fill op-specific property/range checks at the TODO markers below.",
+            '    """',
+            "    device = _get_device()",
+            "    print('=' * 60)",
+            f"    print('{op}_golden validation report')",
+            "    print('=' * 60)",
+            "    print(f'Device: {device}')",
+            "",
+            "    args, kwargs = _make_inputs(device)",
+            f"    outs = {op}_golden(*args, **kwargs)",
+            "    outs = outs if isinstance(outs, (tuple, list)) else (outs,)",
+            "",
+            "    print('\\n[finiteness]')",
+            "    for i, o in enumerate(outs):",
+            "        ok = torch.isfinite(o).all().item()",
+            "        print(f'  out[{i}] shape={tuple(o.shape)} finite={ok} '",
+            '              f\'... {"PASS" if ok else "FAIL"}\')',
+            "        assert ok, f'out[{i}] contains NaN/Inf'",
+            "",
+            "    # TODO: output shape-equality vs SPEC §5 output table",
+            "    # TODO: value-range checks derived from the formula (§6)",
+            "    # TODO: math properties (monotonicity / symmetry / conservation)",
+            "    # TODO: generalization sampling over dynamic axes",
+            "",
+            "    print('\\n' + '=' * 60)",
+            "    print('validation complete')",
+            "    print('=' * 60)",
+        ]
+    )
 
 
 REQUIRED_FM = ["op_name", "p0_shapes"]
@@ -312,13 +354,17 @@ def generate(spec_path: str, template_path: str) -> str:
     out = template.replace("{op}", op)
 
     # Replace the placeholder signature line (already {op}-substituted above).
-    out = out.replace(f"def {op}_golden(x: torch.Tensor) -> torch.Tensor:",
-                      _build_signature(op, tensors, kwargs), 1)
+    out = out.replace(
+        f"def {op}_golden(x: torch.Tensor) -> torch.Tensor:",
+        _build_signature(op, tensors, kwargs),
+        1,
+    )
 
     # Swap the default _make_inputs (lines from `def _make_inputs` to its
     # `return [x], {}`) with the generated one.
-    out = _replace_block(out, "def _make_inputs(device):",
-                         _build_make_inputs(tensors, kwargs))
+    out = _replace_block(
+        out, "def _make_inputs(device):", _build_make_inputs(tensors, kwargs)
+    )
     out = _replace_block(out, "def _validate():", _build_validate(op))
     return out
 
@@ -369,14 +415,16 @@ tolerance: {'rtol': 0.004, 'atol': 0.004}
 
 
 def _self_test(template_path: str) -> int:
-    with tempfile.NamedTemporaryFile("w", suffix=".md", delete=False,
-                                     encoding="utf-8") as f:
+    with tempfile.NamedTemporaryFile(
+        "w", suffix=".md", delete=False, encoding="utf-8"
+    ) as f:
         f.write(_SELF_TEST_SPEC)
         spec = f.name
     code = generate(spec, template_path)
     os.unlink(spec)
     checks = {
-        "signature": "def demo_add_golden(" in code and "a: torch.Tensor" in code
+        "signature": "def demo_add_golden(" in code
+        and "a: torch.Tensor" in code
         and "eps: float = 1e-06" in code,
         "make_inputs": "a = torch.randn(8, 1024, dtype=torch.float32" in code,
         "validate_wired": "args, kwargs = _make_inputs(device)" in code,

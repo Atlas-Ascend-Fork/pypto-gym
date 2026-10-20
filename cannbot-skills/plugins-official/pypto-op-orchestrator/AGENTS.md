@@ -291,13 +291,13 @@ S4 返回后，编排器执行：
 存在 **两个** 状态存储，各司其职：
 
 1. **`custom/<op>/MEMORY.md`** —— 人类可读的叙事账本。推理过程、设计意图、调试尝试、试过什么、为何选这个 failure_category、复盘分析。每个子代理都会读写它。模板：skill `pypto-memory-template` 的 `templates/MEMORY.template.md`。
-2. **`custom/<op>/.orchestrator_state.json`** —— 机器可读的进度账本。Stage 状态、重试计数、Phase M_k 状态、artifact 哈希、回滚历史。**只有 pypto-op-orchestrator 能写这个文件**，并且只能通过 `state_transition` 工具。子代理把结果返回给编排者，编排者再发起对应的 `state_transition`。
+2. **`custom/<op>/.orchestrator_state.json`** —— 机器可读的进度账本。Stage 状态、重试计数、Phase M_k 状态、artifact 哈希、回滚历史。**只有 pypto-op-orchestrator（或 harness 模式下的通用执行/裁判 agent：`general-executor` / `general-verifier`）能写这个文件**，并且只能通过 `state_transition` 工具。子代理把结果返回给编排者，编排者再发起对应的 `state_transition`。
 
 两套存储**不会重复信息**：JSON 只放数字和状态，markdown 只放推理和判断日志。
 
-## state_transition 工具参考（仅编排者可用）
+## state_transition 工具参考（仅编排者或 harness 通用执行/裁判 agent 可用）
 
-`state_transition` 是修改 `.orchestrator_state.json` 的**唯一**途径。子代理不能调用。可用 action：
+`state_transition` 是修改 `.orchestrator_state.json` 的**唯一**途径。除编排者（及 harness 模式的通用执行/裁判 agent）外，子代理不能调用。可用 action：
 
 ### Stage 类 action
 

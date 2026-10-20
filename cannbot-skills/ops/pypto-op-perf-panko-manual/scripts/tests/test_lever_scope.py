@@ -25,11 +25,11 @@ import unittest
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent))
-from _support import SCRIPTS_DIR  # noqa: E402
+from _support import SCRIPTS_DIR  # noqa: F401, E402
 
 from bayesian_optimization import lever, space  # noqa: E402
 
-BOTH = '''import pypto
+BOTH = """import pypto
 
 
 @pypto.frontend.jit()
@@ -37,16 +37,16 @@ def k(a, b):
     pypto.set_cube_tile_shapes([128, 64], [64, 64], [128, 64])
     pypto.set_vec_tile_shapes(64, 128)
     return a + b
-'''
+"""
 
-VEC_ONLY = '''import pypto
+VEC_ONLY = """import pypto
 
 
 @pypto.frontend.jit()
 def k(a, b):
     pypto.set_vec_tile_shapes(64, 128)
     return a + b
-'''
+"""
 
 HW = space.HW(calibrated=False, dtype_bytes=4)
 _OPTS = lever.AskOptions(dtype_bytes=4, current_latency=100.0)
@@ -57,7 +57,6 @@ def _kinds(cfg):
 
 
 class ScopeTest(unittest.TestCase):
-
     def test_each_action_declares_the_kind_it_is_defined_over(self):
         self.assertEqual(lever.scope_of("F-9"), "cube")
         self.assertEqual(lever.scope_of("S-11"), "cube")
@@ -70,38 +69,33 @@ class ScopeTest(unittest.TestCase):
         share a study with one.
         """
         self.assertIsNone(lever.scope_of("F-7"))
-        self.assertNotEqual(lever.lever_key("F-7", BOTH),
-                            lever.lever_key("F-9", BOTH))
+        self.assertNotEqual(lever.lever_key("F-7", BOTH), lever.lever_key("F-9", BOTH))
 
 
 class StudySharingTest(unittest.TestCase):
-
     def test_the_two_cube_actions_share_one_study(self):
         """F-9 and S-11 are both "tune the Cube tile". Keyed by action they kept
         separate studies of the same space and paid device evaluations twice to
         rebuild one surrogate.
         """
-        self.assertEqual(lever.lever_key("F-9", BOTH),
-                         lever.lever_key("S-11", BOTH))
+        self.assertEqual(lever.lever_key("F-9", BOTH), lever.lever_key("S-11", BOTH))
 
     def test_the_two_vector_actions_share_one_study(self):
-        self.assertEqual(lever.lever_key("F-10", BOTH),
-                         lever.lever_key("S-12", BOTH))
+        self.assertEqual(lever.lever_key("F-10", BOTH), lever.lever_key("S-12", BOTH))
 
     def test_cube_and_vector_do_not(self):
-        self.assertNotEqual(lever.lever_key("F-9", BOTH),
-                            lever.lever_key("F-10", BOTH))
+        self.assertNotEqual(lever.lever_key("F-9", BOTH), lever.lever_key("F-10", BOTH))
 
     def test_the_structural_signature_still_separates_programs(self):
         """Sharing is by scope only. The per-structure isolation is the
         separation that has evidence behind it and it is untouched.
         """
-        self.assertNotEqual(lever.lever_key("F-9", BOTH),
-                            lever.lever_key("F-9", VEC_ONLY))
+        self.assertNotEqual(
+            lever.lever_key("F-9", BOTH), lever.lever_key("F-9", VEC_ONLY)
+        )
 
 
 class SeedScopeTest(unittest.TestCase):
-
     def test_a_cube_action_seeds_only_cube_sites(self):
         pts = lever.seed_points(BOTH, HW, 4, 100.0, scope="cube")
         self.assertTrue(pts)
@@ -123,7 +117,6 @@ class SeedScopeTest(unittest.TestCase):
 
 
 class AskScopeTest(unittest.TestCase):
-
     def test_the_cube_action_hands_back_a_cube_only_config(self):
         cfg, meta = lever.ask({}, "F-9", BOTH, HW, _OPTS)
         self.assertIsNotNone(cfg)
@@ -154,20 +147,24 @@ class BufferCeilingTest(unittest.TestCase):
     """The tile ceiling is UB/2, and UB is the RUN'S."""
 
     def test_it_is_half_the_envelope_s_unified_buffer(self):
-        self.assertEqual(lever.ceil_kb(space.HW(calibrated=False,
-                                                ub_budget_kb=192)), 96)
-        self.assertEqual(lever.ceil_kb(space.HW(calibrated=False,
-                                                ub_budget_kb=248)), 124)
+        self.assertEqual(
+            lever.ceil_kb(space.HW(calibrated=False, ub_budget_kb=192)), 96
+        )
+        self.assertEqual(
+            lever.ceil_kb(space.HW(calibrated=False, ub_budget_kb=248)), 124
+        )
 
     def test_a5_tiles_are_no_longer_refused_by_an_a3_constant(self):
         """A 100 KB tile fits a 950's 248 KB UB and not a 910B3's 192 KB. The
         hardcoded 96 refused it on both -- the defect the chip envelope exists
         to remove, surviving in the one module that kept its own copy.
         """
-        self.assertGreater(100, lever.ceil_kb(space.HW(calibrated=False,
-                                                       ub_budget_kb=192)))
-        self.assertLess(100, lever.ceil_kb(space.HW(calibrated=False,
-                                                    ub_budget_kb=248)))
+        self.assertGreater(
+            100, lever.ceil_kb(space.HW(calibrated=False, ub_budget_kb=192))
+        )
+        self.assertLess(
+            100, lever.ceil_kb(space.HW(calibrated=False, ub_budget_kb=248))
+        )
 
     def test_no_envelope_falls_back_to_the_documented_a3_figure(self):
         self.assertEqual(lever.ceil_kb(None), lever.CEIL_KB)

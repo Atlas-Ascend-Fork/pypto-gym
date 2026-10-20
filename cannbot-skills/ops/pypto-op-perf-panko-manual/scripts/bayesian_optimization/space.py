@@ -22,6 +22,7 @@ static_feasible() reproduces these rules so BO never wastes an evaluation on a c
 hardware would reject. It is a CHEAP gate; numerical correctness is still decided later by the
 frozen evaluator E(x) (golden compare), never here.
 """
+
 from dataclasses import dataclass
 from typing import Any, Optional
 
@@ -45,8 +46,33 @@ from typing import Any, Optional
 # `set_vec_tile_shapes` is tuned at 1, 2, 3 or 4 arguments and there is no
 # position that is always "M". Spacing is x2 with a 1.5x rung between, so the
 # ladder spans 1 to 16384 in 25 steps rather than 15 doublings.
-VEC_CHOICES = [1, 2, 4, 8, 16, 24, 32, 48, 64, 96, 128, 192, 256, 384, 512, 768,
-               1024, 1536, 2048, 3072, 4096, 6144, 8192, 12288, 16384]
+VEC_CHOICES = [
+    1,
+    2,
+    4,
+    8,
+    16,
+    24,
+    32,
+    48,
+    64,
+    96,
+    128,
+    192,
+    256,
+    384,
+    512,
+    768,
+    1024,
+    1536,
+    2048,
+    3072,
+    4096,
+    6144,
+    8192,
+    12288,
+    16384,
+]
 
 # The trailing dimension is the contiguous one and the compiler requires it to be
 # 16-aligned (`vec_N not 16-aligned` in the recorded ERR_CONFIG_ALIGNMENT
@@ -100,7 +126,7 @@ GLOBAL_DOMAINS = {
 # encoded as a comma-joined string ("64,16,4" <-> [64, 16, 4]); apply parses it back. An option
 # that doesn't fit a given loop simply fails the correctness gate, so BO drops it. (A multi-value
 # unroll is admissible at Stage 7 and refused before it.)
-UNROLL_CHOICES = ["1", "2", "4", "8", "64,16,4"]     # kept for callers; see unroll_domain
+UNROLL_CHOICES = ["1", "2", "4", "8", "64,16,4"]  # kept for callers; see unroll_domain
 
 # The five above are five points of a family, not the family: every schedule the
 # master Stage-7 skill documents is a strictly-descending list of powers of two,
@@ -125,10 +151,13 @@ def unroll_domain(trip=None):
     (trip=64 leaves 119).
     """
     import itertools
+
     top = [v for v in UNROLL_LADDER if trip is None or v <= trip] or [1]
-    return [",".join(str(v) for v in combo)
-            for n in range(1, UNROLL_MAX_SLOTS + 1)
-            for combo in itertools.combinations(sorted(top, reverse=True), n)]
+    return [
+        ",".join(str(v) for v in combo)
+        for n in range(1, UNROLL_MAX_SLOTS + 1)
+        for combo in itertools.combinations(sorted(top, reverse=True), n)
+    ]
 
 
 # Compiler merge passes, set through `pass_options` on the JIT decorator rather
@@ -194,25 +223,28 @@ class HW:
     the correctness gate, so BO still works on ANY op — just less eval-efficiently.
     nL1=None skips the n_l0/n_l1 relation (kernels that don't L1-tile the N dim).
     """
+
     m_l1: int = 64
     k_l1: int = 64
     # The L1 buffer, holding both matmul operands' L1 tiles at once. 512 KB fixed
     # hardware (knowledge base: "L1=512KB"); this was 192 under an old conservative
     # estimate that has no basis now that the real buffer is checked.
     l1_budget_kb: int = 512
-    dtype_bytes: int = 4          # L1 staging is fp16/bf16 but estimate conservatively in fp32
-    head_dim: int = 128           # bounds the vector tail tile
-    n_l1: Optional[int] = None     # L1 N-dim tile; None => no n_l0/n_l1 constraint
-    calibrated: bool = True       # False => skip op-specific L1/subdivision checks (keep alignment
-                                  #          only) so an un-calibrated op still explores via the gate
+    dtype_bytes: int = 4  # L1 staging is fp16/bf16 but estimate conservatively in fp32
+    head_dim: int = 128  # bounds the vector tail tile
+    n_l1: Optional[int] = None  # L1 N-dim tile; None => no n_l0/n_l1 constraint
+    calibrated: bool = (
+        True  # False => skip op-specific L1/subdivision checks (keep alignment
+    )
+    #          only) so an un-calibrated op still explores via the gate
     # The unified-buffer capacity rule. Deliberately NOT behind `calibrated`:
     # `calibrated` gates the checks that need an op's DESIGN (m_l1/k_l1/n_l1), and
     # these two need only the program and the chip. Leaving the footprint bound
     # switched off is what let a 16384-element tile reach the device against a
     # buffer that holds about 12288.
     ub_budget_kb: int = 192
-    n_live_tiles: int = 0         # 0 => unknown, rule off. Supplied by the optimizer
-                                  #      as a FACT about residency, never as a bound.
+    n_live_tiles: int = 0  # 0 => unknown, rule off. Supplied by the optimizer
+    #      as a FACT about residency, never as a bound.
     # The three L0 matmul-operand buffers. Unlike m_l1/k_l1/n_l1 these are FIXED
     # HARDWARE, not per-kernel, so they are checked regardless of `calibrated`:
     # the L0 tile the kernel sets must fit its buffer no matter what the L1
@@ -238,7 +270,7 @@ def _rep(sites, groups):
     (per-site independent, the default). groups is a list of id-lists sharing one config.
     """
     rep = {s.id: s.id for s in sites}
-    for grp in (groups or []):
+    for grp in groups or []:
         head = grp[0]
         for sid in grp:
             rep[sid] = head
@@ -254,7 +286,7 @@ def _tie_rep(sites, tie):
     narrower relation and not the wider one.
     """
     rep = {s.id: s.id for s in sites}
-    for grp in (tie or []):
+    for grp in tie or []:
         for sid in grp:
             if sid in rep:
                 rep[sid] = grp[0]
@@ -316,8 +348,7 @@ def vec_fields(site_config):
     declares the arity; everything downstream reads it from here. Falling back to
     two dimensions keeps the common case working when no anchor is supplied.
     """
-    fs = sorted((k for k in site_config if k.startswith("d")),
-                key=lambda k: int(k[1:]))
+    fs = sorted((k for k in site_config if k.startswith("d")), key=lambda k: int(k[1:]))
     return fs or ["d0", "d1"]
 
 
@@ -342,10 +373,11 @@ def vec_domain(site_id, field, fields, anchor_cfg, domain=None):
     # Aliased: the bare import rebound the PARAMETER `domain` to the module, so
     # the derived domain was lost and the module itself was passed in its place.
     from . import domain as domain_mod
+
     cap = domain_mod.vec_ladder_cap(domain, site_id, field, fields)
     if cap:
         pruned = [v for v in ladder if v <= cap]
-        if pruned:                 # never empty the ladder
+        if pruned:  # never empty the ladder
             ladder = pruned
     return admit(ladder, (anchor_cfg or {}).get(field))
 
@@ -373,7 +405,7 @@ def tied_lead_domain(tie, sites, anchor=None, domain=None):
     """
     kind = {s.id: s.kind for s in sites}
     out = {}
-    for grp in (tie or []):
+    for grp in tie or []:
         shared, anchors = None, []
         for sid in grp:
             if kind.get(sid) != "vec":
@@ -398,10 +430,10 @@ class DrawOptions:
     together, what the kernel currently holds, and what the domain allows.
     """
 
-    groups: Any = None                # site ids sharing one knob
-    anchor: Any = None                # the running config, always re-admitted
+    groups: Any = None  # site ids sharing one knob
+    anchor: Any = None  # the running config, always re-admitted
     domain: Any = None
-    tie: Any = None                   # vec scopes that must keep one extent
+    tie: Any = None  # vec scopes that must keep one extent
 
 
 def _draw_cube(trial, r, a):
@@ -416,16 +448,21 @@ def _draw_cube(trial, r, a):
     """
     cube = {}
     for ax in ("m", "k", "n"):
-        l0 = trial.suggest_categorical(f"{r}.{ax}L0", admit(CUBE_CHOICES, a.get(f"{ax}L0")))
-        x = trial.suggest_categorical(f"{r}.{ax}L1x",
-                                      mult_dom(a.get(f"{ax}L0"), a.get(f"{ax}L1")))
+        l0 = trial.suggest_categorical(
+            f"{r}.{ax}L0", admit(CUBE_CHOICES, a.get(f"{ax}L0"))
+        )
+        x = trial.suggest_categorical(
+            f"{r}.{ax}L1x", mult_dom(a.get(f"{ax}L0"), a.get(f"{ax}L1"))
+        )
         cube[f"{ax}L0"], cube[f"{ax}L1"] = l0, l0 * x
     return cube
 
 
 def _draw_scalar(trial, r, a, dom):
     """One `value` knob drawn from `dom`, with the anchor always admitted."""
-    return {"value": trial.suggest_categorical(f"{r}.value", admit(dom, a.get("value")))}
+    return {
+        "value": trial.suggest_categorical(f"{r}.value", admit(dom, a.get("value")))
+    }
 
 
 def _draw_vec(trial, r, a, ctx):
@@ -447,11 +484,17 @@ def _draw_vec(trial, r, a, ctx):
     lead, lead_dom = ctx["lead"], ctx["lead_dom"]
     fields = vec_fields(a)
     head = lead.get(r, r)
-    return {f: trial.suggest_categorical(
-                _lead_key(lead, r, f, fields),
-                (lead_dom[head] if (f == fields[0] and head in lead_dom)
-                 else vec_domain(r, f, fields, a, ctx["opts"].domain)))
-            for f in fields}
+    return {
+        f: trial.suggest_categorical(
+            _lead_key(lead, r, f, fields),
+            (
+                lead_dom[head]
+                if (f == fields[0] and head in lead_dom)
+                else vec_domain(r, f, fields, a, ctx["opts"].domain)
+            ),
+        )
+        for f in fields
+    }
 
 
 def _draw_site(trial, site, r, ctx):
@@ -464,7 +507,9 @@ def _draw_site(trial, site, r, ctx):
         return _draw_scalar(trial, r, a, GLOBAL_DOMAINS[global_knob(r)])
     if site.kind == "pass":
         counts = (opts.domain or {}).get("subgraph_counts", {})
-        return _draw_scalar(trial, r, a, merge_domain(pass_knob(r), counts.get(pass_knob(r))))
+        return _draw_scalar(
+            trial, r, a, merge_domain(pass_knob(r), counts.get(pass_knob(r)))
+        )
     if site.kind == "const":
         return _draw_scalar(trial, r, a, const_domain(a.get("value")))
     if site.kind == "unroll":
@@ -479,7 +524,7 @@ def _apply_tie(cfg, tie):
     group agrees in Optuna's params and disagrees in the config that reaches the
     kernel.
     """
-    for grp in (tie or []):
+    for grp in tie or []:
         head = next((cfg.get(g) for g in grp if g in cfg), None)
         if not head:
             continue
@@ -505,10 +550,13 @@ def suggest(trial, sites, opts=None):
     """
     opts = opts or DrawOptions()
     rep = _rep(sites, opts.groups)
-    ctx = {"opts": opts, "lead": _tie_rep(sites, opts.tie),
-           # One shared parameter name demands one shared distribution; see
-           # `tied_lead_domain`.
-           "lead_dom": tied_lead_domain(opts.tie, sites, opts.anchor, opts.domain)}
+    ctx = {
+        "opts": opts,
+        "lead": _tie_rep(sites, opts.tie),
+        # One shared parameter name demands one shared distribution; see
+        # `tied_lead_domain`.
+        "lead_dom": tied_lead_domain(opts.tie, sites, opts.anchor, opts.domain),
+    }
     drawn = {}
     cfg = {}
     for s in sites:
@@ -586,7 +634,10 @@ def unflatten(params, sites, groups=None, tie=None):
         if s.kind == "cube":
             cfg[s.id] = _params_to_cube(pre, params)
             continue
-        own = {k[len(pre):]: v for k, v in params.items() if k.startswith(pre)}
+        own = {}
+        for k, v in params.items():
+            if k.startswith(pre):
+                own[k[slice(len(pre), None)]] = v
         # The leading field of a tied site lives under the representative's name,
         # so the prefix scan above does not see it.
         # `vec_fields` returns the dimensions in argument order, so the leading
@@ -628,13 +679,16 @@ def _cube_feasible(c, hw):
     m_l0, k_l0, n_l0 = c["mL0"], c["kL0"], c["nL0"]
     db = hw.dtype_bytes
     for elems, cap_kb, name in (
-            (ceil16(m_l0) * ceil16(k_l0) * db, hw.l0a_kb, "L0A"),
-            (ceil16(k_l0) * ceil16(n_l0) * db, hw.l0b_kb, "L0B"),
-            (ceil16(m_l0) * ceil16(n_l0) * 4, hw.l0c_kb, "L0C")):
+        (ceil16(m_l0) * ceil16(k_l0) * db, hw.l0a_kb, "L0A"),
+        (ceil16(k_l0) * ceil16(n_l0) * db, hw.l0b_kb, "L0B"),
+        (ceil16(m_l0) * ceil16(n_l0) * 4, hw.l0c_kb, "L0C"),
+    ):
         if cap_kb and elems > cap_kb * 1024:
-            return False, (f"{name} tile {elems}B > {cap_kb}KB "
-                           f"(mL0={m_l0}, kL0={k_l0}, nL0={n_l0} at "
-                           f"{db if name != 'L0C' else 4}B)")
+            return False, (
+                f"{name} tile {elems}B > {cap_kb}KB "
+                f"(mL0={m_l0}, kL0={k_l0}, nL0={n_l0} at "
+                f"{db if name != 'L0C' else 4}B)"
+            )
 
     # The L1 tile is now IN the config (m_l1/k_l1/n_l1), a real tunable rather than a
     # DESIGN number the harness never had. The compiler's per-axis invariant is
@@ -647,8 +701,10 @@ def _cube_feasible(c, hw):
         if l0 is None or l1 is None:
             continue
         if l0 > l1 or l1 % l0 != 0:
-            return False, (f"Invalid L1/L0 relation: {ax}L0={l0}, {ax}L1={l1}, "
-                           f"require {ax}L0 <= {ax}L1 and {ax}L1 % {ax}L0 == 0")
+            return False, (
+                f"Invalid L1/L0 relation: {ax}L0={l0}, {ax}L1={l1}, "
+                f"require {ax}L0 <= {ax}L1 and {ax}L1 % {ax}L0 == 0"
+            )
 
     # L1 holds BOTH matmul operands' L1 tiles at once: A = m_l1*k_l1, B = k_l1*n_l1.
     # 512 KB per the knowledge base. Uses the L1 dims, not the L0 ones.
@@ -656,8 +712,10 @@ def _cube_feasible(c, hw):
     if None not in (m_l1, k_l1, n_l1) and hw.l1_budget_kb:
         l1_bytes = (ceil16(m_l1) * ceil16(k_l1) + ceil16(k_l1) * ceil16(n_l1)) * db
         if l1_bytes > hw.l1_budget_kb * 1024:
-            return False, (f"L1 tile {l1_bytes}B > {hw.l1_budget_kb}KB "
-                           f"(A={m_l1}x{k_l1} + B={k_l1}x{n_l1} at {db}B)")
+            return False, (
+                f"L1 tile {l1_bytes}B > {hw.l1_budget_kb}KB "
+                f"(A={m_l1}x{k_l1} + B={k_l1}x{n_l1} at {db}B)"
+            )
     return True, ""
 
 
@@ -693,8 +751,9 @@ def _vec_feasible(v, hw):
     if not hw.calibrated:
         return True, ""
     if hw.head_dim and trail > 4 * hw.head_dim:
-        return False, (f"trailing vec dim {trail} >> head_dim={hw.head_dim} "
-                       "(unusable tail tile)")
+        return False, (
+            f"trailing vec dim {trail} >> head_dim={hw.head_dim} (unusable tail tile)"
+        )
     return True, ""
 
 
@@ -707,7 +766,10 @@ def static_feasible(site_configs, hw):
     for sid, c in site_configs.items():
         h = hw[sid] if isinstance(hw, dict) else hw
         if "value" in c and not any(k.startswith("d") for k in c):
-            ok, reason = True, ""          # global scalar: validated by the correctness gate, not statically
+            ok, reason = (
+                True,
+                "",
+            )  # global scalar: validated by the correctness gate, not statically
         elif "mL0" in c:
             ok, reason = _cube_feasible(c, h)
         else:
@@ -715,6 +777,7 @@ def static_feasible(site_configs, hw):
         if not ok:
             return False, f"{sid}: {reason}"
     return True, ""
+
 
 # No hardcoded per-op envelopes live here — BO is operator-agnostic. Callers pass the envelope from
 # the op's DESIGN (BOINIT --m_l1/--k_l1/...) or omit it (HW(calibrated=False), the default). Recording

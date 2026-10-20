@@ -30,6 +30,7 @@ Testability
 leaves them None: run_cmd = subprocess, measure_fn = the frozen scripts/measure_latency.py. Tests
 pass fakes so the whole (s, p) contract, correctness gating, and base-restore run without an NPU.
 """
+
 import json
 import os
 import re
@@ -92,7 +93,8 @@ def command_steps(cmd):
         if ch in cmd:
             raise UnsupportedCommand(
                 f"the correctness command uses `{ch}`, which needs a shell. PANKO "
-                f"runs it directly; put the command in a script and call that.")
+                f"runs it directly; put the command in a script and call that."
+            )
     cwd, steps = None, []
     for part in cmd.split("&&"):
         if "&" in part:
@@ -122,12 +124,23 @@ def _run_one(step, cwd, timeout, env=None):
     run_env = dict(env or os.environ)
     run_env.update(step_env)
     try:
-        r = subprocess.run([os.path.abspath(exe), *argv[1:]], cwd=cwd, env=run_env,
-                           timeout=timeout, check=False, stdout=subprocess.PIPE,
-                           stderr=subprocess.STDOUT, text=True)
+        r = subprocess.run(
+            [os.path.abspath(exe), *argv[1:]],
+            cwd=cwd,
+            env=run_env,
+            timeout=timeout,
+            check=False,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+            text=True,
+        )
     except subprocess.TimeoutExpired as e:
         out = e.output
-        text = out if isinstance(out, str) else (out.decode(errors="replace") if out else "")
+        text = (
+            out
+            if isinstance(out, str)
+            else (out.decode(errors="replace") if out else "")
+        )
         return text, 124
     return (r.stdout or ""), r.returncode
 
@@ -184,7 +197,7 @@ def default_run(cmd, timeout, env=None):
 # device     : another process holds the device. Waiting is the correct response.
 # invocation : the command never started. Waiting cannot help; it is a bug here.
 DEVICE_FAULT_MARKERS = (
-    "MAP_REG_ADDR_FAILED",      # another process holds the device's register map
+    "MAP_REG_ADDR_FAILED",  # another process holds the device's register map
     "DEVICE_MEM_ERROR",
     "aclrtSetDevice failed",
     "Device is busy",
@@ -238,7 +251,7 @@ ENV_FAULT_MARKERS = DEVICE_FAULT_MARKERS + INVOCATION_FAULT_MARKERS
 
 
 def fault_kind(marker):
-    """"device" (wait and retry) or "invocation" (a bug in how we called it)."""
+    """ "device" (wait and retry) or "invocation" (a bug in how we called it)."""
     return "invocation" if marker in INVOCATION_FAULT_MARKERS else "device"
 
 
@@ -284,16 +297,37 @@ class EnvironmentFault(Exception):
 
 
 # What a measurement carries forward into the symptom index, beside (s, p).
-_CARRIED_METRICS = ("util", "bubble", "aic_util", "aiv_util",
-                    "pred_stall", "aic_bubble", "aiv_bubble")
+_CARRIED_METRICS = (
+    "util",
+    "bubble",
+    "aic_util",
+    "aiv_util",
+    "pred_stall",
+    "aic_bubble",
+    "aiv_bubble",
+)
 
 
 class RealEvaluator:
-    def __init__(self, op, op_dir, op_file, device, test_command,
-                 lint_root=None, lint_stage=7,
-                 warmup=1, runs=3, agg="min", eval_timeout_s=300,
-                 run_cmd=None, measure_fn=None,
-                 fault_backoff_s=(30, 90), sleep_fn=None, evaluation_mode="subprocess"):
+    def __init__(
+        self,
+        op,
+        op_dir,
+        op_file,
+        device,
+        test_command,
+        lint_root=None,
+        lint_stage=7,
+        warmup=1,
+        runs=3,
+        agg="min",
+        eval_timeout_s=300,
+        run_cmd=None,
+        measure_fn=None,
+        fault_backoff_s=(30, 90),
+        sleep_fn=None,
+        evaluation_mode="subprocess",
+    ):
         """test_command : shell string that exits 0 iff golden+layout pass (from the dispatch prompt).
         lint_root      : path to the pypto-op-lint hook directory under
                          cannbot-skills/plugins-official/pypto-op-orchestrator/hooks
@@ -319,7 +353,7 @@ class RealEvaluator:
         self.runs = runs
         self.agg = agg
         self.eval_timeout_s = eval_timeout_s
-        self._last_output = ""                 # combined stdout+stderr of the last default-runner cmd
+        self._last_output = ""  # combined stdout+stderr of the last default-runner cmd
         # Diagnostics of the LAST successful measurement (util / bubble). The
         # objective returns only (s, p) because latency is what the study
         # optimises, and for a long time these were simply dropped -- which is
@@ -334,13 +368,15 @@ class RealEvaluator:
         # against output nobody kept.
         self.last_detail = ""
         self.fault_backoff_s = tuple(fault_backoff_s or ())
-        self.last_retries = 0                  # backoffs spent on the last evaluation
+        self.last_retries = 0  # backoffs spent on the last evaluation
         self._sleep = sleep_fn or time.sleep
         self._run_cmd = run_cmd or self._default_run
         self._measure_fn = measure_fn
         if evaluation_mode not in ("subprocess", "resident", "cached", "prepared"):
             raise ValueError("unknown evaluation mode")
-        if evaluation_mode != "subprocess" and (run_cmd is not None or measure_fn is not None):
+        if evaluation_mode != "subprocess" and (
+            run_cmd is not None or measure_fn is not None
+        ):
             raise ValueError("injected runners require subprocess mode")
         self.evaluation_mode = evaluation_mode
         self._session_result = {}
@@ -387,14 +423,16 @@ class RealEvaluator:
                     self.last_detail = f"lint: {marker}: {self._tail(4)}"
                     raise EnvironmentFault(marker, self._tail(), fault_kind(marker))
                 self.last_detail = "lint: " + self._tail(4)
-                return 0, None, "other"              # Stage-7 lint S0/S1 FAIL
+                return 0, None, "other"  # Stage-7 lint S0/S1 FAIL
             m = self._measure() or {}
             # aic_util/aiv_util/pred_stall ride along on the same measurement:
             # `measure` splits the per-core rows it already parsed by the AIC/AIV
             # prefix, so a block winner carries the per-pipe reading forward to
             # the symptom index exactly as it carries util and bubble.
-            self.last_metrics = {k: m.get(k) for k in _CARRIED_METRICS
-                                 if m.get(k) is not None}
+            self.last_metrics = {}
+            for k in _CARRIED_METRICS:
+                if m.get(k) is not None:
+                    self.last_metrics[k] = m.get(k)
             p = m.get("p")
             if p is None:
                 # The measurement runs on the device too, so it can fail for the
@@ -410,7 +448,7 @@ class RealEvaluator:
             self.last_detail = ""
             return 1, float(p), "ok"
         finally:
-            self._write(self.base_src)               # restore base for the next trial
+            self._write(self.base_src)  # restore base for the next trial
 
     def evaluate_current(self):
         """Evaluate the op_file AS-IS (no apply, no restore): (s, m) where m = {p, util, bubble}.
@@ -426,15 +464,24 @@ class RealEvaluator:
         try:
             rc = self._run_test()
         except EnvironmentFault as e:
-            return 0, {"reason": f"environment fault: {e.marker}",
-                       "detail": e.detail, "fault_kind": e.kind}
+            return 0, {
+                "reason": f"environment fault: {e.marker}",
+                "detail": e.detail,
+                "fault_kind": e.kind,
+            }
         if rc != 0:
-            return 0, {"reason": "test_command failed (golden/layout)", "detail": self._tail()}
+            return 0, {
+                "reason": "test_command failed (golden/layout)",
+                "detail": self._tail(),
+            }
         if not self._lint_ok():
             return 0, {"reason": "lint gate failed", "detail": self._tail()}
         m = self._measure() or {}
         if m.get("p") is None:
-            return 0, {"reason": "perf measure returned no latency", "detail": self._tail()}
+            return 0, {
+                "reason": "perf measure returned no latency",
+                "detail": self._tail(),
+            }
         return 1, m
 
     def finalize(self, site_configs):
@@ -490,6 +537,7 @@ class RealEvaluator:
         if self.evaluation_mode == "subprocess":
             return self._run_cmd(self.test_command, self.eval_timeout_s)
         import evaluation_session
+
         self._session_result = evaluation_session.request(self)
         self._last_output = self._session_result.get("test_output", "")
         return self._session_result["test_rc"]
@@ -526,8 +574,9 @@ class RealEvaluator:
         # The backoff tuple ends with `None`, whose iteration either returns or
         # raises, so control does not reach here. Spelled out so that every
         # branch of this function has the same kind of exit.
-        raise EnvironmentFault("backoff_exhausted", self._tail(), "device",
-                               self.last_retries)
+        raise EnvironmentFault(
+            "backoff_exhausted", self._tail(), "device", self.last_retries
+        )
 
     def _write(self, src):
         with open(self.op_file, "w", encoding="utf-8") as f:
@@ -541,8 +590,10 @@ class RealEvaluator:
             return True
         env = dict(os.environ)
         env["PYTHONPATH"] = self.lint_root + os.pathsep + env.get("PYTHONPATH", "")
-        cmd = (f'{sys.executable} -m pypto_op_lint --lint-impl '
-               f'--op-dir "{self.op_dir}" --stage {self.lint_stage}')
+        cmd = (
+            f"{sys.executable} -m pypto_op_lint --lint-impl "
+            f'--op-dir "{self.op_dir}" --stage {self.lint_stage}'
+        )
         return self._run_cmd(cmd, self.eval_timeout_s, env=env) == 0
 
     def _measure(self):
@@ -575,21 +626,40 @@ class RealEvaluator:
             return self._session_result.get("metrics", {})
         if self._measure_fn is not None:
             return self._measure_fn(self.op_file)
-        ml_path = os.path.join(os.path.dirname(os.path.dirname(__file__)),
-                               "measure_latency.py")
+        ml_path = os.path.join(
+            os.path.dirname(os.path.dirname(__file__)), "measure_latency.py"
+        )
         # An argv, not a command line: nothing here needs a shell, and building
         # one meant quoting `op_file` by hand and hoping. `sys.executable` is
         # already an absolute path, so which interpreter runs does not depend on
         # PATH either.
-        argv = [sys.executable, ml_path,
-                "--op-dir", str(self.op_dir), "--op", str(self.op),
-                "--op-file", str(self.op_file), "--device", str(self.device),
-                "--warmup", str(self.warmup), "--runs", str(self.runs),
-                "--agg", str(self.agg)]
+        argv = [
+            sys.executable,
+            ml_path,
+            "--op-dir",
+            str(self.op_dir),
+            "--op",
+            str(self.op),
+            "--op-file",
+            str(self.op_file),
+            "--device",
+            str(self.device),
+            "--warmup",
+            str(self.warmup),
+            "--runs",
+            str(self.runs),
+            "--agg",
+            str(self.agg),
+        ]
         try:
-            r = subprocess.run(argv, timeout=self.eval_timeout_s, check=False,
-                               stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
-                               text=True)
+            r = subprocess.run(
+                argv,
+                timeout=self.eval_timeout_s,
+                check=False,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.STDOUT,
+                text=True,
+            )
             out = r.stdout or ""
         except subprocess.TimeoutExpired as e:
             out = e.output if isinstance(e.output, str) else ""

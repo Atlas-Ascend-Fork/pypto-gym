@@ -1,6 +1,6 @@
 ---
 name: pypto-op-perf-panko-manual
-description: Stage 7 PANKO world-model + evaluator contract. Read ONLY by pypto-op-auto-tuner-panko. Defines one search cycle (evaluate, record, reflect, select) over the persisted tree, and the CODE/STOP directive returned to the orchestrator. No API key.
+description: Stage 7 PANKO world-model + evaluator contract. Read ONLY by pypto-op-auto-tuner-panko. Defines one search cycle (evaluate, record, reflect, select) over the persisted tree, and the CODE/STOP directive returned to the orchestrator. No API key. Use when the user asks for PANKO search-based auto-tuning in Stage 7.
 ---
 
 # pypto-op-perf-panko-manual — Stage 7 PANKO (world model + evaluator)

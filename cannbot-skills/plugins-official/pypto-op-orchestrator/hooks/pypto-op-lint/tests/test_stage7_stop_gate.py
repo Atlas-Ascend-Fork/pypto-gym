@@ -1,5 +1,13 @@
 # -*- coding: utf-8 -*-
-# Copyright (c) Huawei Technologies Co., Ltd. 2024-2026. All rights reserved.
+# ----------------------------------------------------------------------------------------------------------
+# Copyright (c) 2026 Huawei Technologies Co., Ltd.
+# This program is free software, you can redistribute it and/or modify it under the terms and conditions of
+# CANN Open Software License Agreement Version 2.0 (the "License").
+# Please refer to the License for details. You may not use this file except in compliance with the License.
+# THIS SOFTWARE IS PROVIDED ON AN "AS IS" BASIS, WITHOUT WARRANTIES OF ANY KIND, EITHER EXPRESS OR IMPLIED,
+# INCLUDING BUT NOT LIMITED TO NON-INFRINGEMENT, MERCHANTABILITY, OR FITNESS FOR A PARTICULAR PURPOSE.
+# See LICENSE in the root of the software repository for the full text of the License.
+# ----------------------------------------------------------------------------------------------------------
 """OL63 — Stage 7 completion gate on the PANKO path.
 
 Two halves, and they pull in opposite directions.
@@ -52,6 +60,7 @@ def _write_orchestrator_state(op_dir: Path, tuning_mode=None):
 
 # ── the stepwise path must stay completable ────────────────────────────────────
 
+
 def test_ol63_skips_stepwise_stage7(tmp_path: Path):
     """The default path records tuning_mode=stepwise and writes no search_state.
 
@@ -97,6 +106,7 @@ def test_ol63_fails_when_panko_ran_undeclared(tmp_path: Path):
 
 
 # ── the PANKO path is gated as before ──────────────────────────────────────────
+
 
 def test_ol63_fails_when_search_state_absent(tmp_path: Path):
     """PANKO was declared but never ran -> no stop was decided -> block."""

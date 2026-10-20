@@ -1,5 +1,13 @@
 # -*- coding: utf-8 -*-
-# Copyright (c) Huawei Technologies Co., Ltd. 2024-2025. All rights reserved.
+# ----------------------------------------------------------------------------------------------------------
+# Copyright (c) 2026 Huawei Technologies Co., Ltd.
+# This program is free software, you can redistribute it and/or modify it under the terms and conditions of
+# CANN Open Software License Agreement Version 2.0 (the "License").
+# Please refer to the License for details. You may not use this file except in compliance with the License.
+# THIS SOFTWARE IS PROVIDED ON AN "AS IS" BASIS, WITHOUT WARRANTIES OF ANY KIND, EITHER EXPRESS OR IMPLIED,
+# INCLUDING BUT NOT LIMITED TO NON-INFRINGEMENT, MERCHANTABILITY, OR FITNESS FOR A PARTICULAR PURPOSE.
+# See LICENSE in the root of the software repository for the full text of the License.
+# ----------------------------------------------------------------------------------------------------------
 
 """D4 测试规范规则（OL19-OL22）核心测试。"""
 
@@ -27,34 +35,48 @@ def _jit_impl(
         "    out[:] = x",
     ]
     if pure_entry_name:
-        parts.extend([
-            "", f"def {pure_entry_name}(x):",
-            "    return torch.zeros_like(x)",
-        ])
+        parts.extend(
+            [
+                "",
+                f"def {pure_entry_name}(x):",
+                "    return torch.zeros_like(x)",
+            ]
+        )
     if wrapper_name:
-        parts.extend([
-            "", f"def {wrapper_name}(x):", "    out = torch.empty_like(x)",
-            f"    {kernel_name}(x, out)", "    return out",
-        ])
+        parts.extend(
+            [
+                "",
+                f"def {wrapper_name}(x):",
+                "    out = torch.empty_like(x)",
+                f"    {kernel_name}(x, out)",
+                "    return out",
+            ]
+        )
     if delegate_name and wrapper_name:
-        parts.extend([
-            "", f"def {delegate_name}(x):", f"    return {wrapper_name}(x)",
-        ])
+        parts.extend(
+            [
+                "",
+                f"def {delegate_name}(x):",
+                f"    return {wrapper_name}(x)",
+            ]
+        )
     return "\n".join(parts) + "\n"
 
 
 def _entry_test(module_name: str, entry_name: str, expected: str = "x") -> str:
-    return "\n".join([
-        "import torch",
-        "from numpy.testing import assert_allclose",
-        f"from {module_name} import {entry_name}",
-        "",
-        "def test_level0_basic():",
-        "    x = torch.randn(128, dtype=torch.float32)",
-        f"    y = {entry_name}(x)",
-        f"    assert_allclose(y.numpy(), {expected}.numpy(), atol=1e-3, rtol=1e-3)",
-        "",
-    ])
+    return "\n".join(
+        [
+            "import torch",
+            "from numpy.testing import assert_allclose",
+            f"from {module_name} import {entry_name}",
+            "",
+            "def test_level0_basic():",
+            "    x = torch.randn(128, dtype=torch.float32)",
+            f"    y = {entry_name}(x)",
+            f"    assert_allclose(y.numpy(), {expected}.numpy(), atol=1e-3, rtol=1e-3)",
+            "",
+        ]
+    )
 
 
 def _write_ol60_case(
@@ -280,10 +302,13 @@ def test_ol59_fail_test_calls_pure_torch_entry(tmp_path: Path):
     mod = load_lint_module()
     op_dir = build_stateless_op_dir(tmp_path, "demo")
     impl = _jit_impl(
-        wrapper_name="demo_wrapper", pure_entry_name="pure_torch_entry",
+        wrapper_name="demo_wrapper",
+        pure_entry_name="pure_torch_entry",
     )
     test = _entry_test(
-        "demo_impl", "pure_torch_entry", expected="torch.zeros_like(x)",
+        "demo_impl",
+        "pure_torch_entry",
+        expected="torch.zeros_like(x)",
     )
     _write_ol60_case(op_dir, impl, test)
     finding = run_rule(mod, op_dir, "OL60")

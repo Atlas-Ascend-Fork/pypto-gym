@@ -51,7 +51,7 @@ verify_options = {
 }
 
 @pypto.frontend.jit(verify_options=verify_options)
-def your_kernel(...) 
+def your_kernel(...)
 ```
 
 设置 Golden 数据（**必须严格按照计算 golden → 设置 golden → 执行算子顺序**）：
@@ -60,7 +60,7 @@ def your_kernel(...)
 # 计算 golden
 torch_output = torch.add(input_data0, input_data1)
 
-# 设置 golden（必须放在 pypto 算子运行前设置！此处torch的数据必须在cpu上） 
+# 设置 golden（必须放在 pypto 算子运行前设置！此处torch的数据必须在cpu上）
 pypto.set_verify_golden_data(goldens=[None, None, torch_output.cpu()])
 
 # 执行 pypto 算子

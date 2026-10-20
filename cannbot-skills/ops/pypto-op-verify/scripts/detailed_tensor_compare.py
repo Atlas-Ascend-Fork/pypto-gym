@@ -1,10 +1,19 @@
 # -*- coding: utf-8 -*-
-# Copyright (c) Huawei Technologies Co., Ltd. 2024-2026. All rights reserved.
+# ----------------------------------------------------------------------------------------------------------
+# Copyright (c) 2026 Huawei Technologies Co., Ltd.
+# This program is free software, you can redistribute it and/or modify it under the terms and conditions of
+# CANN Open Software License Agreement Version 2.0 (the "License").
+# Please refer to the License for details. You may not use this file except in compliance with the License.
+# THIS SOFTWARE IS PROVIDED ON AN "AS IS" BASIS, WITHOUT WARRANTIES OF ANY KIND, EITHER EXPRESS OR IMPLIED,
+# INCLUDING BUT NOT LIMITED TO NON-INFRINGEMENT, MERCHANTABILITY, OR FITNESS FOR A PARTICULAR PURPOSE.
+# See LICENSE in the root of the software repository for the full text of the License.
+# ----------------------------------------------------------------------------------------------------------
 
 """
 Bundled helper for golden vs PyPTO output comparison.
 Import from kernel validation runners: see skills/pypto-op-verify/SKILL.md.
 """
+
 import logging
 from dataclasses import dataclass, replace
 
@@ -171,8 +180,12 @@ def _build_result(tensor1, tensor2, options):
         "max_diff": torch.max(diff).item(),
         "mean_diff": torch.mean(diff).item(),
         "std_diff": torch.std(diff, unbiased=False).item(),
-        "max_out_of_tolerance_diff": torch.max(outlier_diff).item() if outlier_count else 0.0,
-        "mean_out_of_tolerance_diff": torch.mean(outlier_diff).item() if outlier_count else 0.0,
+        "max_out_of_tolerance_diff": torch.max(outlier_diff).item()
+        if outlier_count
+        else 0.0,
+        "mean_out_of_tolerance_diff": torch.mean(outlier_diff).item()
+        if outlier_count
+        else 0.0,
         "all_close": outlier_count == 0,
         "shape_match": True,
         "tensor1_shape": tuple(tensor1.shape),
@@ -186,16 +199,27 @@ def _build_result(tensor1, tensor2, options):
 
 def _log_outliers(result, max_display):
     count = result["out_of_tolerance_count"]
-    logger.info("Maximum deviation exceeding tolerance: %.6f", result["max_out_of_tolerance_diff"])
-    logger.info("Average deviation exceeding tolerance: %.6f", result["mean_out_of_tolerance_diff"])
     logger.info(
-        "\n🔍 Details of elements exceeding tolerance limits "
-        "(showing first %d of %d):", min(max_display, count), count
+        "Maximum deviation exceeding tolerance: %.6f",
+        result["max_out_of_tolerance_diff"],
+    )
+    logger.info(
+        "Average deviation exceeding tolerance: %.6f",
+        result["mean_out_of_tolerance_diff"],
+    )
+    logger.info(
+        "\n🔍 Details of elements exceeding tolerance limits (showing first %d of %d):",
+        min(max_display, count),
+        count,
     )
     logger.info("-" * 80)
     logger.info(
         "%-20s %-15s %-15s %-12s %-12s",
-        "Index", "Tensor1 value", "Tensor2 value", "Absolute difference", "Relative difference",
+        "Index",
+        "Tensor1 value",
+        "Tensor2 value",
+        "Absolute difference",
+        "Relative difference",
     )
     logger.info("-" * 80)
     indices = result["outlier_indices"]
@@ -210,7 +234,10 @@ def _log_outliers(result, max_display):
             result["outlier_relative_diffs"][index].item(),
         )
     if count > max_display:
-        logger.info("... And %d more elements exceeding tolerance are not displayed.", count - max_display)
+        logger.info(
+            "... And %d more elements exceeding tolerance are not displayed.",
+            count - max_display,
+        )
 
 
 def _log_result(tensor_name, result, options):
@@ -228,7 +255,10 @@ def _log_result(tensor_name, result, options):
         logger.info("=" * 60)
         return
     logger.info("Total number of elements: %s", f"{result['total_elements']:,}")
-    logger.info("Number of elements exceeding tolerance: %s", f"{result['out_of_tolerance_count']:,}")
+    logger.info(
+        "Number of elements exceeding tolerance: %s",
+        f"{result['out_of_tolerance_count']:,}",
+    )
     logger.info(
         "Out of Tolerance Ratio: %.6f (%.4f%%)",
         result["out_of_tolerance_ratio"],

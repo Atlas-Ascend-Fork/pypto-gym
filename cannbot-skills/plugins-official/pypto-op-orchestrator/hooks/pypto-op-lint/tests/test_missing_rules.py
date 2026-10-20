@@ -1,8 +1,17 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
-# Copyright (c) Huawei Technologies Co., Ltd. 2024-2026. All rights reserved.
+# ----------------------------------------------------------------------------------------------------------
+# Copyright (c) 2026 Huawei Technologies Co., Ltd.
+# This program is free software, you can redistribute it and/or modify it under the terms and conditions of
+# CANN Open Software License Agreement Version 2.0 (the "License").
+# Please refer to the License for details. You may not use this file except in compliance with the License.
+# THIS SOFTWARE IS PROVIDED ON AN "AS IS" BASIS, WITHOUT WARRANTIES OF ANY KIND, EITHER EXPRESS OR IMPLIED,
+# INCLUDING BUT NOT LIMITED TO NON-INFRINGEMENT, MERCHANTABILITY, OR FITNESS FOR A PARTICULAR PURPOSE.
+# See LICENSE in the root of the software repository for the full text of the License.
+# ----------------------------------------------------------------------------------------------------------
 
 """补充测试：OL28, OL29, OL37, OL42, OL43 规则覆盖。"""
+
 from pathlib import Path
 
 from .helpers import build_stateless_op_dir, load_lint_module, run_rule, write_file
@@ -65,6 +74,7 @@ def demo_module1_wrapper(x, y):
 
 # ─── OL29: Tensor 注解应包含 DYNAMIC 维度 ───
 
+
 def test_ol29_pass_with_dynamic(tmp_path: Path):
     """默认 helpers 构建的 fixture 含 DYNAMIC，应 PASS"""
     mod = load_lint_module()
@@ -118,6 +128,7 @@ def demo_module1_wrapper(x, y):
 
 # ── OL37: design 与 impl 命名一致性 ──
 
+
 def test_ol37_pass_when_names_overlap(tmp_path: Path):
     """设计文档与 impl 共享标识符时应 PASS 或 INFO。"""
     mod = load_lint_module()
@@ -127,6 +138,7 @@ def test_ol37_pass_when_names_overlap(tmp_path: Path):
 
 
 # ─── OL42: NPU 环境下 sim 模式检测 ───
+
 
 def test_ol42_skip_when_no_npu(tmp_path: Path):
     """OL42 在无 NPU 环境下 SKIP，在有 NPU 环境下检查 sim 硬编码。"""
@@ -138,6 +150,7 @@ def test_ol42_skip_when_no_npu(tmp_path: Path):
 
 
 # ─── OL43: DESIGN 声明动态轴 → impl 需有 loop ───
+
 
 def test_ol43_skip_when_no_dynamic_axes(tmp_path: Path):
     """DESIGN 不声明动态轴时，OL43 应 SKIP 或 PASS。"""
@@ -162,7 +175,9 @@ verify
     assert finding.status in ("SKIP", "PASS")
 
 
-def test_ol43_fail_on_module_file_without_loop_when_dynamic_axes_declared(tmp_path: Path):
+def test_ol43_fail_on_module_file_without_loop_when_dynamic_axes_declared(
+    tmp_path: Path,
+):
     """DESIGN 声明动态轴 → 每个 module impl 都必须含 pypto.loop。"""
     mod = load_lint_module()
     op_dir = build_stateless_op_dir(tmp_path, "demo")

@@ -28,11 +28,11 @@ import unittest
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent))
-from _support import SCRIPTS_DIR  # noqa: E402
+from _support import SCRIPTS_DIR  # noqa: F401, E402
 
 from bayesian_optimization import block, space  # noqa: E402
 
-KERNEL = '''import pypto
+KERNEL = """import pypto
 
 
 @pypto.frontend.jit()
@@ -40,7 +40,7 @@ def k(a, b):
     pypto.set_cube_tile_shapes([128, 256], [64, 128], [128, 256])
     pypto.set_vec_tile_shapes(64, 128)
     return a + b
-'''
+"""
 
 
 def _tile_total(cfg):
@@ -86,20 +86,23 @@ class BlockOfflineTest(unittest.TestCase):
         on nothing keeps the program it was given, and says so.
         """
         result, _ = self._run()
-        measured = [h["latency"] for h in result["history"]
-                    if h.get("status") == "ok" and h.get("latency") is not None]
+        measured = [
+            h["latency"]
+            for h in result["history"]
+            if h.get("status") == "ok" and h.get("latency") is not None
+        ]
         self.assertTrue(measured)
         self.assertEqual(result["best_latency"], min(measured + [1000.0]))
-        self.assertEqual(result["best_was_incumbent"],
-                         result["best_latency"] == 1000.0)
+        self.assertEqual(result["best_was_incumbent"], result["best_latency"] == 1000.0)
 
     def test_it_stops_on_stagnation_rather_than_on_the_budget(self):
         """A flat objective improves on nothing, so the block closes at
         `stagnation_k` with budget left. Reading `max_trials` as the stop would
         spend the whole allowance on a space that said nothing.
         """
-        result, seen = self._run(objective=lambda cfg: (1, 500.0),
-                                 stagnation_k=2, max_trials=40)
+        result, seen = self._run(
+            objective=lambda cfg: (1, 500.0), stagnation_k=2, max_trials=40
+        )
         self.assertTrue(result["stopped_early"])
         self.assertLess(len(seen), 40)
 
@@ -123,10 +126,17 @@ class BlockOfflineTest(unittest.TestCase):
                 return objective(cfg)
             return 1, float(1000 + (_tile_total(cfg) % 97))
 
-        result = block.run(str(self.op_file), recording, self.hw,
-                           block.BlockOptions(stagnation_k=stagnation_k,
-                                              max_trials=max_trials,
-                                              current_latency=1000.0, seed=0))
+        result = block.run(
+            str(self.op_file),
+            recording,
+            self.hw,
+            block.BlockOptions(
+                stagnation_k=stagnation_k,
+                max_trials=max_trials,
+                current_latency=1000.0,
+                seed=0,
+            ),
+        )
         return result, seen
 
 

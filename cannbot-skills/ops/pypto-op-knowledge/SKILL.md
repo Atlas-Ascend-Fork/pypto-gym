@@ -1,6 +1,6 @@
 ---
 name: pypto-op-knowledge
-description: PyPTO 算子开发知识库查询技能。串行查询经验表和问题查找表，有结果立即返回，无结果返回"无匹配"。触发词：查经验表、查问题表、知识库查询、knowledge query。
+description: PyPTO 算子开发知识库查询技能。串行查询经验表和问题查找表，有结果立即返回，无结果返回"无匹配"。触发：查经验表、查问题表、知识库查询、knowledge query。
 ---
 
 # PyPTO 知识库查询

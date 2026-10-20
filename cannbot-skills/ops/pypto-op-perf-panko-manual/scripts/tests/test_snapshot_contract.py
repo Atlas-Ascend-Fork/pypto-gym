@@ -25,17 +25,16 @@ import unittest
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent))
-from _support import (CATALOG, CHIP_ARGS, SCRIPTS_DIR,  # noqa: E402
-                      file_hash, run_cli)
+from _support import CHIP_ARGS, file_hash, init_argv, record_argv, run_cli
 
-KERNEL = '''import pypto
+KERNEL = """import pypto
 
 
 @pypto.frontend.jit(runtime_options={"device_sched_mode": 1})
 def demo(a, b):
     pypto.set_vec_tile_shapes(64, 128)
     return a + b
-'''
+"""
 
 
 def _run(*args):
@@ -44,7 +43,6 @@ def _run(*args):
 
 
 class SnapshotContractTest(unittest.TestCase):
-
     def setUp(self):
         self._tmp = tempfile.TemporaryDirectory()
         self.op_dir = Path(self._tmp.name) / "demo"
@@ -131,8 +129,11 @@ class SnapshotContractTest(unittest.TestCase):
         self.assertFalse(res["stop"])
         self.assertEqual(res["error"], "restore_failed")
         state = json.loads(
-            (self.op_dir / "optimization" / "search_state.json").read_text(encoding="utf-8"))
-        self.assertIsNone(state["progress"]["stop_reason"])   # not recorded
+            (self.op_dir / "optimization" / "search_state.json").read_text(
+                encoding="utf-8"
+            )
+        )
+        self.assertIsNone(state["progress"]["stop_reason"])  # not recorded
 
     def test_stop_does_not_refuse_when_the_file_already_is_the_best(self):
         """No false refusal: a missing snapshot does not matter if the working
@@ -159,14 +160,16 @@ class SnapshotContractTest(unittest.TestCase):
         with self.op_file.open("a", encoding="utf-8") as f:
             f.write("\n# a losing candidate\n")
         digest = file_hash(self.op_file)
-        res, rc = _run("record", "--op-dir", str(self.op_dir), "--parent", "u1",
-                       "--code-hash", digest, "--s", "1", "--p", "900")
+        res, rc = _run(*record_argv(self.op_dir, digest, "900"))
         self.assertEqual(rc, 3)
         self.assertFalse(res["improved"])
         self.assertEqual(res["error"], "restore_failed")
         # The measurement was paid for, so it is still recorded.
         state = json.loads(
-            (self.op_dir / "optimization" / "search_state.json").read_text(encoding="utf-8"))
+            (self.op_dir / "optimization" / "search_state.json").read_text(
+                encoding="utf-8"
+            )
+        )
         self.assertIn(digest, state["eval_cache"])
 
     def test_record_is_quiet_when_the_chain_is_intact(self):
@@ -175,18 +178,16 @@ class SnapshotContractTest(unittest.TestCase):
         with self.op_file.open("a", encoding="utf-8") as f:
             f.write("\n# a losing candidate\n")
         digest = file_hash(self.op_file)
-        res, rc = _run("record", "--op-dir", str(self.op_dir), "--parent", "u1",
-                       "--code-hash", digest, "--s", "1", "--p", "900")
+        res, rc = _run(*record_argv(self.op_dir, digest, "900"))
         self.assertEqual(rc, 0)
         self.assertNotIn("error", res)
         # and the loser really was rolled back
         self.assertEqual(self.op_file.read_text(encoding="utf-8"), KERNEL)
 
     def _init(self, *extra, op_file=None):
-        return _run("init", "--op-dir", str(self.op_dir), "--op", "demo",
-                    "--p-ref", "100", "--preopt-p", "500",
-                    "--catalog", str(CATALOG), "--allow-unversioned",
-                    "--op-file", str(op_file or self.op_file), *CHIP_ARGS, *extra)
+        return _run(
+            *init_argv(self.op_dir, op_file or self.op_file, *CHIP_ARGS, *extra)
+        )
 
     def _nodes(self):
         return sorted((self.op_dir / "optimization" / "nodes").glob("*.py"))

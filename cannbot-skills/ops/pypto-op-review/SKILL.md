@@ -1,6 +1,6 @@
 ---
 name: pypto-op-review
-description: Op-by-op PyPTO call extraction for debugging custom/<operator>/ kernels. Layout / structure validation is enforced automatically by the pypto-op-lint hooks (no separate script).
+description: Op-by-op PyPTO call extraction for debugging custom/OP_NAME/ kernels. Layout / structure validation is enforced automatically by the pypto-op-lint hooks (no separate script). 触发：调试 custom 下算子 kernel、逐算子提取 PyPTO 调用或审查算子工程结构时使用。
 ---
 
 # PyPTO Complex Kernel — Review helpers

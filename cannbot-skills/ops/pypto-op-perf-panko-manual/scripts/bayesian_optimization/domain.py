@@ -52,6 +52,7 @@ to a single element and capped another far below the extent the hand-optimised
 version runs at. A search inside those boxes would have converged cleanly and
 reported nothing wrong. It was removed rather than narrowed.
 """
+
 import ast
 import os
 import sys
@@ -61,14 +62,13 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 # One home, shared with `predicates`: see pypto_ast. Not optional -- every tile
 # this module counts depends on knowing which calls are pypto's.
-from pypto_ast import pypto_roots        # noqa: E402
+from pypto_ast import pypto_roots  # noqa: E402
 
 try:
-    import feasibility                   # noqa: E402
-except Exception:                        # pragma: no cover
+    import feasibility  # noqa: E402
+except Exception:  # pragma: no cover
     feasibility = None
 
-from . import apply, space               # noqa: E402
 
 # Unsupplied means the capacity rule is OFF, not that residency is two. A guess
 # here is a guess in an unknown direction: too high and the bound is too tight,
@@ -88,9 +88,19 @@ DEFAULT_LIVE_TILES = 0
 # is an addressing construct, not a tile allocation; a loop / range is control
 # flow. An assignment whose right-hand side calls one of these does not add a
 # vec tile to the current site's residency.
-_NON_VEC_CALLS = frozenset((
-    "matmul", "view", "loop", "range", "assemble", "load", "store",
-    "set_cube_tile_shapes", "set_vec_tile_shapes"))
+_NON_VEC_CALLS = frozenset(
+    (
+        "matmul",
+        "view",
+        "loop",
+        "range",
+        "assemble",
+        "load",
+        "store",
+        "set_cube_tile_shapes",
+        "set_vec_tile_shapes",
+    )
+)
 
 # Methods that produce a SCALAR, not a tile: `(M - off).min(TILE_M)`, `.max()`,
 # `x.shape[0]`. An assignment calling one of these is index / trip-count
@@ -167,8 +177,7 @@ def _is_vector_op(rhs, tiles, roots=frozenset({"pypto"})):
             return f.attr not in _SCALAR_METHODS and f.attr not in _NON_VEC_CALLS
         return False
     if isinstance(rhs, (ast.BinOp, ast.UnaryOp)):
-        return any(isinstance(n, ast.Name) and n.id in tiles
-                   for n in ast.walk(rhs))
+        return any(isinstance(n, ast.Name) and n.id in tiles for n in ast.walk(rhs))
     return False
 
 
@@ -181,8 +190,11 @@ def _rhs_tensor_operands(node):
     `gate * sigmoid` is two. Called only for statements `_is_vector_op` has
     already accepted.
     """
-    bases = {a.value.id for a in ast.walk(node)
-             if isinstance(a, ast.Attribute) and isinstance(a.value, ast.Name)}
+    bases = {
+        a.value.id
+        for a in ast.walk(node)
+        if isinstance(a, ast.Attribute) and isinstance(a.value, ast.Name)
+    }
     names = {n.id for n in ast.walk(node) if isinstance(n, ast.Name)}
     return len(names - bases)
 
@@ -242,11 +254,14 @@ def vec_residency(src):
     except SyntaxError:
         return {}
     roots = pypto_roots(tree)
-    kernels = [fn for fn in ast.walk(tree)
-               if isinstance(fn, (ast.FunctionDef, ast.AsyncFunctionDef)) and _is_jit(fn)]
+    kernels = [
+        fn
+        for fn in ast.walk(tree)
+        if isinstance(fn, (ast.FunctionDef, ast.AsyncFunctionDef)) and _is_jit(fn)
+    ]
     scopes = kernels or [tree]
     res, ordinal, active = {}, -1, None
-    tiles = set()          # names known to hold a tile-shaped tensor
+    tiles = set()  # names known to hold a tile-shaped tensor
     # ast.walk does not preserve statement order across nesting, so collect the
     # setters and assignments with their positions and sort once.
     for _, _, kind, node in _ordered_statements(scopes):
@@ -360,12 +375,17 @@ def _int_bindings(target, value):
     """(name, int) pairs bound by one target, tuple unpacking included."""
     if isinstance(target, ast.Name) and _is_int_const(value):
         return [(target.id, value.value)]
-    if not (isinstance(target, (ast.Tuple, ast.List))
-            and isinstance(value, (ast.Tuple, ast.List))
-            and len(target.elts) == len(value.elts)):
+    if not (
+        isinstance(target, (ast.Tuple, ast.List))
+        and isinstance(value, (ast.Tuple, ast.List))
+        and len(target.elts) == len(value.elts)
+    ):
         return []
-    return [(t.id, v.value) for t, v in zip(target.elts, value.elts)
-            if isinstance(t, ast.Name) and _is_int_const(v)]
+    return [
+        (t.id, v.value)
+        for t, v in zip(target.elts, value.elts)
+        if isinstance(t, ast.Name) and _is_int_const(v)
+    ]
 
 
 def _bind_ints(node, env, bad):
@@ -396,8 +416,11 @@ def _int_env(tree):
 
 
 def _is_int_const(n):
-    return isinstance(n, ast.Constant) and isinstance(n.value, int) \
+    return (
+        isinstance(n, ast.Constant)
+        and isinstance(n.value, int)
         and not isinstance(n.value, bool)
+    )
 
 
 def _int_list(node, env=None):
@@ -449,16 +472,21 @@ def derive(op_file, live_tiles=None, ub_budget_kb=192):
     What is left is what was true all along: the tile is bounded by the hardware,
     not by the view. Alignment (in `space`) and footprint (here).
     """
-    report = {"per_site": {}, "capacity_elems": None, "views": [],
-              "live_tiles": int(live_tiles or DEFAULT_LIVE_TILES),
-              "dtype_bytes": 4, "notes": []}
+    report = {
+        "per_site": {},
+        "capacity_elems": None,
+        "views": [],
+        "live_tiles": int(live_tiles or DEFAULT_LIVE_TILES),
+        "dtype_bytes": 4,
+        "notes": [],
+    }
     if feasibility is None:
         report["unreadable"] = True
         report["notes"].append("feasibility unavailable; no footprint bound")
         return report
     try:
         info = feasibility.extract(op_file)
-    except Exception as e:                              # pragma: no cover
+    except Exception as e:  # pragma: no cover
         report["unreadable"] = True
         report["notes"].append(f"extract failed ({e}); no footprint bound")
         return report
@@ -491,7 +519,8 @@ def derive(op_file, live_tiles=None, ub_budget_kb=192):
         report["capacity_elems"] = report["ub_bytes"] // (db * peak)
     else:
         report["notes"].append(
-            "no vec site found, so the footprint bound is off (alignment only)")
+            "no vec site found, so the footprint bound is off (alignment only)"
+        )
     return report
 
 
@@ -514,9 +543,13 @@ def fingerprint(domain):
     on the tile's current value -- so a block that improved the tile would change
     them, fire a retune, run another block, and loop.
     """
-    return repr((sorted(tuple(v) for v in (domain.get("views") or [])),
-                 domain.get("capacity_elems"),
-                 domain.get("dtype_bytes")))
+    return repr(
+        (
+            sorted(tuple(v) for v in (domain.get("views") or [])),
+            domain.get("capacity_elems"),
+            domain.get("dtype_bytes"),
+        )
+    )
 
 
 def changed(before, after):
@@ -535,8 +568,10 @@ def changed(before, after):
     if (before.get("views") or []) != (after.get("views") or []):
         bits.append(f"views {before.get('views')} -> {after.get('views')}")
     if before.get("capacity_elems") != after.get("capacity_elems"):
-        bits.append(f"capacity {before.get('capacity_elems')} -> "
-                    f"{after.get('capacity_elems')} elements")
+        bits.append(
+            f"capacity {before.get('capacity_elems')} -> "
+            f"{after.get('capacity_elems')} elements"
+        )
     return True, "; ".join(bits) or "the derived tile domain changed"
 
 
@@ -564,6 +599,8 @@ def verify(domain, config, dtype_bytes=4):
         live = res.get(sid, 1)
         need = _prod(dims) * db * live
         if need > ub:
-            return False, (f"{sid}: {_prod(dims)} elements x {db}B x {live} live "
-                           f"= {need}B > {ub}B UB")
+            return False, (
+                f"{sid}: {_prod(dims)} elements x {db}B x {live} live "
+                f"= {need}B > {ub}B UB"
+            )
     return True, ""

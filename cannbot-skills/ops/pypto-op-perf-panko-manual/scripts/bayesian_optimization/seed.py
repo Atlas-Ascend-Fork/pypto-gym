@@ -46,13 +46,13 @@ Candidates are filtered by the existing static gate BEFORE selection, so a
 startup point can no longer be spent on a configuration the harness would have
 rejected anyway. Nothing here touches the device.
 """
-import itertools
+
 import random
 
 from dataclasses import dataclass
 from typing import Any
 
-from . import apply, space
+from . import space
 
 # Fallback only. The live values ride on `hw` (space.HW.cube_cores /
 # vector_cores), supplied by the harness from the run's chip envelope, so a chip
@@ -71,15 +71,17 @@ def _cube_features(c, hw):
     b = space.ceil16(c["kL0"]) * space.ceil16(c["nL0"]) * db
     cc = space.ceil16(c["mL0"]) * space.ceil16(c["nL0"]) * 4
     l1 = (c["mL1"] * c["kL1"] + c["kL1"] * c["nL1"]) * db
-    return {"l0a": a / (hw.l0a_kb * 1024),
-            "l0b": b / (hw.l0b_kb * 1024),
-            "l0c": cc / (hw.l0c_kb * 1024),
-            "l1": l1 / (hw.l1_budget_kb * 1024),
-            # How many L0 steps one L1 staging serves on each axis. Small means
-            # the operand is re-staged often; this is a count, not a verdict.
-            "m_steps": c["mL1"] / max(1, c["mL0"]),
-            "k_steps": c["kL1"] / max(1, c["kL0"]),
-            "n_steps": c["nL1"] / max(1, c["nL0"])}
+    return {
+        "l0a": a / (hw.l0a_kb * 1024),
+        "l0b": b / (hw.l0b_kb * 1024),
+        "l0c": cc / (hw.l0c_kb * 1024),
+        "l1": l1 / (hw.l1_budget_kb * 1024),
+        # How many L0 steps one L1 staging serves on each axis. Small means
+        # the operand is re-staged often; this is a count, not a verdict.
+        "m_steps": c["mL1"] / max(1, c["mL0"]),
+        "k_steps": c["kL1"] / max(1, c["kL0"]),
+        "n_steps": c["nL1"] / max(1, c["nL0"]),
+    }
 
 
 def _vec_features(v, hw, domain, site_id):
@@ -238,8 +240,9 @@ def _rand_vec(site_id, a, domain, rng):
     fields = space.vec_fields(a)
     if not fields:
         return {}
-    return {f: rng.choice(space.vec_domain(site_id, f, fields, a, domain))
-            for f in fields}
+    return {
+        f: rng.choice(space.vec_domain(site_id, f, fields, a, domain)) for f in fields
+    }
 
 
 def _sample_space(sites, anchor, domain, n, rng):
@@ -253,8 +256,11 @@ def _sample_space(sites, anchor, domain, n, rng):
         cfg = {}
         for s in sites:
             a = (anchor or {}).get(s.id, {})
-            drawn = (_rand_cube(a, rng) if s.kind == "cube"
-                     else _rand_vec(s.id, a, domain, rng))
+            drawn = (
+                _rand_cube(a, rng)
+                if s.kind == "cube"
+                else _rand_vec(s.id, a, domain, rng)
+            )
             if drawn:
                 cfg[s.id] = drawn
         if cfg:
@@ -306,8 +312,8 @@ class CoverOptions:
 
     domain: Any = None
     seed: int = 0
-    pool: int = 400                   # candidates sampled before the k are picked
-    exclude: Any = ()                 # configs already queued, not to repeat
+    pool: int = 400  # candidates sampled before the k are picked
+    exclude: Any = ()  # configs already queued, not to repeat
 
 
 def cover(sites, hw, anchor, k, opts=None):
@@ -369,8 +375,9 @@ def cover(sites, hw, anchor, k, opts=None):
     # `_sample_space` runs, so the free walk would see a different pool than it
     # saw without this family -- and "additive" has to mean the free selection is
     # bit-for-bit what it was, not merely the same size.
-    l1_cands = _keep(_l1_only(sites, anchor, random.Random(opts.seed ^ 0x5EED),
-                              min(opts.pool, 64)))
+    l1_cands = _keep(
+        _l1_only(sites, anchor, random.Random(opts.seed ^ 0x5EED), min(opts.pool, 64))
+    )
     # Drawn, not maximised. Taking the member FURTHEST from the anchor picks the
     # same corner every time -- twenty seeds returned four multiplier triples,
     # all at the top of the ladder, which is the crowding this module exists to
@@ -385,13 +392,15 @@ def cover(sites, hw, anchor, k, opts=None):
 
     base = [features(anchor, hw, opts.domain)] if anchor else []
     vecs = _normalise(base + [features(c, hw, opts.domain) for c in cands])
-    chosen_vecs = vecs[:len(base)]
-    pool_vecs = vecs[len(base):]
+    chosen_vecs = vecs[: len(base)]
+    pool_vecs = vecs[slice(len(base), None)]
 
     picked, avail = [], list(range(len(cands)))
     while avail and len(picked) < k:
         if chosen_vecs:
-            i = max(avail, key=lambda j: min(_dist2(pool_vecs[j], c) for c in chosen_vecs))
+            i = max(
+                avail, key=lambda j: min(_dist2(pool_vecs[j], c) for c in chosen_vecs)
+            )
         else:
             i = avail[0]
         picked.append(cands[i])
@@ -402,13 +411,21 @@ def cover(sites, hw, anchor, k, opts=None):
         # that motivated this module chose two seeds at l0a=0.09/l0b=0.09/
         # l0c=0.01, which is the duplicate-operating-point waste it exists to
         # remove. Drop what is now indistinguishable from something chosen.
-        avail = [j for j in avail
-                 if min(_dist2(pool_vecs[j], c) for c in chosen_vecs) > _MIN_SEP2]
+        avail = [
+            j
+            for j in avail
+            if min(_dist2(pool_vecs[j], c) for c in chosen_vecs) > _MIN_SEP2
+        ]
     # Reserved point first: if the block's budget is cut short, the one that no
     # other mechanism can produce should not be the one dropped.
     return reserved + picked
 
 
 def _key(cfg):
-    return tuple(sorted((sid, tuple(sorted(v.items())))
-                        for sid, v in cfg.items() if isinstance(v, dict)))
+    return tuple(
+        sorted(
+            (sid, tuple(sorted(v.items())))
+            for sid, v in cfg.items()
+            if isinstance(v, dict)
+        )
+    )

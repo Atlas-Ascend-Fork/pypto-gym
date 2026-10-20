@@ -23,6 +23,7 @@ result to stdout. See references/state_schema.md for the schema.
     # pypto_action_priority (short symbol V_pypto) is OUR composite selection score — NOT from
     # the PANKO paper. V is PANKO's per-node value/belief and is only one of its factors.
 """
+
 import argparse
 import ast
 import datetime
@@ -39,6 +40,7 @@ import evaluation_session
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 import jsonio  # noqa: E402
+
 # The package needs `optuna`, which is a real dependency of the tile search and
 # of nothing else here. Absent, the search still runs with
 # `bayesian_optimization_tile_search` off -- that is the ablation arm, and the
@@ -50,7 +52,7 @@ import jsonio  # noqa: E402
 # alike, set every module to None, and let the run continue reporting
 # `tile_search: true` while the numbers were being chosen by the model instead.
 # Those are bugs and they must reach a traceback.
-OPTUNA_MIN_VERSION = (2, 0)             # `create_trial` / `add_trial`; developed against 4.9
+OPTUNA_MIN_VERSION = (2, 0)  # `create_trial` / `add_trial`; developed against 4.9
 
 
 def _read_text(path, errors="replace"):
@@ -74,16 +76,19 @@ def is_missing_optuna(exc):
     defect that has to reach a traceback rather than silently turn the tile
     search off.
     """
-    return (isinstance(exc, ModuleNotFoundError)
-            and (getattr(exc, "name", "") or "").split(".")[0] == "optuna")
+    return (
+        isinstance(exc, ModuleNotFoundError)
+        and (getattr(exc, "name", "") or "").split(".")[0] == "optuna"
+    )
 
 
 try:
     import bayesian_optimization as bayesian
+
     _BAYESIAN_UNAVAILABLE = None
-except ModuleNotFoundError as _e:       # pragma: no cover
+except ModuleNotFoundError as _e:  # pragma: no cover
     if not is_missing_optuna(_e):
-        raise                           # this package is broken, not a missing optional dep
+        raise  # this package is broken, not a missing optional dep
     # One name for the whole package, so the guards downstream are `bayesian is
     # None` rather than eleven separate module flags. The previous form bound
     # `= None, shutil` -- a TUPLE -- to three of them, so every `is None` guard
@@ -99,29 +104,41 @@ def bayesian_capability():
     ran rather than the one that was configured.
     """
     if bayesian is None:
-        return {"available": False, "optuna_version": None,
-                "reason": _BAYESIAN_UNAVAILABLE}
+        return {
+            "available": False,
+            "optuna_version": None,
+            "reason": _BAYESIAN_UNAVAILABLE,
+        }
     try:
-        import optuna                                        # noqa: PLC0415
+        import optuna  # noqa: PLC0415
+
         version = getattr(optuna, "__version__", "")
         parts = tuple(int(x) for x in version.split(".")[:2] if x.isdigit())
-    except Exception as e:                                   # pragma: no cover
-        return {"available": False, "optuna_version": None,
-                "reason": f"optuna imported but unusable: {e}"}
+    except Exception as e:  # pragma: no cover
+        return {
+            "available": False,
+            "optuna_version": None,
+            "reason": f"optuna imported but unusable: {e}",
+        }
     if parts and parts < OPTUNA_MIN_VERSION:
-        return {"available": False, "optuna_version": version,
-                "reason": (f"optuna {version} < "
-                           f"{'.'.join(str(x) for x in OPTUNA_MIN_VERSION)}; "
-                           "the tile search needs trial.create_trial / study.add_trial")}
+        return {
+            "available": False,
+            "optuna_version": version,
+            "reason": (
+                f"optuna {version} < "
+                f"{'.'.join(str(x) for x in OPTUNA_MIN_VERSION)}; "
+                "the tile search needs trial.create_trial / study.add_trial"
+            ),
+        }
     return {"available": True, "optuna_version": version, "reason": None}
 
 
-try:                                   # optional: absent -> the gate is a no-op
+try:  # optional: absent -> the gate is a no-op
     sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
     import chip_profile
     import feasibility
     import predicates
-except Exception:                      # pragma: no cover
+except Exception:  # pragma: no cover
     # BOTH names, or the "gate is a no-op" fallback is a NameError instead: the
     # first reference is `cmd_init`'s `if (predicates and ...)`, so the run would
     # fail to start on exactly the configuration this handler exists for.
@@ -166,7 +183,7 @@ CHIP_ENVELOPE = {
     "l0c_kb": 128,
     "cube_cores": 20,
     "vector_cores": 40,
-    "source": "transcribed:910B3",      # becomes the ini path once derived
+    "source": "transcribed:910B3",  # becomes the ini path once derived
 }
 
 
@@ -176,8 +193,9 @@ def chip_envelope(st=None):
     """
     env = dict(CHIP_ENVELOPE)
     if st:
-        env.update({k: v for k, v in (st.get("chip_envelope") or {}).items()
-                    if k in env})
+        env.update(
+            {k: v for k, v in (st.get("chip_envelope") or {}).items() if k in env}
+        )
     return env
 
 
@@ -203,9 +221,9 @@ DEFAULT_CONFIG = {
     # is the most any single action accumulated across the recorded runs, because
     # a rejection costs one dispatch rather than one device run.
     "infeasible_K": 16,
-    "staged_prior": True,       # soft-staging toggle (staged-prior vs free-tree)
+    "staged_prior": True,  # soft-staging toggle (staged-prior vs free-tree)
     "wall_clock_limit_s": 86400,  # 24 h; the existing Stage 7 stops at 12 h
-    "eval_timeout_s": 300,        # 5 min per candidate (enforced by the optimizer's `timeout`)
+    "eval_timeout_s": 300,  # 5 min per candidate (enforced by the optimizer's `timeout`)
     # Evaluations per operator; None means unlimited. Raised from 90: the recorded
     # campaigns kept ending on the budget rather than on a search decision, so
     # the number was measuring the cap and not the method. 300 lets the
@@ -222,7 +240,7 @@ DEFAULT_CONFIG = {
     # stage_patience=2 over three stages, `converged` is reachable in six
     # unproductive closes (~18 evaluations), well inside the budget.
     "stage_convergence": False,
-    "stage_min_gain": 0.01,       # a close is "productive" only if it cuts best latency by >= 1%
+    "stage_min_gain": 0.01,  # a close is "productive" only if it cuts best latency by >= 1%
     # Firings of a tile BO lever that are exempt from the novelty penalty. A
     # sweep is not repetition; see novelty(). 0 restores the old behaviour and
     # is the setting for the bayesian_optimization_tile_search=false ablation arm.
@@ -238,7 +256,7 @@ DEFAULT_CONFIG = {
     # not the same as establishing that two refusals sharing it share a cause.
     # 1 restores the old carry-from-first-sighting behaviour.
     "bayesian_optimization_refusal_global_after": REFUSAL_GLOBAL_AFTER,
-    "stage_patience": 2,          # advance to the next stage after this many non-productive closes
+    "stage_patience": 2,  # advance to the next stage after this many non-productive closes
     # Tile shapes are the one lever where the number, not the structure, decides
     # the outcome, and the number has always been the model's guess. A generated
     # kernel carries whatever tile DESIGN.md wrote down, and the right value can
@@ -247,10 +265,10 @@ DEFAULT_CONFIG = {
     # says "this tile is 256 bytes". False restores that: the model proposes
     # numbers again.
     "bayesian_optimization_tile_search": True,
-    "symptom_boost": 1.3,         # >1 enables deterministic symptom->action V re-boost (1.0 = off)
-    "static_feasibility": True,   # reject hardware-infeasible candidates before the device (False = off)
-    "action_preconditions": True, # hold back actions whose structural precondition is unmet (False = off)
-    "conversion_actions": True,   # include the actions that CREATE preconditions (False = off)
+    "symptom_boost": 1.3,  # >1 enables deterministic symptom->action V re-boost (1.0 = off)
+    "static_feasibility": True,  # reject hardware-infeasible candidates before the device (False = off)
+    "action_preconditions": True,  # hold back actions whose structural precondition is unmet (False = off)
+    "conversion_actions": True,  # include the actions that CREATE preconditions (False = off)
     # Fraction of the run budget a tile BO block may consume, counted across all
     # blocks. None = DISABLED: a block is bounded only by the remaining run
     # budget and by its own stagnation rule. Rationale: the share existed so
@@ -276,54 +294,57 @@ DEFAULT_CONFIG = {
 # may be correct (such a kernel need not be scheduler-bound) or the threshold
 # may simply be too high; a handful of points cannot tell. Collect readings
 # across operators before moving it, and do not treat 10.0 as validated.
-SYMPTOM_THRESH = {"bubble": 10.0, "util": 50.0,   # bubble% ABOVE 10 ; core-util% BELOW 50
-                  "occupancy": 0.5,               # UB fraction BELOW 0.5
-                  "l1_occupancy": 0.5,            # L1 fraction BELOW 0.5
-                  # --- per-pipe, from measure_latency._pipes_from_log ---
-                  # `util` above is a mean over AIC and AIV together, and with 20
-                  # cube cores against 40 vector ones the vector pipe carries two
-                  # thirds of it. Measured kernels sit outside every threshold
-                  # here while a pipe is the bottleneck. One whose vector pipe is
-                  # saturated and whose cube pipe is idle reads above 50 and
-                  # raises nothing at all; one where both pipes are idle raises
-                  # `util`, whose action set is about occupancy and contains no
-                  # way to overlap two pipes -- S-15 lives under `bubble`, and
-                  # `bubble` counts only wait_schedule while nearly all of that
-                  # stall is wait_predecessor.
-                  # Two of these four come from the master Stage-7 skill, which
-                  # grades the aggregate utilisation on a scale this project
-                  # already uses elsewhere: below 50 is a symptom worth acting on
-                  # (analyze_perf.py, and optimization_catalog's 症状B, which is
-                  # where `util: 50.0` above came from), 70 and up is "scheduling
-                  # and utilisation are about right", and 80 is 分满核 -- the
-                  # cores are full (tileshape-deep-tuning §1.1, and the "利用率 >
-                  # 80% 且 气泡率 < 10%" that the perf-tune skill repeats three
-                  # times). Applying its own scale per pipe leaves the measured
-                  # kernels classified exactly as before -- a saturated vector
-                  # pipe is full by any of these lines and an idle one is idle by
-                  # any of them -- so this replaces a guess with a cited number
-                  # and changes no verdict.
-                  "pipe_saturated": 80.0,  # ... while aiv_util is AT OR ABOVE this
-                  "pipe_idle": 50.0,       # BOTH pipes below this ...
-                  # The other two are ours: master measures neither a per-pipe
-                  # ratio nor the predecessor wait, so there is nothing to cite
-                  # and these stay open until campaign data settles them. Note
-                  # pred_stall reads 75-91% on both kernels measured so far, a
-                  # very different range from the bubble it mirrors, so borrowing
-                  # bubble's 10/20 bands for it would fire on nearly everything.
-                  #
-                  # STILL UNTESTED, and the record says so precisely: across the
-                  # three per-pipe readings taken to date NEITHER of these two has
-                  # decided a verdict. Every ratio measured falls on the same side
-                  # of 0.5, and every predecessor wait measured falls far above
-                  # 50, so `pipe_saturated` and `pipe_idle` -- the two that ARE
-                  # cited -- did all the separating. Moving either number on this
-                  # evidence would be inventing precision. What would settle them
-                  # is a kernel whose ratio lands between 0.3 and 0.7, or whose
-                  # predecessor wait lands between 30 and 70; until one appears,
-                  # treat a verdict that turns on these as unsupported.
-                  "cube_starved": 0.5,     # aic_util / aiv_util BELOW this ...
-                  "pred_stall": 50.0}      # ... and predecessor-wait% ABOVE this
+SYMPTOM_THRESH = {
+    "bubble": 10.0,
+    "util": 50.0,  # bubble% ABOVE 10 ; core-util% BELOW 50
+    "occupancy": 0.5,  # UB fraction BELOW 0.5
+    "l1_occupancy": 0.5,  # L1 fraction BELOW 0.5
+    # --- per-pipe, from measure_latency._pipes_from_log ---
+    # `util` above is a mean over AIC and AIV together, and with 20
+    # cube cores against 40 vector ones the vector pipe carries two
+    # thirds of it. Measured kernels sit outside every threshold
+    # here while a pipe is the bottleneck. One whose vector pipe is
+    # saturated and whose cube pipe is idle reads above 50 and
+    # raises nothing at all; one where both pipes are idle raises
+    # `util`, whose action set is about occupancy and contains no
+    # way to overlap two pipes -- S-15 lives under `bubble`, and
+    # `bubble` counts only wait_schedule while nearly all of that
+    # stall is wait_predecessor.
+    # Two of these four come from the master Stage-7 skill, which
+    # grades the aggregate utilisation on a scale this project
+    # already uses elsewhere: below 50 is a symptom worth acting on
+    # (analyze_perf.py, and optimization_catalog's 症状B, which is
+    # where `util: 50.0` above came from), 70 and up is "scheduling
+    # and utilisation are about right", and 80 is 分满核 -- the
+    # cores are full (tileshape-deep-tuning §1.1, and the "利用率 >
+    # 80% 且 气泡率 < 10%" that the perf-tune skill repeats three
+    # times). Applying its own scale per pipe leaves the measured
+    # kernels classified exactly as before -- a saturated vector
+    # pipe is full by any of these lines and an idle one is idle by
+    # any of them -- so this replaces a guess with a cited number
+    # and changes no verdict.
+    "pipe_saturated": 80.0,  # ... while aiv_util is AT OR ABOVE this
+    "pipe_idle": 50.0,  # BOTH pipes below this ...
+    # The other two are ours: master measures neither a per-pipe
+    # ratio nor the predecessor wait, so there is nothing to cite
+    # and these stay open until campaign data settles them. Note
+    # pred_stall reads 75-91% on both kernels measured so far, a
+    # very different range from the bubble it mirrors, so borrowing
+    # bubble's 10/20 bands for it would fire on nearly everything.
+    #
+    # STILL UNTESTED, and the record says so precisely: across the
+    # three per-pipe readings taken to date NEITHER of these two has
+    # decided a verdict. Every ratio measured falls on the same side
+    # of 0.5, and every predecessor wait measured falls far above
+    # 50, so `pipe_saturated` and `pipe_idle` -- the two that ARE
+    # cited -- did all the separating. Moving either number on this
+    # evidence would be inventing precision. What would settle them
+    # is a kernel whose ratio lands between 0.3 and 0.7, or whose
+    # predecessor wait lands between 30 and 70; until one appears,
+    # treat a verdict that turns on these as unsupported.
+    "cube_starved": 0.5,  # aic_util / aiv_util BELOW this ...
+    "pred_stall": 50.0,
+}  # ... and predecessor-wait% ABOVE this
 SYMPTOM_ACTIONS = {
     # A symptom names an AXIS, not a direction. Where a presence directive and its
     # removal counterpart both bear on the diagnosis, BOTH are boosted and the
@@ -332,10 +353,38 @@ SYMPTOM_ACTIONS = {
     # Boosting only the positive prescribes a direction the evidence does not
     # support.
     # bubble high -> fill idle bubbles: larger tiles / unroll, merge loops, stitch, vec-merge, sched, fuse/pipeline
-    "bubble": {"F-2", "F-3", "F-6", "F-8", "S-4", "S-5", "S-20", "S-9", "S-10", "S-14", "S-15"},
+    "bubble": {
+        "F-2",
+        "F-3",
+        "F-6",
+        "F-8",
+        "S-4",
+        "S-5",
+        "S-20",
+        "S-9",
+        "S-10",
+        "S-14",
+        "S-15",
+    },
     # util low -> raise occupancy: more tasks (granularity/tiling), core-fill, cube merges, memory cuts
-    "util": {"F-1", "F-7", "F-9", "F-10", "S-1", "S-2", "S-6", "S-18", "S-7", "S-19",
-             "S-11", "S-12", "S-16", "S-17", "F-17", "F-18"},
+    "util": {
+        "F-1",
+        "F-7",
+        "F-9",
+        "F-10",
+        "S-1",
+        "S-2",
+        "S-6",
+        "S-18",
+        "S-7",
+        "S-19",
+        "S-11",
+        "S-12",
+        "S-16",
+        "S-17",
+        "F-17",
+        "F-18",
+    },
     # UB under-occupied -> make the tile bigger. Only the actions that resize a
     # tile or the loop it implies; nothing here is about scheduling or fusion,
     # because the diagnosis is specifically "the buffer is nearly empty".
@@ -380,8 +429,7 @@ SYMPTOM_ACTIONS = {
 # measured: the installed draw_swim_lane.py has a latency-only fast path that
 # exits before writing bubble_analysis.log, so these are missing far more often
 # than `util` is, and a missing reading must never read as a zero.
-PIPE_METRICS = ("aic_util", "aiv_util", "pred_stall",
-                "aic_bubble", "aiv_bubble")
+PIPE_METRICS = ("aic_util", "aiv_util", "pred_stall", "aic_bubble", "aiv_bubble")
 
 
 # --------------------------------------------------------------------------- I/O
@@ -419,8 +467,10 @@ def migrate_keys(st):
     The new spelling wins if both are present, which can only happen if a file was
     hand-edited; the old key is dropped either way so `save` cannot write it back.
     """
-    for holder, table in ((st, _RENAMED_STATE_KEYS),
-                          (st.get("config") or {}, _RENAMED_CONFIG_KEYS)):
+    for holder, table in (
+        (st, _RENAMED_STATE_KEYS),
+        (st.get("config") or {}, _RENAMED_CONFIG_KEYS),
+    ):
         for old_key, new_key in table.items():
             if old_key in holder:
                 value = holder.pop(old_key)
@@ -563,10 +613,12 @@ def _pypto_defaults():
         if bayesian is None:
             _PYPTO_DEFAULTS = {}
         else:
-            try:                                        # pragma: no cover
-                import pypto                            # noqa: PLC0415
+            try:  # pragma: no cover
+                import pypto  # noqa: PLC0415
+
                 _PYPTO_DEFAULTS = bayesian.semantic.defaults_for(
-                    getattr(pypto, "frontend", None), pypto)
+                    getattr(pypto, "frontend", None), pypto
+                )
             except Exception:
                 _PYPTO_DEFAULTS = {}
     return _PYPTO_DEFAULTS
@@ -590,7 +642,7 @@ def _semantic_noop(st, op_dir, op_file, parent=None):
     """
     if bayesian is None or not op_file or not os.path.exists(op_file):
         return False, ""
-    r = (st["progress"].get("refine") or {})
+    r = st["progress"].get("refine") or {}
     # The running best belongs to ONE action. Judging action B's candidate
     # against action A's local best compares it to a program it was never built
     # on top of.
@@ -607,7 +659,7 @@ def _semantic_noop(st, op_dir, op_file, parent=None):
     except OSError:
         return False, ""
     if cand == base:
-        return False, ""            # nothing was edited; not this gate's business
+        return False, ""  # nothing was edited; not this gate's business
     return bayesian.semantic.same_program(cand, base, _pypto_defaults())
 
 
@@ -764,7 +816,9 @@ def _metrics(util, bubble, fallback=None, pipes=None):
     return m
 
 
-def pypto_action_priority(node, active_stage, staged_prior, bayesian_optimization_free_trials=0):
+def pypto_action_priority(
+    node, active_stage, staged_prior, bayesian_optimization_free_trials=0
+):
     """OUR composite selection score (not from the PANKO paper): the paper's per-node
     value V modulated by our staged prior, catalog prior_gain, and novelty.
 
@@ -775,8 +829,13 @@ def pypto_action_priority(node, active_stage, staged_prior, bayesian_optimizatio
     belief = float(node.get("V", 0.0))
     pg = float(node.get("prior_gain", 0.0))
     free = bayesian_optimization_free_trials if _is_bayes_lever(node) else 0
-    return round(w_stage(node["stage"], active_stage, staged_prior) * pg
-                 * novelty(node.get("tried", 0), free) * belief, 6)
+    return round(
+        w_stage(node["stage"], active_stage, staged_prior)
+        * pg
+        * novelty(node.get("tried", 0), free)
+        * belief,
+        6,
+    )
 
 
 def _occupancies(op_file):
@@ -794,16 +853,18 @@ def _occupancies(op_file):
     if not op_file or not os.path.exists(op_file):
         return None, None
     try:
-        return (feasibility.ub_occupancy(op_file),
-                feasibility.l1_occupancy(op_file))
+        return (feasibility.ub_occupancy(op_file), feasibility.l1_occupancy(op_file))
     except Exception:
         return None, None
 
 
 def _cli_pipes(a, prefix=""):
     """PIPE_METRICS off the parsed CLI namespace, skipping what was not given."""
-    return {k: getattr(a, prefix + k, None) for k in PIPE_METRICS
-            if getattr(a, prefix + k, None) is not None}
+    return {
+        k: getattr(a, prefix + k, None)
+        for k in PIPE_METRICS
+        if getattr(a, prefix + k, None) is not None
+    }
 
 
 def _pipe_symptoms(m):
@@ -846,8 +907,11 @@ def _pipe_symptoms(m):
     if starved and aiv >= SYMPTOM_THRESH["pipe_saturated"]:
         return ["cube_starved"]
     pred = (m or {}).get("pred_stall")
-    if (max(aic, aiv) < SYMPTOM_THRESH["pipe_idle"] and pred is not None
-            and float(pred) > SYMPTOM_THRESH["pred_stall"]):
+    if (
+        max(aic, aiv) < SYMPTOM_THRESH["pipe_idle"]
+        and pred is not None
+        and float(pred) > SYMPTOM_THRESH["pred_stall"]
+    ):
         return ["pipe_serialized"]
     return []
 
@@ -892,7 +956,7 @@ def _symptom_reboost(st, util, bubble, op_file=None, pipes=None):
         active.append("occupancy")
     if l1 is not None and l1 < SYMPTOM_THRESH["l1_occupancy"]:
         active.append("l1_occupancy")
-    if util > 0.0 or bubble > 0.0:             # a real measurement to read
+    if util > 0.0 or bubble > 0.0:  # a real measurement to read
         if bubble > SYMPTOM_THRESH["bubble"]:
             active.append("bubble")
         if 0.0 < util < SYMPTOM_THRESH["util"]:
@@ -918,9 +982,14 @@ def _code_version():
     git = shutil.which("git")
     if git:
         try:
-            rev = subprocess.check_output(
-                [git, "-C", here, "rev-parse", "--short", "HEAD"],
-                stderr=subprocess.DEVNULL).decode().strip()
+            rev = (
+                subprocess.check_output(
+                    [git, "-C", here, "rev-parse", "--short", "HEAD"],
+                    stderr=subprocess.DEVNULL,
+                )
+                .decode()
+                .strip()
+            )
         except (OSError, subprocess.SubprocessError):
             # Not a work tree, or git cannot read it. The VERSION file below is
             # the documented fallback for a skill tree that was copied rather
@@ -955,7 +1024,7 @@ def _admit(st, op_dir):
     admitted = []
     keep = []
     for n in st["nodes"].get("held", []):
-        if n["id"] in pruned:      # the optimizer retired this while it was reachable
+        if n["id"] in pruned:  # the optimizer retired this while it was reachable
             keep.append(n)
             continue
         if predicates.satisfies(n.get("requires"), preds):
@@ -982,7 +1051,9 @@ def _next_id(st, prefix):
 # ----------------------------------------------------------------- subcommands
 def _domain_state(st, op_file, live_tiles=None):
     """The derived tile domain for `op_file`, or None when BO is not in play."""
-    if bayesian is None or not st["config"].get("bayesian_optimization_tile_search", False):
+    if bayesian is None or not st["config"].get(
+        "bayesian_optimization_tile_search", False
+    ):
         return None
     if not op_file or not os.path.exists(op_file):
         return None
@@ -1015,12 +1086,15 @@ def _retune_verdict(st, op_file):
     moved, why = bayesian.domain.changed(baseline, now)
     if not moved:
         return {"retune": False}
-    return {"retune": True, "retune_reason": why,
-            "hint": "the tile this program inherited was chosen for a different "
-                    "space. Run `block --parent <action_id>` BEFORE record, so the "
-                    "candidate the ratchet judges is the (structure, tile) pair. "
-                    "Supply --live-tiles if the rewrite changed how many tiles are "
-                    "resident."}
+    return {
+        "retune": True,
+        "retune_reason": why,
+        "hint": "the tile this program inherited was chosen for a different "
+        "space. Run `block --parent <action_id>` BEFORE record, so the "
+        "candidate the ratchet judges is the (structure, tile) pair. "
+        "Supply --live-tiles if the rewrite changed how many tiles are "
+        "resident.",
+    }
 
 
 def _block_budget(pr, cfg, a):
@@ -1067,22 +1141,48 @@ def _block_context(a, st, cfg):
     structure = _structure(st, a.op_dir)
     refusal_rows = stored_refusals(st)
     return {
-        "op_file": op_file, "base_src": base_src, "hw": hw, "domain": domain,
+        "op_file": op_file,
+        "base_src": base_src,
+        "hw": hw,
+        "domain": domain,
         "remaining": _block_budget(st["progress"], cfg, a),
         "mem_key": bayesian.block.memory_key(a.parent, domain),
         "memories": st.setdefault("bayesian_optimization_memory", {}),
-        "structure": structure, "refusal_rows": refusal_rows,
+        "structure": structure,
+        "refusal_rows": refusal_rows,
         "refusals": refusals_for_structure(refusal_rows, structure),
         "meter": {"device_trials": 0, "winner_runs": 0},
         # Per-trial diagnostics, persisted. A block reporting "24 trials, 1
         # feasible" used to keep nothing about the other 23, so neither the
         # failure class nor the capacity markers could be checked against what
         # the device actually said.
-        "trials": [], "faults": [], "winners": {}, "winner_hash": None, "charged": 0,
+        "trials": [],
+        "faults": [],
+        "winners": {},
+        "winner_hash": None,
+        "charged": 0,
         # Wall-clock bounds on the block. The CANN host log is the only other
         # record of a device fault and it is keyed by time; without these there is
         # nothing to correlate it against.
-        "started_at": datetime.datetime.now(datetime.timezone.utc).isoformat(timespec="seconds"),
+        "started_at": datetime.datetime.now(datetime.timezone.utc).isoformat(
+            timespec="seconds"
+        ),
+    }
+
+
+def _fault_record(st, a, rec):
+    """The env-fault log entry: the marker and the device's own last words."""
+    return {
+        "ts": datetime.datetime.now(datetime.timezone.utc).isoformat(
+            timespec="seconds"
+        ),
+        "op": st["op"],
+        "action": a.parent,
+        "marker": rec.get("reason"),
+        "kind": rec.get("kind"),
+        "retries": rec.get("retries", 0),
+        "config": rec.get("config"),
+        "detail": (rec.get("detail") or "")[:2000],
     }
 
 
@@ -1109,11 +1209,7 @@ def _block_recorder(a, st, ctx):
         if rec.get("status") == "env_fault":
             # Not charged and not a trial -- but written down, immediately, with
             # the marker and the device's own last words. See `append_fault`.
-            f = {"ts": datetime.datetime.now(datetime.timezone.utc).isoformat(timespec="seconds"),
-                 "op": st["op"], "action": a.parent,
-                 "marker": rec.get("reason"), "kind": rec.get("kind"),
-                 "retries": rec.get("retries", 0), "config": rec.get("config"),
-                 "detail": (rec.get("detail") or "")[:2000]}
+            f = _fault_record(st, a, rec)
             ctx["faults"].append(f)
             append_fault(a.op_dir, f)
             return
@@ -1136,13 +1232,22 @@ def _block_recorder(a, st, ctx):
             # enforces is the harness's own model of the buffer, not something the
             # compiler reports, and nobody can check a model whose verdicts are
             # not written down.
-            ctx["trials"].append({"status": rec.get("status"), "config": rec.get("config"),
-                                  "latency": None, "reason": rec.get("reason", "")})
+            ctx["trials"].append(
+                {
+                    "status": rec.get("status"),
+                    "config": rec.get("config"),
+                    "latency": None,
+                    "reason": rec.get("reason", ""),
+                }
+            )
             return
         ctx["meter"]["device_trials"] += 1
-        t = {"status": rec.get("status"), "config": rec.get("config"),
-             "latency": rec.get("latency"),
-             "reason": (rec.get("reason") or "")[:400]}
+        t = {
+            "status": rec.get("status"),
+            "config": rec.get("config"),
+            "latency": rec.get("latency"),
+            "reason": (rec.get("reason") or "")[:400],
+        }
         if rec.get("metrics"):
             t["metrics"] = rec["metrics"]
         ctx["trials"].append(t)
@@ -1152,9 +1257,15 @@ def _block_recorder(a, st, ctx):
         h = hashlib.sha256(new_src.encode("utf-8")).hexdigest()
         ctx["winners"].setdefault(h, 0)
         ctx["winners"][h] += 1
-        cache.setdefault(h, {"s": 1 if rec.get("latency") else 0,
-                             "p": rec.get("latency"),
-                             "m": dict(rec.get("metrics") or {}), "via": "block"})
+        cache.setdefault(
+            h,
+            {
+                "s": 1 if rec.get("latency") else 0,
+                "p": rec.get("latency"),
+                "m": dict(rec.get("metrics") or {}),
+                "via": "block",
+            },
+        )
 
     return on_trial
 
@@ -1183,37 +1294,54 @@ def _block_search(a, st, ctx, cfg):
     that is only true of the exact bytes.
     """
     ev = bayesian.evaluator.RealEvaluator(
-        op=st["op"], op_dir=a.op_dir, op_file=ctx["op_file"], device=st.get("device_id", ""),
-        test_command=a.test_command, lint_root=(a.lint_root or None),
+        op=st["op"],
+        op_dir=a.op_dir,
+        op_file=ctx["op_file"],
+        device=st.get("device_id", ""),
+        test_command=a.test_command,
+        lint_root=(a.lint_root or None),
         eval_timeout_s=cfg.get("eval_timeout_s", 300),
         evaluation_mode=getattr(a, "evaluation_mode", "subprocess"),
         # Overridable so tests can assert the schedule without waiting it out.
         # The default is the production one and campaigns are told to pass
         # nothing else.
-        fault_backoff_s=tuple(cfg.get("fault_backoff_s", (30, 90))))
-    same_program = (hashlib.sha256(ctx["base_src"].encode("utf-8")).hexdigest()
-                    == _best_hash(st))
+        fault_backoff_s=tuple(cfg.get("fault_backoff_s", (30, 90))),
+    )
+    same_program = hashlib.sha256(
+        ctx["base_src"].encode("utf-8")
+    ).hexdigest() == _best_hash(st)
     hw = ctx["hw"]
-    return bayesian.block.run(ctx["op_file"], ev, hw, bayesian.block.BlockOptions(
-        stagnation_k=cfg.get("stagnation_K", 7),
-        max_trials=ctx["remaining"],
-        current_latency=(st["progress"].get("best_latency_us") if same_program else None),
-        on_trial=_block_recorder(a, st, ctx), domain=ctx["domain"],
-        # `bayesian.block.run` defaults this to 4, while `hw_for` derives the real
-        # element width from the kernel and defaults it to 2. Leaving it
-        # unthreaded meant every block on a bf16/fp16 kernel computed its 16 KB
-        # floor seed and 96 KB ceiling seed at twice the true width, so it
-        # searched the bottom half of the band it believed it was searching --
-        # while bayesian.domain.verify used the correct width, so the two gates
-        # disagreed by exactly 2x.
-        dtype_bytes=hw.dtype_bytes,
-        # Keep drawing at random until this many FEASIBLE trials are measured
-        # before TPE takes over, so its surrogate is fitted on grounded data
-        # rather than on the 1-2 feasible points a mostly-rejected block used to
-        # hand it.
-        startup_min_feasible=cfg.get("bayesian_optimization_startup_min_feasible", 5),
-        memory=ctx["memories"].get(ctx["mem_key"]),
-        refusals=ctx["refusals"]))
+    return bayesian.block.run(
+        ctx["op_file"],
+        ev,
+        hw,
+        bayesian.block.BlockOptions(
+            stagnation_k=cfg.get("stagnation_K", 7),
+            max_trials=ctx["remaining"],
+            current_latency=(
+                st["progress"].get("best_latency_us") if same_program else None
+            ),
+            on_trial=_block_recorder(a, st, ctx),
+            domain=ctx["domain"],
+            # `bayesian.block.run` defaults this to 4, while `hw_for` derives the real
+            # element width from the kernel and defaults it to 2. Leaving it
+            # unthreaded meant every block on a bf16/fp16 kernel computed its 16 KB
+            # floor seed and 96 KB ceiling seed at twice the true width, so it
+            # searched the bottom half of the band it believed it was searching --
+            # while bayesian.domain.verify used the correct width, so the two gates
+            # disagreed by exactly 2x.
+            dtype_bytes=hw.dtype_bytes,
+            # Keep drawing at random until this many FEASIBLE trials are measured
+            # before TPE takes over, so its surrogate is fitted on grounded data
+            # rather than on the 1-2 feasible points a mostly-rejected block used to
+            # hand it.
+            startup_min_feasible=cfg.get(
+                "bayesian_optimization_startup_min_feasible", 5
+            ),
+            memory=ctx["memories"].get(ctx["mem_key"]),
+            refusals=ctx["refusals"],
+        ),
+    )
 
 
 def _block_apply_winner(st, ctx, result):
@@ -1246,9 +1374,11 @@ def _block_fold(a, st, ctx, result, cfg):
         # admissible on this structure -- assigning it back would drop every
         # refusal earned on every other structure.
         st["bayesian_optimization_refusals"] = merge_refusals(
-            ctx["refusal_rows"], result["refusals"], ctx["structure"],
-            cfg.get("bayesian_optimization_refusal_global_after",
-                    REFUSAL_GLOBAL_AFTER))
+            ctx["refusal_rows"],
+            result["refusals"],
+            ctx["structure"],
+            cfg.get("bayesian_optimization_refusal_global_after", REFUSAL_GLOBAL_AFTER),
+        )
     if ctx["winner_hash"]:
         st["domain_fingerprint"] = ctx["domain"]
     # Every device trial is charged. One is handed to `record` along with the
@@ -1263,23 +1393,32 @@ def _block_fold(a, st, ctx, result, cfg):
     st["progress"]["evals_used"] += ctx["charged"]
     st["progress"]["block_evals"] = st["progress"].get("block_evals", 0) + device_trials
     st.setdefault("blocks", []).append(
-        {"action": a.parent, "reason": a.reason, "live_tiles": a.live_tiles,
-         "granted": ctx["remaining"], "n_trials": result.get("n_trials"),
-         "n_feasible": result.get("n_feasible"),
-         "stopped_early": result.get("stopped_early"),
-         "aborted": result.get("aborted"),
-         "fault_kind": result.get("fault_kind"),
-         "fault_markers": _fault_markers(ctx),
-         "env_faults": result.get("env_faults"),
-         "failures": result.get("failures"),
-         "learned_ceiling": result.get("learned_ceiling"),
-         "best_latency": result.get("best_latency"),
-         "best_config": result.get("best_config"),
-         "device_trials": device_trials,
-         "charged_now": ctx["charged"], "winner_hash": ctx["winner_hash"],
-         "started_at": ctx["started_at"],
-         "ended_at": datetime.datetime.now(datetime.timezone.utc).isoformat(timespec="seconds"),
-         "trials": ctx["trials"]})
+        {
+            "action": a.parent,
+            "reason": a.reason,
+            "live_tiles": a.live_tiles,
+            "granted": ctx["remaining"],
+            "n_trials": result.get("n_trials"),
+            "n_feasible": result.get("n_feasible"),
+            "stopped_early": result.get("stopped_early"),
+            "aborted": result.get("aborted"),
+            "fault_kind": result.get("fault_kind"),
+            "fault_markers": _fault_markers(ctx),
+            "env_faults": result.get("env_faults"),
+            "failures": result.get("failures"),
+            "learned_ceiling": result.get("learned_ceiling"),
+            "best_latency": result.get("best_latency"),
+            "best_config": result.get("best_config"),
+            "device_trials": device_trials,
+            "charged_now": ctx["charged"],
+            "winner_hash": ctx["winner_hash"],
+            "started_at": ctx["started_at"],
+            "ended_at": datetime.datetime.now(datetime.timezone.utc).isoformat(
+                timespec="seconds"
+            ),
+            "trials": ctx["trials"],
+        }
+    )
 
 
 def _fault_markers(ctx):
@@ -1289,66 +1428,84 @@ def _fault_markers(ctx):
 
 def _block_log(a, st, ctx, result):
     """One trajectory line for the block."""
-    append_log(a.op_dir, st["op"],
-               f"- block[{a.parent}]: {result.get('n_trials')} trials "
-               f"({result.get('n_feasible')} feasible), best={result.get('best_latency')} "
-               f"stopped_early={result.get('stopped_early')} "
-               f"device_trials={ctx['meter']['device_trials']} charged={ctx['charged']} "
-               f"env_faults={result.get('env_faults')} "
-               f"failures={result.get('failures')} "
-               f"replayed={result.get('replayed')} "
-               # Why the free rejections happened. Without the split, a block
-               # that rejected 35 of 42 trials before the device reports the
-               # same line whether its gates are working or walled off its own
-               # incumbent, and the second is not diagnosable from the log.
-               f"free={_free_rejects(result)} "
-               f"ceiling={result.get('learned_ceiling')}"
-               # Surfaced in the trajectory, not only in domain.notes, because
-               # it has now been forgotten in every recorded block. Without it
-               # the footprint bound is OFF and the block pays a device
-               # evaluation for each oversized tile instead of rejecting it for
-               # free -- two per block in the last run, and the same ceiling
-               # relearned from scratch each time.
-               + (" | LIVE-TILES NOT SUPPLIED: footprint bound OFF, "
-                  "oversized tiles cost a device evaluation each"
-                  if not a.live_tiles else f" live_tiles={a.live_tiles}")
-               + (f" | ABORTED: {result['aborted']}" if result.get("aborted") else "")
-               + (f" | {result['reason']}" if result.get("reason") else "")
-               + (f" | reason: {a.reason}" if a.reason else ""))
+    append_log(
+        a.op_dir,
+        st["op"],
+        f"- block[{a.parent}]: {result.get('n_trials')} trials "
+        f"({result.get('n_feasible')} feasible), best={result.get('best_latency')} "
+        f"stopped_early={result.get('stopped_early')} "
+        f"device_trials={ctx['meter']['device_trials']} charged={ctx['charged']} "
+        f"env_faults={result.get('env_faults')} "
+        f"failures={result.get('failures')} "
+        f"replayed={result.get('replayed')} "
+        # Why the free rejections happened. Without the split, a block
+        # that rejected 35 of 42 trials before the device reports the
+        # same line whether its gates are working or walled off its own
+        # incumbent, and the second is not diagnosable from the log.
+        f"free={_free_rejects(result)} "
+        f"ceiling={result.get('learned_ceiling')}"
+        # Surfaced in the trajectory, not only in domain.notes, because
+        # it has now been forgotten in every recorded block. Without it
+        # the footprint bound is OFF and the block pays a device
+        # evaluation for each oversized tile instead of rejecting it for
+        # free -- two per block in the last run, and the same ceiling
+        # relearned from scratch each time.
+        + (
+            " | LIVE-TILES NOT SUPPLIED: footprint bound OFF, "
+            "oversized tiles cost a device evaluation each"
+            if not a.live_tiles
+            else f" live_tiles={a.live_tiles}"
+        )
+        + (f" | ABORTED: {result['aborted']}" if result.get("aborted") else "")
+        + (f" | {result['reason']}" if result.get("reason") else "")
+        + (f" | reason: {a.reason}" if a.reason else ""),
+    )
 
 
 def _block_payload(a, ctx, result):
     """What the optimizer reads back from a block."""
     winner_hash = ctx["winner_hash"]
-    out({"ran": bool(result.get("n_trials")),
-         "best_config": result.get("best_config"),
-         "best_latency": result.get("best_latency"),
-         "code_hash": winner_hash,
-         "n_trials": result.get("n_trials"), "n_feasible": result.get("n_feasible"),
-         "stopped_early": result.get("stopped_early"),
-         "aborted": result.get("aborted"),
-         "fault_kind": result.get("fault_kind"),
-         "fault_markers": _fault_markers(ctx),
-         "env_faults": result.get("env_faults"),
-         "failures": result.get("failures"),
-         "replayed": result.get("replayed"),
-         "learned_ceiling": result.get("learned_ceiling"),
-         "best_was_incumbent": result.get("best_was_incumbent"),
-         "device_trials": ctx["meter"]["device_trials"],
-         "charged": ctx["charged"], "granted": ctx["remaining"],
-         "reason": result.get("reason"),
-         "domain_notes": ctx["domain"].get("notes"),
-         "capacity_elems": ctx["domain"].get("capacity_elems"),
-         "live_tiles": a.live_tiles,
-         "warning": (None if a.live_tiles else
-                     "--live-tiles was not supplied, so the footprint bound is OFF "
-                     "and every oversized tile costs a device evaluation. It is a "
-                     "FACT about the program (how many tile-shaped tensors are "
-                     "resident at once), not a bound: count them and pass it."),
-         "note": ("the winner is already written to the op_file and NOT yet charged; "
-                  "call `record` with this code_hash, s=1 and best_latency as p. "
-                  "Do not dispatch the coder and do not re-measure.")
-                 if winner_hash else None})
+    out(
+        {
+            "ran": bool(result.get("n_trials")),
+            "best_config": result.get("best_config"),
+            "best_latency": result.get("best_latency"),
+            "code_hash": winner_hash,
+            "n_trials": result.get("n_trials"),
+            "n_feasible": result.get("n_feasible"),
+            "stopped_early": result.get("stopped_early"),
+            "aborted": result.get("aborted"),
+            "fault_kind": result.get("fault_kind"),
+            "fault_markers": _fault_markers(ctx),
+            "env_faults": result.get("env_faults"),
+            "failures": result.get("failures"),
+            "replayed": result.get("replayed"),
+            "learned_ceiling": result.get("learned_ceiling"),
+            "best_was_incumbent": result.get("best_was_incumbent"),
+            "device_trials": ctx["meter"]["device_trials"],
+            "charged": ctx["charged"],
+            "granted": ctx["remaining"],
+            "reason": result.get("reason"),
+            "domain_notes": ctx["domain"].get("notes"),
+            "capacity_elems": ctx["domain"].get("capacity_elems"),
+            "live_tiles": a.live_tiles,
+            "warning": (
+                None
+                if a.live_tiles
+                else "--live-tiles was not supplied, so the footprint bound is OFF "
+                "and every oversized tile costs a device evaluation. It is a "
+                "FACT about the program (how many tile-shaped tensors are "
+                "resident at once), not a bound: count them and pass it."
+            ),
+            "note": (
+                "the winner is already written to the op_file and NOT yet charged; "
+                "call `record` with this code_hash, s=1 and best_latency as p. "
+                "Do not dispatch the coder and do not re-measure."
+            )
+            if winner_hash
+            else None,
+        }
+    )
 
 
 def cmd_block(a):
@@ -1367,13 +1524,22 @@ def cmd_block(a):
     st = load(a.op_dir)
     cfg = st["config"]
     if bayesian is None or not cfg.get("bayesian_optimization_tile_search", False):
-        out({"ran": False,
-             "reason": "bayesian_optimization_tile_search is off, or the "
-                       "bayesian_optimization package is absent"})
+        out(
+            {
+                "ran": False,
+                "reason": "bayesian_optimization_tile_search is off, or the "
+                "bayesian_optimization package is absent",
+            }
+        )
         return
     op_file = _op_file(st, a.op_dir)
     if not op_file or not os.path.exists(op_file):
-        out({"ran": False, "reason": f"op_file not found: {op_file!r} (cwd={os.getcwd()!r})"})
+        out(
+            {
+                "ran": False,
+                "reason": f"op_file not found: {op_file!r} (cwd={os.getcwd()!r})",
+            }
+        )
         return
     ctx = _block_context(a, st, cfg)
     # Before the first evaluation of this block, not after it: see confirm_chip.
@@ -1424,7 +1590,12 @@ def cmd_normalize(a):
     the baseline every speedup in the run is divided by.
     """
     if bayesian is None:
-        out({"ok": False, "reasons": ["bayesian_optimization package not available on this arm"]})
+        out(
+            {
+                "ok": False,
+                "reasons": ["bayesian_optimization package not available on this arm"],
+            }
+        )
         raise Refusal(2)
     for path in (a.before, a.after):
         if not os.path.exists(path):
@@ -1434,11 +1605,14 @@ def cmd_normalize(a):
     after = _read_text(a.after)
     report = bayesian.normalize.check(before, after)
     if a.op_dir and os.path.isdir(a.op_dir):
-        append_log(a.op_dir, a.op or "",
-                   f"- normalize: ok={report['ok']} "
-                   f"tunable {report.get('before', {}).get('tunable')} -> "
-                   f"{report.get('after', {}).get('tunable')}"
-                   + ("" if report["ok"] else " | " + "; ".join(report["reasons"])))
+        append_log(
+            a.op_dir,
+            a.op or "",
+            f"- normalize: ok={report['ok']} "
+            f"tunable {report.get('before', {}).get('tunable')} -> "
+            f"{report.get('after', {}).get('tunable')}"
+            + ("" if report["ok"] else " | " + "; ".join(report["reasons"])),
+        )
     out(report)
     if not report["ok"]:
         raise Refusal(1)
@@ -1453,9 +1627,14 @@ def _init_code_version(a):
     """
     cv = _code_version()
     if cv is None and not getattr(a, "allow_unversioned", False):
-        out({"initialized": False, "error": "code_version_unavailable",
-             "hint": "run the script from inside its git work tree, or write a "
-                     "VERSION file next to it, or pass --allow-unversioned"})
+        out(
+            {
+                "initialized": False,
+                "error": "code_version_unavailable",
+                "hint": "run the script from inside its git work tree, or write a "
+                "VERSION file next to it, or pass --allow-unversioned",
+            }
+        )
         raise Refusal(2)
     return cv
 
@@ -1478,34 +1657,52 @@ def _init_capability(cfg):
     run is.
     """
     capability = bayesian_capability()
-    if not cfg.get("bayesian_optimization_tile_search", True) or capability["available"]:
+    if (
+        not cfg.get("bayesian_optimization_tile_search", True)
+        or capability["available"]
+    ):
         return capability
     floor = ".".join(str(x) for x in OPTUNA_MIN_VERSION)
-    out({"initialized": False, "refused": True,
-         "error": "bayesian_optimization_unavailable",
-         "bayesian_optimization": capability,
-         "ask_user": {
-             "question": (
-                 f"PANKO needs optuna (>= {floor}) to search tile values, and it is "
-                 f"not importable here ({capability['reason']}). Tile numbers are the "
-                 "one lever the model cannot propose, so without it this is a "
-                 "different method rather than a slower one. How do you want to "
-                 "proceed?"),
-             "options": [
-                 {"id": "install",
-                  "label": "Install optuna and run PANKO",
-                  "action": f"python3 -m pip install 'optuna>={floor}', then re-run init"},
-                 {"id": "ablation",
-                  "label": "Run Stage 7 without the tile search",
-                  "action": ('re-run init with --config '
-                             '\'{"bayesian_optimization_tile_search": false}\' -- the '
-                             "structural search still runs; tile values stay as the "
-                             "kernel has them unless the coder changes them")},
-                 {"id": "stepwise",
-                  "label": "Abandon PANKO and use the stepwise Stage 7 path",
-                  "action": "report back to the orchestrator; no PANKO state is written"},
-             ]},
-         "hint": "relay the question to the user; do not choose for them"})
+    out(
+        {
+            "initialized": False,
+            "refused": True,
+            "error": "bayesian_optimization_unavailable",
+            "bayesian_optimization": capability,
+            "ask_user": {
+                "question": (
+                    f"PANKO needs optuna (>= {floor}) to search tile values, and it is "
+                    f"not importable here ({capability['reason']}). Tile numbers are the "
+                    "one lever the model cannot propose, so without it this is a "
+                    "different method rather than a slower one. How do you want to "
+                    "proceed?"
+                ),
+                "options": [
+                    {
+                        "id": "install",
+                        "label": "Install optuna and run PANKO",
+                        "action": f"python3 -m pip install 'optuna>={floor}', then re-run init",
+                    },
+                    {
+                        "id": "ablation",
+                        "label": "Run Stage 7 without the tile search",
+                        "action": (
+                            "re-run init with --config "
+                            "'{\"bayesian_optimization_tile_search\": false}' -- the "
+                            "structural search still runs; tile values stay as the "
+                            "kernel has them unless the coder changes them"
+                        ),
+                    },
+                    {
+                        "id": "stepwise",
+                        "label": "Abandon PANKO and use the stepwise Stage 7 path",
+                        "action": "report back to the orchestrator; no PANKO state is written",
+                    },
+                ],
+            },
+            "hint": "relay the question to the user; do not choose for them",
+        }
+    )
     raise Refusal(3)
 
 
@@ -1521,33 +1718,47 @@ def _init_envelope(a):
     envelope, why = _resolve_envelope(a)
     if envelope is not None:
         return envelope
-    out({"initialized": False, "refused": True,
-         "error": "chip_envelope_unresolved", "reason": why,
-         "ask_user": {
-             "question": (
-                 "PANKO validates every candidate against this chip's buffer "
-                 "capacities and core counts, and could not derive them here: "
-                 f"{why}. Another chip's numbers would reject legal tiles "
-                 "before the device ever saw them, so there is no safe "
-                 "default. How do you want to proceed?"),
-             "options": [
-                 {"id": "cann_env",
-                  "label": "Make the platform ini reachable",
-                  "action": "source the CANN set_env.sh, or set "
-                            "ASCEND_TOOLKIT_HOME, then re-run init"},
-                 {"id": "name_soc",
-                  "label": "Name the SoC explicitly",
-                  "action": "PANKO_SOC_NAME=<your SoC name>; the "
-                            "harness then reads <platform_config>/<name>.ini"},
-                 {"id": "explicit",
-                  "label": "Supply the envelope yourself",
-                  "action": '--chip-envelope \'{"ub_kb":192,"l1_kb":512,'
-                            '"l0a_kb":64,"l0b_kb":64,"l0c_kb":128,'
-                            '"cube_cores":20,"vector_cores":40}\' -- recorded '
-                            "as explicit:cli so the report says the numbers "
-                            "were given rather than read"},
-             ]},
-         "hint": "relay the question to the user; do not choose for them"})
+    out(
+        {
+            "initialized": False,
+            "refused": True,
+            "error": "chip_envelope_unresolved",
+            "reason": why,
+            "ask_user": {
+                "question": (
+                    "PANKO validates every candidate against this chip's buffer "
+                    "capacities and core counts, and could not derive them here: "
+                    f"{why}. Another chip's numbers would reject legal tiles "
+                    "before the device ever saw them, so there is no safe "
+                    "default. How do you want to proceed?"
+                ),
+                "options": [
+                    {
+                        "id": "cann_env",
+                        "label": "Make the platform ini reachable",
+                        "action": "source the CANN set_env.sh, or set "
+                        "ASCEND_TOOLKIT_HOME, then re-run init",
+                    },
+                    {
+                        "id": "name_soc",
+                        "label": "Name the SoC explicitly",
+                        "action": "PANKO_SOC_NAME=<your SoC name>; the "
+                        "harness then reads <platform_config>/<name>.ini",
+                    },
+                    {
+                        "id": "explicit",
+                        "label": "Supply the envelope yourself",
+                        "action": '--chip-envelope \'{"ub_kb":192,"l1_kb":512,'
+                        '"l0a_kb":64,"l0b_kb":64,"l0c_kb":128,'
+                        '"cube_cores":20,"vector_cores":40}\' -- recorded '
+                        "as explicit:cli so the report says the numbers "
+                        "were given rather than read",
+                    },
+                ],
+            },
+            "hint": "relay the question to the user; do not choose for them",
+        }
+    )
     raise Refusal(3)
 
 
@@ -1562,56 +1773,106 @@ def _init_baseline_hash(a, op_file):
     """
     preopt_hash = _file_hash(op_file)
     if preopt_hash is None:
-        out({"initialized": False, "refused": True, "error": "op_file_unreadable",
-             "op_file": op_file,
-             "hint": "PANKO snapshots and restores this file on every cycle; it "
-                     "must exist and be readable before the search starts. Pass "
-                     "--op-file if the kernel is not at <op_dir>/<op>_impl.py."})
+        out(
+            {
+                "initialized": False,
+                "refused": True,
+                "error": "op_file_unreadable",
+                "op_file": op_file,
+                "hint": "PANKO snapshots and restores this file on every cycle; it "
+                "must exist and be readable before the search starts. Pass "
+                "--op-file if the kernel is not at <op_dir>/<op>_impl.py.",
+            }
+        )
         raise Refusal(3)
     if a.preopt_hash and a.preopt_hash != preopt_hash:
         # Not a warning. The caller believes it measured one program and the file
         # on disk is another, so the preopt latency this run normalises every
         # speedup against was taken on a kernel that is not the baseline.
-        out({"initialized": False, "refused": True, "error": "preopt_hash_mismatch",
-             "op_file": op_file, "given": a.preopt_hash, "actual": preopt_hash,
-             "hint": "--preopt-hash does not match the bytes of op_file. Re-measure "
-                     "the file as it stands, or point --op-file at the kernel that "
-                     "was measured. Omit --preopt-hash to let the harness derive it."})
+        out(
+            {
+                "initialized": False,
+                "refused": True,
+                "error": "preopt_hash_mismatch",
+                "op_file": op_file,
+                "given": a.preopt_hash,
+                "actual": preopt_hash,
+                "hint": "--preopt-hash does not match the bytes of op_file. Re-measure "
+                "the file as it stands, or point --op-file at the kernel that "
+                "was measured. Omit --preopt-hash to let the harness derive it.",
+            }
+        )
         raise Refusal(3)
     return preopt_hash
 
 
+def _init_progress(a, opening):
+    """The progress counters as `init` starts them."""
+    return {
+        "active_stage": "frontend",
+        "stage_stagnation": 0,
+        "evals_used": 1,
+        "wall_clock_s": 0,
+        "_start_ts": time.time(),
+        "global_stagnation": 0,
+        "best_J": opening["j0"],
+        "preopt_us": a.preopt_p,
+        "best_latency_us": a.preopt_p,
+        "best_speedup_vs_preopt": 1.0,
+        "cycle_productive": False,
+        "converged": False,
+        "static_rejected": 0,
+        "duplicate_rejected": 0,
+        "frontier_emptied_by_prune": 0,
+        "expansion_requests": 0,
+        "expansion_required": False,
+        "stop_reason": None,
+        "refine": None,
+    }
+
+
+def _init_nodes(a, opening, preopt_m):
+    """The node tree at init: the preopt program, already measured and closed."""
+    return {
+        "closed": [
+            {
+                "id": "root",
+                "parent": None,
+                "stage": "frontend",
+                "code_hash": opening["preopt_hash"],
+                "J": opening["j0"],
+                "eval": {"s": a.preopt_s, "p": a.preopt_p, "m": preopt_m},
+            }
+        ],
+        "open": [],
+        "pruned": [],
+    }
+
+
 def _init_state(a, cfg, opening):
     """The state file as `init` writes it, before any action is seeded into it."""
-    preopt_m = _metrics(getattr(a, "preopt_util", None),
-                        getattr(a, "preopt_bubble", None),
-                        pipes=_cli_pipes(a, "preopt_"))
+    preopt_m = _metrics(
+        getattr(a, "preopt_util", None),
+        getattr(a, "preopt_bubble", None),
+        pipes=_cli_pipes(a, "preopt_"),
+    )
     st = {
-        "op": a.op, "device_id": a.device,
+        "op": a.op,
+        "device_id": a.device,
         "target": {"metric": "latency_us", "P_ref": a.p_ref, "lower_is_better": True},
-        "config": cfg, "_seq": 0,
-        "progress": {"active_stage": "frontend", "stage_stagnation": 0,
-                     "evals_used": 1, "wall_clock_s": 0, "_start_ts": time.time(),
-                     "global_stagnation": 0, "best_J": opening["j0"],
-                     "preopt_us": a.preopt_p, "best_latency_us": a.preopt_p,
-                     "best_speedup_vs_preopt": 1.0,
-                     "cycle_productive": False, "converged": False,
-                     "static_rejected": 0, "duplicate_rejected": 0,
-                     "frontier_emptied_by_prune": 0, "expansion_requests": 0,
-                     "expansion_required": False,
-                     "stop_reason": None,
-                     "refine": None},
-        "nodes": {"closed": [{"id": "root", "parent": None, "stage": "frontend",
-                              "code_hash": opening["preopt_hash"], "J": opening["j0"],
-                              "eval": {"s": a.preopt_s, "p": a.preopt_p,
-                                       "m": preopt_m}}],
-                  "open": [], "pruned": []},
+        "config": cfg,
+        "_seq": 0,
+        "progress": _init_progress(a, opening),
+        "nodes": _init_nodes(a, opening, preopt_m),
         "best_node": "root",
-        "op_file": (a.op_file or None),   # working <op>_impl.py the harness snapshots/restores
+        "op_file": (
+            a.op_file or None
+        ),  # working <op>_impl.py the harness snapshots/restores
         # The preopt reading was accepted at INIT, used once for symptom anchoring
         # and then dropped, so every later close re-read an empty `m` on the root.
-        "eval_cache": {opening["preopt_hash"]: {"s": a.preopt_s, "p": a.preopt_p,
-                                                "m": preopt_m}},
+        "eval_cache": {
+            opening["preopt_hash"]: {"s": a.preopt_s, "p": a.preopt_p, "m": preopt_m}
+        },
         "code_version": opening["cv"],
         # What actually ran, not what was asked for. A report that names the
         # algorithm has to read this rather than the config flag.
@@ -1630,20 +1891,28 @@ def _init_state(a, cfg, opening):
 
 def _seed_frontier(st, a, cfg, seeds):
     """Seed the frontier from the action catalog. Returns the predicate reading."""
-    preds = (predicates.compute(a.op_file or "", a.op_dir)
-             if (predicates and cfg.get("action_preconditions", True)) else None)
+    preds = (
+        predicates.compute(a.op_file or "", a.op_dir)
+        if (predicates and cfg.get("action_preconditions", True))
+        else None
+    )
     st["predicates"] = preds
     for sd in seeds:
         if sd.get("conversion") and not cfg.get("conversion_actions", True):
             continue
         node = {
-            "id": _next_id(st, "u"), "parent": "root", "stage": sd["stage"],
-            "catalog_id": sd.get("id"),   # keep the F-x/S-x/I-x id for symptom matching
-            "delta": sd["delta"], "V": float(sd.get("prior_gain", 0.5)),
-            "prior_gain": float(sd.get("prior_gain", 0.5)), "tried": 0,
-            "requires": sd.get("requires", [])}
+            "id": _next_id(st, "u"),
+            "parent": "root",
+            "stage": sd["stage"],
+            "catalog_id": sd.get("id"),  # keep the F-x/S-x/I-x id for symptom matching
+            "delta": sd["delta"],
+            "V": float(sd.get("prior_gain", 0.5)),
+            "prior_gain": float(sd.get("prior_gain", 0.5)),
+            "tried": 0,
+            "requires": sd.get("requires", []),
+        }
         if preds is not None and not predicates.satisfies(node["requires"], preds):
-            st["nodes"]["held"].append(node)   # held, never deleted
+            st["nodes"]["held"].append(node)  # held, never deleted
         else:
             st["nodes"]["open"].append(node)
     return preds
@@ -1663,11 +1932,15 @@ def _anchoring_warning(a, cfg):
     """
     anchoring = float(cfg.get("symptom_boost", 1.0)) > 1.0
     warning = None
-    if anchoring and not (getattr(a, "preopt_util", 0.0) or getattr(a, "preopt_bubble", 0.0)):
-        warning = ("symptom_boost is enabled but no --preopt-util/--preopt-bubble "
-                   "were supplied; the two PROFILE symptoms (bubble, util) cannot "
-                   "fire until record is called with --util/--bubble. The "
-                   "source-derived `occupancy` symptom is unaffected")
+    if anchoring and not (
+        getattr(a, "preopt_util", 0.0) or getattr(a, "preopt_bubble", 0.0)
+    ):
+        warning = (
+            "symptom_boost is enabled but no --preopt-util/--preopt-bubble "
+            "were supplied; the two PROFILE symptoms (bubble, util) cannot "
+            "fire until record is called with --util/--bubble. The "
+            "source-derived `occupancy` symptom is unaffected"
+        )
     return anchoring, warning
 
 
@@ -1680,10 +1953,17 @@ def _init_snapshot(a, op_file, preopt_hash):
     """
     if _snapshot(a.op_dir, op_file, preopt_hash):
         return
-    out({"initialized": False, "refused": True, "error": "baseline_snapshot_failed",
-         "op_file": op_file, "snapshot": _npath(a.op_dir, preopt_hash),
-         "hint": "the preopt snapshot could not be written; check the "
-                 "permissions on optimization/nodes/ and the free space there."})
+    out(
+        {
+            "initialized": False,
+            "refused": True,
+            "error": "baseline_snapshot_failed",
+            "op_file": op_file,
+            "snapshot": _npath(a.op_dir, preopt_hash),
+            "hint": "the preopt snapshot could not be written; check the "
+            "permissions on optimization/nodes/ and the free space there.",
+        }
+    )
     raise Refusal(3)
 
 
@@ -1691,40 +1971,61 @@ def _init_announce(a, st, opening, report):
     """Write the opening line of the trajectory log and emit init's payload."""
     warning, lint_warning = report["warning"], report["lint_root_warning"]
     n_folds, chip_note = report["n_folds"], report["chip_mismatch"]
-    append_log(a.op_dir, a.op,
-               f"- init: code_version={st.get('code_version')} "
-               f"anchoring={report['anchoring']} "
-               f"seeded_symptoms={report['seeded_symptoms']} "
-               f"open={len(st['nodes']['open'])} held={len(st['nodes'].get('held', []))} "
-               f"predicates={report['preds']} semantic_fold_calls={n_folds}"
-               + ("  <- pypto not importable: the semantic no-op check compares "
-                  "ASTs only and cannot fold a restated default" if not n_folds else "")
-               + (f" | WARNING: {warning}" if warning else "")
-               + (f" | LINT-ROOT: {lint_warning}" if lint_warning else ""))
+    append_log(
+        a.op_dir,
+        a.op,
+        f"- init: code_version={st.get('code_version')} "
+        f"anchoring={report['anchoring']} "
+        f"seeded_symptoms={report['seeded_symptoms']} "
+        f"open={len(st['nodes']['open'])} held={len(st['nodes'].get('held', []))} "
+        f"predicates={report['preds']} semantic_fold_calls={n_folds}"
+        + (
+            "  <- pypto not importable: the semantic no-op check compares "
+            "ASTs only and cannot fold a restated default"
+            if not n_folds
+            else ""
+        )
+        + (f" | WARNING: {warning}" if warning else "")
+        + (f" | LINT-ROOT: {lint_warning}" if lint_warning else ""),
+    )
     save(a.op_dir, st)
-    out({"initialized": True, "best_J": opening["j0"], "open": len(st["nodes"]["open"]),
-         "held": len(st["nodes"].get("held", [])), "predicates": report["preds"],
-         "preopt_snapshot": True, "preopt_hash": opening["preopt_hash"],
-         "bayesian_optimization": opening["capability"],
-         # So a caller never has to guess where the skill's own files are.
-         "skill_root": SKILL_ROOT, "catalog": a.catalog,
-         "chip_envelope": st["chip_envelope"],
-         # Present only when the chip in the slot is not the chip the envelope
-         # describes. The run is initialised either way; the first block is what
-         # stops.
-         **({"chip_mismatch": chip_note} if chip_note else {}),
-         "seeded_symptoms": report["seeded_symptoms"],
-         "code_version": st.get("code_version"), "anchoring": report["anchoring"],
-         "semantic_fold_calls": n_folds,
-         "warning": warning, "lint_root_warning": lint_warning})
+    out(
+        {
+            "initialized": True,
+            "best_J": opening["j0"],
+            "open": len(st["nodes"]["open"]),
+            "held": len(st["nodes"].get("held", [])),
+            "predicates": report["preds"],
+            "preopt_snapshot": True,
+            "preopt_hash": opening["preopt_hash"],
+            "bayesian_optimization": opening["capability"],
+            # So a caller never has to guess where the skill's own files are.
+            "skill_root": SKILL_ROOT,
+            "catalog": a.catalog,
+            "chip_envelope": st["chip_envelope"],
+            # Present only when the chip in the slot is not the chip the envelope
+            # describes. The run is initialised either way; the first block is what
+            # stops.
+            **({"chip_mismatch": chip_note} if chip_note else {}),
+            "seeded_symptoms": report["seeded_symptoms"],
+            "code_version": st.get("code_version"),
+            "anchoring": report["anchoring"],
+            "semantic_fold_calls": n_folds,
+            "warning": warning,
+            "lint_root_warning": lint_warning,
+        }
+    )
 
 
 def cmd_init(a):
     cfg = dict(DEFAULT_CONFIG)
     if a.config:
         cfg.update(json.loads(a.config))
-    opening = {"cv": _init_code_version(a), "capability": _init_capability(cfg),
-               "envelope": _init_envelope(a)}
+    opening = {
+        "cv": _init_code_version(a),
+        "capability": _init_capability(cfg),
+        "envelope": _init_envelope(a),
+    }
     op_file = a.op_file or os.path.join(a.op_dir, f"{a.op}_impl.py")
     opening["preopt_hash"] = _init_baseline_hash(a, op_file)
     with open(op_file, encoding="utf-8", errors="replace") as f:
@@ -1739,17 +2040,23 @@ def cmd_init(a):
     # The space the preopt's tile was chosen for. Every later delta is compared
     # against this, and against whatever replaced it when a candidate was kept.
     st["domain_fingerprint"] = _domain_state(st, _op_file(st, a.op_dir))
-    seeded_symptoms = _symptom_reboost(st, getattr(a, "preopt_util", 0.0),
-                                       getattr(a, "preopt_bubble", 0.0),
-                                       _op_file(st, a.op_dir),
-                                       _cli_pipes(a, "preopt_"))  # first-move symptom bias
+    seeded_symptoms = _symptom_reboost(
+        st,
+        getattr(a, "preopt_util", 0.0),
+        getattr(a, "preopt_bubble", 0.0),
+        _op_file(st, a.op_dir),
+        _cli_pipes(a, "preopt_"),
+    )  # first-move symptom bias
     _init_snapshot(a, op_file, opening["preopt_hash"])
     save(a.op_dir, st)
     evaluation_session.clear_terminal_marker(a.op_dir)
-    append_log(a.op_dir, a.op,
-               f"# {a.op} — PANKO optimization\n\n## Baseline\n"
-               f"- preopt latency: {a.preopt_p} us | P_ref: {a.p_ref} us | j0: {opening['j0']}\n"
-               f"- device: {a.device}\n\n## Trajectory\n")
+    append_log(
+        a.op_dir,
+        a.op,
+        f"# {a.op} — PANKO optimization\n\n## Baseline\n"
+        f"- preopt latency: {a.preopt_p} us | P_ref: {a.p_ref} us | j0: {opening['j0']}\n"
+        f"- device: {a.device}\n\n## Trajectory\n",
+    )
     report = {"preds": preds, "seeded_symptoms": seeded_symptoms}
     report["anchoring"], report["warning"] = _anchoring_warning(a, cfg)
     report["lint_root_warning"] = _check_lint_root(getattr(a, "lint_root", ""))
@@ -1789,25 +2096,34 @@ def _check_lint_root(lint_root):
     if not lint_root:
         return ""
     if not os.path.isdir(lint_root):
-        return f"not a directory: {lint_root!r} -- the lint gate will fault on every trial"
-    if not (os.path.exists(os.path.join(lint_root, "pypto_op_lint"))
-            or os.path.exists(os.path.join(lint_root, "pypto_op_lint.py"))):
-        return (f"{lint_root!r} holds no importable `pypto_op_lint` -- "
-                f"`python -m pypto_op_lint` will fail on every trial and the "
-                f"block will abort on invocation faults. Point --lint-root at "
-                f"the directory CONTAINING the package "
-                f"(usually <repo>/cannbot-skills/plugins-official/"
-                f"pypto-op-orchestrator/hooks/pypto-op-lint), not at the repo root")
+        return (
+            f"not a directory: {lint_root!r} -- the lint gate will fault on every trial"
+        )
+    if not (
+        os.path.exists(os.path.join(lint_root, "pypto_op_lint"))
+        or os.path.exists(os.path.join(lint_root, "pypto_op_lint.py"))
+    ):
+        return (
+            f"{lint_root!r} holds no importable `pypto_op_lint` -- "
+            f"`python -m pypto_op_lint` will fail on every trial and the "
+            f"block will abort on invocation faults. Point --lint-root at "
+            f"the directory CONTAINING the package "
+            f"(usually <repo>/cannbot-skills/plugins-official/"
+            f"pypto-op-orchestrator/hooks/pypto-op-lint), not at the repo root"
+        )
     return ""
 
 
-_FREE = {"infeasible_static": "static", "over_learned_ceiling": "ceiling",
-         "duplicate_config": "dup",
-         # A configuration the compiler refused in an EARLIER block, on a
-         # different structure. Free by the same argument as `ceiling`: the
-         # device already answered this question and the answer does not depend
-         # on the program shape that asked it.
-         "known_compile_failure": "refused"}
+_FREE = {
+    "infeasible_static": "static",
+    "over_learned_ceiling": "ceiling",
+    "duplicate_config": "dup",
+    # A configuration the compiler refused in an EARLIER block, on a
+    # different structure. Free by the same argument as `ceiling`: the
+    # device already answered this question and the answer does not depend
+    # on the program shape that asked it.
+    "known_compile_failure": "refused",
+}
 
 
 def _free_rejects(result):
@@ -1858,36 +2174,95 @@ def _live(st, op_dir):
     operator's frozen layout, and no restructuring makes it expressible.
     """
     sig = _structure(st, op_dir)
-    return [n for n in st["nodes"]["open"]
-            if not (n.get("pruned_on") and n["pruned_on"] == sig)]
+    return [
+        n
+        for n in st["nodes"]["open"]
+        if not (n.get("pruned_on") and n["pruned_on"] == sig)
+    ]
+
+
+def _refuse_if_action_open(st):
+    """An open refinement has to be finished before another action is chosen.
+
+    Without this, making `close` refuse achieves nothing: the optimizer can
+    leave an action at n=1 simply by selecting a different one and never
+    coming back, which is the same abandonment the refusal exists to prevent,
+    and it also leaves `refine` pointing at an action whose candidates the
+    next `record` would be attributed to.
+    """
+    r = st["progress"].get("refine") or {}
+    if not r.get("action"):
+        return
+    why = _refuse_early_close(st, r["action"])
+    if why:
+        out(
+            {
+                "selected": None,
+                "refused": True,
+                "reason": f"action {r['action']} is still open: {why}",
+                "open_action": r["action"],
+                "n": r.get("n", 0),
+            }
+        )
+        raise Refusal(3)
+
+
+def _out_expansion_required(st):
+    # Not a stop. The frontier is the model's to extend.
+    out(
+        {
+            "selected": None,
+            "reason": "expansion_required",
+            "declared_exhausted": st["progress"].get("expansion_declined"),
+            "hint": "reflect over the trajectory and call `evolve` with at least one "
+            "insert. If there is genuinely nothing left to try, call `evolve` "
+            'with exhausted:"<reason>"; only then may the search stop.',
+        }
+    )
+
+
+def _restore_or_refuse(a, restore_hash, op_f):
+    """Restore the running global best into the working file, or refuse.
+
+    Refuse rather than hand out an action. The response says "apply your
+    delta on top of restore_code_hash", and the file is not that program,
+    so the candidate's gain would be measured against a base nobody
+    recorded and its parent link in the tree would be a fiction. Returning
+    `restored: false` and continuing made that the caller's problem, and
+    nothing downstream checks it.
+    """
+    restored = _restore(a.op_dir, op_f, restore_hash)
+    if restored or _file_hash(op_f) == restore_hash:
+        return restored
+    out(
+        {
+            "selected": None,
+            "refused": True,
+            "error": "restore_failed",
+            "restore_code_hash": restore_hash,
+            "op_file": op_f,
+            "snapshot": _npath(a.op_dir, restore_hash) if restore_hash else None,
+            "reason": (
+                "the global best has no snapshot on disk"
+                if restore_hash
+                else "no global best code_hash is recorded"
+            ),
+            "hint": "optimization/nodes/<code_hash>.py is the search's memory of "
+            "every kept program. Without it the next candidate would be "
+            "built on whatever is in the working file.",
+        }
+    )
+    raise Refusal(3)
 
 
 def cmd_select(a):
     st = load(a.op_dir)
-    # An open refinement has to be finished before another action is chosen.
-    # Without this, making `close` refuse achieves nothing: the optimizer can
-    # leave an action at n=1 simply by selecting a different one and never
-    # coming back, which is the same abandonment the refusal exists to prevent,
-    # and it also leaves `refine` pointing at an action whose candidates the
-    # next `record` would be attributed to.
-    r = (st["progress"].get("refine") or {})
-    if r.get("action"):
-        why = _refuse_early_close(st, r["action"])
-        if why:
-            out({"selected": None, "refused": True, "reason":
-                 f"action {r['action']} is still open: {why}",
-                 "open_action": r["action"], "n": r.get("n", 0)})
-            raise Refusal(3)
+    _refuse_if_action_open(st)
     active = st["progress"]["active_stage"]
     staged = st["config"]["staged_prior"]
     frontier = _live(st, a.op_dir)
     if not frontier:
-        # Not a stop. The frontier is the model's to extend.
-        out({"selected": None, "reason": "expansion_required",
-             "declared_exhausted": st["progress"].get("expansion_declined"),
-             "hint": "reflect over the trajectory and call `evolve` with at least one "
-                     "insert. If there is genuinely nothing left to try, call `evolve` "
-                     "with exhausted:\"<reason>\"; only then may the search stop."})
+        _out_expansion_required(st)
         return
     free = _bayes_free_trials(st)
     best = max(frontier, key=lambda n: pypto_action_priority(n, active, staged, free))
@@ -1896,32 +2271,24 @@ def cmd_select(a):
     # not left to the agent). restore_code_hash is still returned for visibility/logging.
     restore_hash = _best_hash(st)
     op_f = _op_file(st, a.op_dir)
-    restored = _restore(a.op_dir, op_f, restore_hash)
-    if not restored and _file_hash(op_f) != restore_hash:
-        # Refuse rather than hand out an action. The response says "apply your
-        # delta on top of restore_code_hash", and the file is not that program,
-        # so the candidate's gain would be measured against a base nobody
-        # recorded and its parent link in the tree would be a fiction. Returning
-        # `restored: false` and continuing made that the caller's problem, and
-        # nothing downstream checks it.
-        out({"selected": None, "refused": True, "error": "restore_failed",
-             "restore_code_hash": restore_hash, "op_file": op_f,
-             "snapshot": _npath(a.op_dir, restore_hash) if restore_hash else None,
-             "reason": ("the global best has no snapshot on disk"
-                        if restore_hash else "no global best code_hash is recorded"),
-             "hint": "optimization/nodes/<code_hash>.py is the search's memory of "
-                     "every kept program. Without it the next candidate would be "
-                     "built on whatever is in the working file."})
-        raise Refusal(3)
+    restored = _restore_or_refuse(a, restore_hash, op_f)
     # `already_measured` is the whole point: the file the coder is about to edit IS
     # the global best and its bytes are already in the cache. Submitting it unchanged
     # is the single most common way budget was wasted (see cmd_record).
-    payload = {"selected": {"id": best["id"], "parent": best["parent"], "stage": best["stage"],
-                            "delta": best["delta"], "V": best["V"],
-                            "pypto_action_priority": pypto_action_priority(best, active, staged, free),
-                            "restore_code_hash": restore_hash, "restored": bool(restored),
-                            "already_measured": restore_hash,
-                            "known_hashes": len(st.get("eval_cache", {}))}}
+    payload = {
+        "selected": {
+            "id": best["id"],
+            "parent": best["parent"],
+            "stage": best["stage"],
+            "delta": best["delta"],
+            "V": best["V"],
+            "pypto_action_priority": pypto_action_priority(best, active, staged, free),
+            "restore_code_hash": restore_hash,
+            "restored": bool(restored),
+            "already_measured": restore_hash,
+            "known_hashes": len(st.get("eval_cache", {})),
+        }
+    }
     proposal = _tile_bayes_propose(st, a.op_dir, best)
     if proposal:
         payload["bayesian_optimization"] = proposal
@@ -1958,7 +2325,9 @@ def _tile_bayes_propose(st, op_dir, node):
     kernel code is untouched -- the harness already writes files in `_snapshot`
     and `_restore`.
     """
-    if bayesian is None or not st["config"].get("bayesian_optimization_tile_search", False):
+    if bayesian is None or not st["config"].get(
+        "bayesian_optimization_tile_search", False
+    ):
         return None
     if node.get("catalog_id") not in bayesian.lever.TILE_ACTIONS:
         return None
@@ -1968,9 +2337,11 @@ def _tile_bayes_propose(st, op_dir, node):
         # server's working directory; if the harness is invoked from anywhere
         # else it resolves to nothing, the lever quietly does not fire, and the
         # run looks completely normal while the core owns none of the numbers.
-        return {"applied": False,
-                "reason": f"op_file not found: {op_file!r} (cwd={os.getcwd()!r}). "
-                          f"bayesian_optimization_tile_search is ON but the lever cannot read the kernel."}
+        return {
+            "applied": False,
+            "reason": f"op_file not found: {op_file!r} (cwd={os.getcwd()!r}). "
+            f"bayesian_optimization_tile_search is ON but the lever cannot read the kernel.",
+        }
     src = _read_text(op_file)
     studies = st.setdefault("bayesian_optimization_studies", {})
     # The same 2x `cmd_block` threads below, in the one path that never got it.
@@ -1991,10 +2362,15 @@ def _tile_bayes_propose(st, op_dir, node):
     # `blocks` and "at 4B" under `bayesian_optimization_studies`.
     hw, domain = bayesian.block.hw_for(op_file, st.get("live_tiles"), chip_envelope(st))
     cfg, meta = bayesian.lever.ask(
-        studies, node["catalog_id"], src, hw,
+        studies,
+        node["catalog_id"],
+        src,
+        hw,
         bayesian.lever.AskOptions(
             dtype_bytes=domain.get("dtype_bytes", 4),
-            current_latency=st["progress"].get("best_latency_us")))
+            current_latency=st["progress"].get("best_latency_us"),
+        ),
+    )
     if cfg is None:
         return {"applied": False, "reason": meta.get("reason", "no candidate")}
     new_src, n = bayesian.apply.apply(src, cfg)
@@ -2002,18 +2378,25 @@ def _tile_bayes_propose(st, op_dir, node):
         return {"applied": False, "reason": "no site rewritten"}
     with open(op_file, "w", encoding="utf-8") as f:
         f.write(new_src)
-    return {"applied": True, "config": cfg, "label": meta.get("label"),
-            "trial": meta.get("trial"), "sites": n,
-            "code_hash": hashlib.sha256(new_src.encode("utf-8")).hexdigest(),
-            "note": "already written to the kernel; do NOT dispatch the coder, "
-                    "just evaluate and record"}
+    return {
+        "applied": True,
+        "config": cfg,
+        "label": meta.get("label"),
+        "trial": meta.get("trial"),
+        "sites": n,
+        "code_hash": hashlib.sha256(new_src.encode("utf-8")).hexdigest(),
+        "note": "already written to the kernel; do NOT dispatch the coder, "
+        "just evaluate and record",
+    }
 
 
 def _tile_bayes_tell(st, op_dir, parent_id, s, p):
     """Report the measurement to the study that proposed it. Silent when the
     action is not a BO lever: every other action still goes through the model.
     """
-    if bayesian is None or not st["config"].get("bayesian_optimization_tile_search", False):
+    if bayesian is None or not st["config"].get(
+        "bayesian_optimization_tile_search", False
+    ):
         return
     node = next((n for n in st["nodes"]["open"] if n["id"] == parent_id), None)
     cid = (node or {}).get("catalog_id")
@@ -2023,7 +2406,9 @@ def _tile_bayes_tell(st, op_dir, parent_id, s, p):
     if not op_file or not os.path.exists(op_file):
         return
     src = _read_text(op_file)
-    bayesian.lever.tell(st.setdefault("bayesian_optimization_studies", {}), cid, src, s, p)
+    bayesian.lever.tell(
+        st.setdefault("bayesian_optimization_studies", {}), cid, src, s, p
+    )
 
 
 def _record_duplicate(a, st, pr, cache):
@@ -2065,14 +2450,25 @@ def _record_duplicate(a, st, pr, cache):
     # fact changed two sites, and the optimizer's own account of what it had
     # tested was wrong.
     _rollback(a, st, r0)
-    append_log(a.op_dir, st["op"],
-               f"- refine[{a.parent}] cand {a.code_hash[:8]}: DUPLICATE rejected "
-               f"(already measured; no budget charged, n unchanged at {r0.get('n', 0)}) "
-               f"| duplicates so far: {pr['duplicate_rejected']}")
-    out({"duplicate": True, "improved": False, "cached": cache[a.code_hash],
-         "J": cache[a.code_hash].get("J"), "n": r0.get("n", 0), "stop_refine": False,
-         "hint": "these bytes were already evaluated -- call `probe` before E(x); "
-                 "if the coder cannot change this file, the action does not apply"})
+    append_log(
+        a.op_dir,
+        st["op"],
+        f"- refine[{a.parent}] cand {a.code_hash[:8]}: DUPLICATE rejected "
+        f"(already measured; no budget charged, n unchanged at {r0.get('n', 0)}) "
+        f"| duplicates so far: {pr['duplicate_rejected']}",
+    )
+    out(
+        {
+            "duplicate": True,
+            "improved": False,
+            "cached": cache[a.code_hash],
+            "J": cache[a.code_hash].get("J"),
+            "n": r0.get("n", 0),
+            "stop_refine": False,
+            "hint": "these bytes were already evaluated -- call `probe` before E(x); "
+            "if the coder cannot change this file, the action does not apply",
+        }
+    )
     return True
 
 
@@ -2094,8 +2490,11 @@ def _record_semantic_noop(a, st, pr, j):
     # drive the state machine with hashes that name no file at all. Judging a
     # candidate by a file that is not it would reject on the strength of whatever
     # happened to be on disk.
-    same, why = ((False, "") if _file_hash(_op_file(st, a.op_dir)) != a.code_hash
-                 else _semantic_noop(st, a.op_dir, _op_file(st, a.op_dir), a.parent))
+    same, why = (
+        (False, "")
+        if _file_hash(_op_file(st, a.op_dir)) != a.code_hash
+        else _semantic_noop(st, a.op_dir, _op_file(st, a.op_dir), a.parent)
+    )
     if not same:
         return False
     pr["semantic_noop_rejected"] = pr.get("semantic_noop_rejected", 0) + 1
@@ -2107,15 +2506,25 @@ def _record_semantic_noop(a, st, pr, j):
     # be closed.
     r0["dup_streak"] = r0.get("dup_streak", 0) + 1
     _rollback(a, st, r0)
-    append_log(a.op_dir, st["op"],
-               f"- refine[{a.parent}] cand {a.code_hash[:8]}: SEMANTIC NO-OP rejected "
-               f"({why}); n unchanged at {r0.get('n', 0)}, "
-               f"dup_streak={r0['dup_streak']}")
-    out({"semantic_noop": True, "improved": False, "J": j,
-         "n": r0.get("n", 0), "stop_refine": False,
-         "reason": f"this candidate is the incumbent program: {why}",
-         "hint": "call `feasible` before E(x) -- this would have been caught "
-                 "without spending the measurement"})
+    append_log(
+        a.op_dir,
+        st["op"],
+        f"- refine[{a.parent}] cand {a.code_hash[:8]}: SEMANTIC NO-OP rejected "
+        f"({why}); n unchanged at {r0.get('n', 0)}, "
+        f"dup_streak={r0['dup_streak']}",
+    )
+    out(
+        {
+            "semantic_noop": True,
+            "improved": False,
+            "J": j,
+            "n": r0.get("n", 0),
+            "stop_refine": False,
+            "reason": f"this candidate is the incumbent program: {why}",
+            "hint": "call `feasible` before E(x) -- this would have been caught "
+            "without spending the measurement",
+        }
+    )
     return True
 
 
@@ -2129,13 +2538,23 @@ def _record_wrapper_drift(a, st, pr):
     pr["wrapper_drift_rejected"] = pr.get("wrapper_drift_rejected", 0) + 1
     _restore(a.op_dir, _op_file(st, a.op_dir), _best_hash(st))
     save(a.op_dir, st)
-    append_log(a.op_dir, st["op"],
-               f"- wrapper-drift[{a.parent}] cand {a.code_hash[:8]}: "
-               f"measurement discarded, working file rolled back")
-    out({"improved": False, "refused": True, "error": "wrapper_drift",
-         "reason": drift, "wrapper_frozen": False,
-         "hint": "PANKO optimizes inside the @jit kernel. This measurement "
-                 "is not comparable with the campaign's and was discarded."})
+    append_log(
+        a.op_dir,
+        st["op"],
+        f"- wrapper-drift[{a.parent}] cand {a.code_hash[:8]}: "
+        f"measurement discarded, working file rolled back",
+    )
+    out(
+        {
+            "improved": False,
+            "refused": True,
+            "error": "wrapper_drift",
+            "reason": drift,
+            "wrapper_frozen": False,
+            "hint": "PANKO optimizes inside the @jit kernel. This measurement "
+            "is not comparable with the campaign's and was discarded.",
+        }
+    )
     raise Refusal(3)
 
 
@@ -2164,13 +2583,17 @@ def _apply_ratchet(a, st, j, m_eval, op_file):
     # Only an UNBROKEN run counts, which is what makes it evidence of an exhausted
     # axis rather than of an occasional repeat.
     r["dup_streak"] = 0
-    bar = r["best"]["J"] if r["best"] is not None else r.get("threshold_J", pr["best_J"])
+    bar = (
+        r["best"]["J"] if r["best"] is not None else r.get("threshold_J", pr["best_J"])
+    )
     improved = bool(a.s) and j > bar
     chain_error = None
     if improved:
         r["best"] = {"code_hash": a.code_hash, "J": j, "p": a.p, "m": m_eval}
         r["n"] = 0
-        if not _snapshot(a.op_dir, op_file, a.code_hash):  # persist the new running best
+        if not _snapshot(
+            a.op_dir, op_file, a.code_hash
+        ):  # persist the new running best
             # The bytes are still on disk, so nothing is lost yet -- but the next
             # reverted candidate could not be rolled back to them, which is the
             # promise that "the best code can never be lost" rests on.
@@ -2178,13 +2601,18 @@ def _apply_ratchet(a, st, j, m_eval, op_file):
         # The kept program is now the one later deltas are judged against, so the
         # space it defines becomes the reference. Without this the verdict would
         # keep firing against the preopt's space long after it was superseded.
-        st["domain_fingerprint"] = _domain_state(st, op_file) or st.get("domain_fingerprint")
+        st["domain_fingerprint"] = _domain_state(st, op_file) or st.get(
+            "domain_fingerprint"
+        )
     else:
         r["n"] += 1
         # roll the working file back to the action's current best (or the global best if this
         # action has produced nothing yet), so the next candidate is applied on the right base.
-        base_hash = (r["best"]["code_hash"] if r["best"] else _best_hash(st))
-        if not _restore(a.op_dir, op_file, base_hash) and _file_hash(op_file) != base_hash:
+        base_hash = r["best"]["code_hash"] if r["best"] else _best_hash(st)
+        if (
+            not _restore(a.op_dir, op_file, base_hash)
+            and _file_hash(op_file) != base_hash
+        ):
             # The loser is still in the working file. Left unsaid, the next
             # candidate for this action is applied on top of a program the ratchet
             # has already rejected, and its measured gain is against a base
@@ -2200,15 +2628,24 @@ def _halt_on_broken_chain(a, st, payload, chain_error, op_file):
     the cache whatever happens to the files. The non-zero exit is what stops the
     run, because the next candidate would be built on the wrong program.
     """
-    payload.update({"refused": True, "error": chain_error,
-                    "code_hash": a.code_hash, "op_file": op_file,
-                    "hint": "optimization/nodes/ is the search's memory of "
-                            "every program it may return to; the measurement "
-                            "is recorded, but the next candidate cannot be "
-                            "built until this is repaired."})
-    append_log(a.op_dir, st["op"],
-               f"- refine[{a.parent}] cand {a.code_hash[:8]}: {chain_error} "
-               f"-- the snapshot chain is broken, run halted")
+    payload.update(
+        {
+            "refused": True,
+            "error": chain_error,
+            "code_hash": a.code_hash,
+            "op_file": op_file,
+            "hint": "optimization/nodes/ is the search's memory of "
+            "every program it may return to; the measurement "
+            "is recorded, but the next candidate cannot be "
+            "built until this is repaired.",
+        }
+    )
+    append_log(
+        a.op_dir,
+        st["op"],
+        f"- refine[{a.parent}] cand {a.code_hash[:8]}: {chain_error} "
+        f"-- the snapshot chain is broken, run halted",
+    )
     out(payload)
     raise Refusal(3)
 
@@ -2218,7 +2655,9 @@ def cmd_record(a):
     st = load(a.op_dir)
     pr = st["progress"]
     j = compute_j(a.s, a.p, st["target"]["P_ref"])
-    cache = st.setdefault("eval_cache", {})     # memoize E(x) by code_hash (write-once = deterministic)
+    cache = st.setdefault(
+        "eval_cache", {}
+    )  # memoize E(x) by code_hash (write-once = deterministic)
 
     if _record_duplicate(a, st, pr, cache):
         return
@@ -2231,8 +2670,12 @@ def cmd_record(a):
     # runs in exactly one place), but the block measured it and the CLI call
     # that promotes it carries no reading. Recover it from the block record
     # rather than writing a zero over a real measurement.
-    m_eval = _metrics(getattr(a, "util", None), getattr(a, "bubble", None),
-                      _block_metrics(st, a.code_hash), _cli_pipes(a))
+    m_eval = _metrics(
+        getattr(a, "util", None),
+        getattr(a, "bubble", None),
+        _block_metrics(st, a.code_hash),
+        _cli_pipes(a),
+    )
     cache[a.code_hash] = {"s": a.s, "p": a.p, "m": m_eval}
     # Only now. Above this line the candidate may have been a byte-identical
     # resubmission, which is not a measurement of anything: telling the study a
@@ -2243,7 +2686,9 @@ def cmd_record(a):
     r, improved, bar, chain_error = _apply_ratchet(a, st, j, m_eval, op_file)
     pr["refine"] = r
     stagnation_k = st["config"]["stagnation_K"]
-    stop_refine = (r["n"] >= stagnation_k) or (r["best"] is not None and r["best"]["J"] >= 100)
+    stop_refine = (r["n"] >= stagnation_k) or (
+        r["best"] is not None and r["best"]["J"] >= 100
+    )
     # One ask per measurement, not one per action. Asked only at select, the
     # lever proposes once and the remaining refinements fall back to the coder
     # guessing at tile numbers -- so `stagnation_K` would count the model's
@@ -2252,14 +2697,21 @@ def cmd_record(a):
     proposal = None if stop_refine else _bayes_next(st, a.op_dir, a.parent)
     save(a.op_dir, st)
     verdict = "kept" if improved else ("tied" if (a.s and j == bar) else "reverted")
-    append_log(a.op_dir, st["op"],
-               f"- refine[{a.parent}] cand {a.code_hash[:8]}: s={a.s} p={a.p} j={j} "
-               f"-> {verdict} (n={r['n']})")
+    append_log(
+        a.op_dir,
+        st["op"],
+        f"- refine[{a.parent}] cand {a.code_hash[:8]}: s={a.s} p={a.p} j={j} "
+        f"-> {verdict} (n={r['n']})",
+    )
     # The lever's next value rides back with the verdict, so the optimizer
     # evaluates it without another select and without the coder.
-    record_payload = {"J": j, "improved": bool(improved), "n": r["n"],
-                      "n_static": r.get("n_static", 0),
-                      "stop_refine": bool(stop_refine)}
+    record_payload = {
+        "J": j,
+        "improved": bool(improved),
+        "n": r["n"],
+        "n_static": r.get("n_static", 0),
+        "stop_refine": bool(stop_refine),
+    }
     if proposal:
         record_payload["bayesian_optimization"] = proposal
     if chain_error:
@@ -2284,8 +2736,11 @@ def _refine_and_bound(st, pr, parent, field):
 
 def _rollback(a, st, r):
     """Roll the working file back to the incumbent, as a measured regression would."""
-    _restore(a.op_dir, _op_file(st, a.op_dir),
-             (r["best"]["code_hash"] if r and r.get("best") else _best_hash(st)))
+    _restore(
+        a.op_dir,
+        _op_file(st, a.op_dir),
+        (r["best"]["code_hash"] if r and r.get("best") else _best_hash(st)),
+    )
     save(a.op_dir, st)
 
 
@@ -2320,27 +2775,36 @@ def _reject_semantic_noop(a, st, pr, op_f, retune):
     # to run at all.
     r, n_noop, infeasible_k = _refine_and_bound(st, pr, a.parent, "n_noop")
     _rollback(a, st, r)
-    append_log(a.op_dir, st["op"],
-               f"- semantic no-op[{a.parent}]: {why} "
-               f"(no device time; n and n_static unchanged, n_noop={n_noop}/{infeasible_k})")
-    out({"feasible": False, "semantic_noop": True,
-         "reason": f"this candidate is the incumbent program: {why}",
-         # The hardware gate did NOT run -- this was rejected before it. On the
-         # `static_feasibility: false` ablation arm that gate is off entirely,
-         # and reporting `checked: true` there would describe a check the arm
-         # does not perform.
-         "checked": False, **retune,
-         # `.get`, because a `refine` dict is not guaranteed to carry `n`: the
-         # duplicate branch of `record` creates one holding nothing but
-         # `dup_streak` when it fires before the action's first measurement.
-         "n": (r.get("n", 0) if r else 0),
-         "n_static": (r.get("n_static", 0) if r else 0),
-         "n_noop": n_noop,
-         "stop_refine": n_noop >= infeasible_k,
-         "stop_cause": ("semantic_noop_K" if n_noop >= infeasible_k else None),
-         "hint": "the delta has to change what the program DOES. Passing a "
-                 "keyword its own default value is the same call as omitting "
-                 "it, so there is nothing here for the device to measure."})
+    append_log(
+        a.op_dir,
+        st["op"],
+        f"- semantic no-op[{a.parent}]: {why} "
+        f"(no device time; n and n_static unchanged, n_noop={n_noop}/{infeasible_k})",
+    )
+    out(
+        {
+            "feasible": False,
+            "semantic_noop": True,
+            "reason": f"this candidate is the incumbent program: {why}",
+            # The hardware gate did NOT run -- this was rejected before it. On the
+            # `static_feasibility: false` ablation arm that gate is off entirely,
+            # and reporting `checked: true` there would describe a check the arm
+            # does not perform.
+            "checked": False,
+            **retune,
+            # `.get`, because a `refine` dict is not guaranteed to carry `n`: the
+            # duplicate branch of `record` creates one holding nothing but
+            # `dup_streak` when it fires before the action's first measurement.
+            "n": (r.get("n", 0) if r else 0),
+            "n_static": (r.get("n_static", 0) if r else 0),
+            "n_noop": n_noop,
+            "stop_refine": n_noop >= infeasible_k,
+            "stop_cause": ("semantic_noop_K" if n_noop >= infeasible_k else None),
+            "hint": "the delta has to change what the program DOES. Passing a "
+            "keyword its own default value is the same call as omitting "
+            "it, so there is nothing here for the device to measure.",
+        }
+    )
     return True
 
 
@@ -2356,16 +2820,27 @@ def _reject_wrapper_drift(a, st, pr, op_f, retune):
     pr["wrapper_drift_rejected"] = pr.get("wrapper_drift_rejected", 0) + 1
     r, n_static, infeasible_k = _refine_and_bound(st, pr, a.parent, "n_static")
     _rollback(a, st, r)
-    append_log(a.op_dir, st["op"],
-               f"- wrapper-drift[{a.parent}]: rejected before the device "
-               f"(n_static={n_static}/{infeasible_k})")
-    out({"feasible": False, "reason": drift, "checked": True,
-         "wrapper_frozen": False, **retune,
-         "n": (r["n"] if r else 0), "n_static": n_static,
-         "stop_refine": n_static >= infeasible_k,
-         "stop_cause": ("infeasible_K" if n_static >= infeasible_k else None),
-         "hint": "PANKO optimizes inside the @jit kernel. Edit the kernel, "
-                 "not the wrapper."})
+    append_log(
+        a.op_dir,
+        st["op"],
+        f"- wrapper-drift[{a.parent}]: rejected before the device "
+        f"(n_static={n_static}/{infeasible_k})",
+    )
+    out(
+        {
+            "feasible": False,
+            "reason": drift,
+            "checked": True,
+            "wrapper_frozen": False,
+            **retune,
+            "n": (r["n"] if r else 0),
+            "n_static": n_static,
+            "stop_refine": n_static >= infeasible_k,
+            "stop_cause": ("infeasible_K" if n_static >= infeasible_k else None),
+            "hint": "PANKO optimizes inside the @jit kernel. Edit the kernel, "
+            "not the wrapper.",
+        }
+    )
     return True
 
 
@@ -2383,14 +2858,26 @@ def _reject_infeasible(a, st, pr, why, retune):
     r, n_static, infeasible_k = _refine_and_bound(st, pr, a.parent, "n_static")
     stop_refine = n_static >= infeasible_k
     _rollback(a, st, r)
-    append_log(a.op_dir, st["op"],
-               f"- infeasible[{a.parent}]: {why} (no device time; "
-               f"n={r['n'] if r else 0} unchanged, n_static={n_static}/{infeasible_k})"
-               + ("  <- closing on infeasible_K, not stagnation" if stop_refine else ""))
-    out({"feasible": False, "reason": why, "checked": True, **retune,
-         "n": (r["n"] if r else 0), "n_static": n_static,
-         "stop_refine": stop_refine, "stop_cause": ("infeasible_K" if stop_refine else None),
-         "static_rejected": pr["static_rejected"]})
+    append_log(
+        a.op_dir,
+        st["op"],
+        f"- infeasible[{a.parent}]: {why} (no device time; "
+        f"n={r['n'] if r else 0} unchanged, n_static={n_static}/{infeasible_k})"
+        + ("  <- closing on infeasible_K, not stagnation" if stop_refine else ""),
+    )
+    out(
+        {
+            "feasible": False,
+            "reason": why,
+            "checked": True,
+            **retune,
+            "n": (r["n"] if r else 0),
+            "n_static": n_static,
+            "stop_refine": stop_refine,
+            "stop_cause": ("infeasible_K" if stop_refine else None),
+            "static_rejected": pr["static_rejected"],
+        }
+    )
 
 
 def cmd_feasible(a):
@@ -2439,9 +2926,12 @@ def cmd_feasible(a):
     # Same envelope the tile search validates against. `--ub-kb` / `--l1-kb`
     # still override, for a caller measuring a chip the state does not name.
     env = chip_envelope(st)
-    hw = feasibility.HW(ub_budget_kb=(a.ub_kb or env["ub_kb"]),
-                        l1_budget_kb=(a.l1_kb or env["l1_kb"]),
-                        m_l1=a.m_l1, k_l1=a.k_l1)
+    hw = feasibility.HW(
+        ub_budget_kb=(a.ub_kb or env["ub_kb"]),
+        l1_budget_kb=(a.l1_kb or env["l1_kb"]),
+        m_l1=a.m_l1,
+        k_l1=a.k_l1,
+    )
     if _reject_wrapper_drift(a, st, pr, op_f, retune):
         return
     ok, why = feasibility.check(op_f, hw)
@@ -2458,8 +2948,14 @@ def cmd_probe(a):
     """
     st = load(a.op_dir)
     hit = st.get("eval_cache", {}).get(a.code_hash)
-    out({"hit": hit is not None, "s": (hit or {}).get("s"), "p": (hit or {}).get("p"),
-         "m": (hit or {}).get("m", {})})
+    out(
+        {
+            "hit": hit is not None,
+            "s": (hit or {}).get("s"),
+            "p": (hit or {}).get("p"),
+            "m": (hit or {}).get("m", {}),
+        }
+    )
 
 
 def stored_refusals(st):
@@ -2475,9 +2971,14 @@ def stored_refusals(st):
     for r in st.get("bayesian_optimization_refusals") or []:
         if not r.get("params") or not r.get("sig"):
             continue
-        rows.append({"params": r["params"], "sig": r["sig"],
-                     "structures": list(r.get("structures") or []),
-                     "scope": r.get("scope") or "structure"})
+        rows.append(
+            {
+                "params": r["params"],
+                "sig": r["sig"],
+                "structures": list(r.get("structures") or []),
+                "scope": r.get("scope") or "structure",
+            }
+        )
     return rows
 
 
@@ -2499,21 +3000,28 @@ def refusals_for_structure(rows, structure):
     refusal seen on REFUSAL_GLOBAL_AFTER distinct structures has been shown to
     survive a restructure rather than assumed to.
     """
-    return [{"params": r["params"], "sig": r["sig"]} for r in rows
-            if r["scope"] == "global" or structure in r["structures"]]
+    return [
+        {"params": r["params"], "sig": r["sig"]}
+        for r in rows
+        if r["scope"] == "global" or structure in r["structures"]
+    ]
 
 
 def merge_refusals(rows, observed, structure, promote_after=REFUSAL_GLOBAL_AFTER):
     """Fold this block's refusals into the stored rows, stamped with `structure`."""
     index = {(json.dumps(r["params"], sort_keys=True), r["sig"]): r for r in rows}
-    for o in observed or []:
-        if not o.get("params") or not o.get("sig"):
+    for obs in observed or []:
+        if not obs.get("params") or not obs.get("sig"):
             continue
-        key = (json.dumps(o["params"], sort_keys=True), o["sig"])
+        key = (json.dumps(obs["params"], sort_keys=True), obs["sig"])
         row = index.get(key)
         if row is None:
-            row = {"params": o["params"], "sig": o["sig"],
-                   "structures": [], "scope": "structure"}
+            row = {
+                "params": obs["params"],
+                "sig": obs["sig"],
+                "structures": [],
+                "scope": "structure",
+            }
             index[key] = row
             rows.append(row)
         if structure and structure not in row["structures"]:
@@ -2563,8 +3071,9 @@ def wrapper_signature(src):
         return None
 
     def _is_kernel(n):
-        return (isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef))
-                and _decorated_jit(n))
+        return isinstance(
+            n, (ast.FunctionDef, ast.AsyncFunctionDef)
+        ) and _decorated_jit(n)
 
     shell = [n for n in tree.body if not _is_kernel(n)]
     dumped = ast.dump(ast.Module(body=shell, type_ignores=[]))
@@ -2584,23 +3093,27 @@ def _decorated_jit(node):
 
 
 def _wrapper_drift(st, path):
-    """"" if the wrapper still matches the baseline, else why it does not."""
+    """ "" if the wrapper still matches the baseline, else why it does not."""
     want = st.get("wrapper_signature")
     if not want:
-        return ""                     # pre-dates the check; nothing to compare
+        return ""  # pre-dates the check; nothing to compare
     try:
         got = wrapper_signature(_read_text(path))
     except OSError:
         return ""
     if got is None:
-        return "the candidate does not parse, so the wrapper freeze could not be checked"
+        return (
+            "the candidate does not parse, so the wrapper freeze could not be checked"
+        )
     if got != want:
-        return ("the host wrapper differs from the baseline. PANKO optimizes the "
-                "time inside the @jit kernel, and that number is only comparable "
-                "while everything outside it is unchanged -- work moved into the "
-                "wrapper leaves the measured region and scores as a win without "
-                "being one. Restore the wrapper and put the change inside the "
-                "kernel, or run this as a different experiment")
+        return (
+            "the host wrapper differs from the baseline. PANKO optimizes the "
+            "time inside the @jit kernel, and that number is only comparable "
+            "while everything outside it is unchanged -- work moved into the "
+            "wrapper leaves the measured region and scores as a win without "
+            "being one. Restore the wrapper and put the change inside the "
+            "kernel, or run this as a different experiment"
+        )
     return ""
 
 
@@ -2662,8 +3175,15 @@ def _refine_for(pr, action):
         # Fully shaped from the start. The duplicate branch used to leave a
         # headless `{"dup_streak": n}` behind, which every later reader had to
         # repair, and which a pre-device counter would now silently discard.
-        r = {"action": action, "best": None, "threshold_J": pr["best_J"],
-             "n": 0, "n_static": 0, "n_noop": 0, "dup_streak": 0}
+        r = {
+            "action": action,
+            "best": None,
+            "threshold_J": pr["best_J"],
+            "n": 0,
+            "n_static": 0,
+            "n_noop": 0,
+            "dup_streak": 0,
+        }
         pr["refine"] = r
     return r
 
@@ -2690,15 +3210,15 @@ def _refuse_early_close(st, action):
     if r.get("action") != action:
         return None
     if r.get("best") is None and not r.get("n"):
-        return None                                  # no candidate ever recorded
+        return None  # no candidate ever recorded
     stagnation_k = st["config"].get("stagnation_K", 7)
     n = r.get("n", 0)
     if n >= stagnation_k:
         return None
     if r.get("best") and r["best"].get("J", 0) >= 100:
-        return None                                  # success stop
+        return None  # success stop
     if r.get("n_static", 0) >= st["config"].get("infeasible_K", 16):
-        return None                                  # closing on infeasible_K
+        return None  # closing on infeasible_K
     if r.get("n_noop", 0) >= st["config"].get("infeasible_K", 16):
         # `feasible` reports `stop_refine: true, stop_cause: semantic_noop_K`
         # when an action can only resubmit the program it already has. Without a
@@ -2712,10 +3232,12 @@ def _refuse_early_close(st, action):
         # re-propose bytes already in the cache has no unmeasured value left,
         # and that is an observation rather than a claim.
         return None
-    return (f"n={n} of stagnation_K={stagnation_k}: this action has not been tested. "
-            f"Propose the next concrete candidate for it. An axis you believe "
-            f"is exhausted still has to be shown exhausted -- submit the "
-            f"remaining values and let the duplicate check reject them for free.")
+    return (
+        f"n={n} of stagnation_K={stagnation_k}: this action has not been tested. "
+        f"Propose the next concrete candidate for it. An axis you believe "
+        f"is exhausted still has to be shown exhausted -- submit the "
+        f"remaining values and let the duplicate check reject them for free."
+    )
 
 
 def _refuse_close(a, st, pr):
@@ -2726,9 +3248,15 @@ def _refuse_close(a, st, pr):
         return
     pr["early_close_refused"] = pr.get("early_close_refused", 0) + 1
     save(a.op_dir, st)
-    out({"closed": None, "refused": True, "reason": why,
-         "n": (pr.get("refine") or {}).get("n", 0),
-         "stagnation_K": st["config"].get("stagnation_K", 7)})
+    out(
+        {
+            "closed": None,
+            "refused": True,
+            "reason": why,
+            "n": (pr.get("refine") or {}).get("n", 0),
+            "stagnation_K": st["config"].get("stagnation_K", 7),
+        }
+    )
     raise Refusal(3)
 
 
@@ -2794,8 +3322,9 @@ def _retire_spent_action(a, st, r):
     # `evolve` could do that -- so the counter that exists to catch a run halting
     # far under budget on an empty frontier could not see this route.
     if retired and not _live(st, a.op_dir):
-        st["progress"]["frontier_emptied_by_prune"] = \
+        st["progress"]["frontier_emptied_by_prune"] = (
             st["progress"].get("frontier_emptied_by_prune", 0) + 1
+        )
     # Three distinct reasons, and they were being reported as two. An action that
     # paid in full but is no longer in `open` got "no structural signature" when
     # the signature was fine, and an action whose `refine` belongs to somebody
@@ -2819,18 +3348,32 @@ def _close_without_candidate(a, st, pr, r):
     retired, why_not = _retire_spent_action(a, st, r)
     pr["refine"] = None
     save(a.op_dir, st)
-    append_log(a.op_dir, st["op"],
-               f"- close[{a.action}] -> (no candidate beat the best) "
-               f"| stagnation {_gstag(st)}"
-               + (" | retired against the current structure (revives if it changes)"
-                  if retired else f" | NOT retired: {why_not}"))
-    out({"closed": None, "note": "no successful candidate for this action",
-         "retired": retired,
-         "hint": ("this action is retired against the structure now in the file and "
-                  "`select` will not offer it again until a delta changes that "
-                  "structure -- do NOT prune it by hand" if retired else
-                  "the action stays selectable at reduced priority: retirement "
-                  "requires stagnation_K measurements AND a readable structure")})
+    append_log(
+        a.op_dir,
+        st["op"],
+        f"- close[{a.action}] -> (no candidate beat the best) "
+        f"| stagnation {_gstag(st)}"
+        + (
+            " | retired against the current structure (revives if it changes)"
+            if retired
+            else f" | NOT retired: {why_not}"
+        ),
+    )
+    out(
+        {
+            "closed": None,
+            "note": "no successful candidate for this action",
+            "retired": retired,
+            "hint": (
+                "this action is retired against the structure now in the file and "
+                "`select` will not offer it again until a delta changes that "
+                "structure -- do NOT prune it by hand"
+                if retired
+                else "the action stays selectable at reduced priority: retirement "
+                "requires stagnation_K measurements AND a readable structure"
+            ),
+        }
+    )
 
 
 def _promote_new_best(a, st, pr, b, cid):
@@ -2840,28 +3383,39 @@ def _promote_new_best(a, st, pr, b, cid):
     pr["best_J"] = b["J"]
     st["best_node"] = cid
     pr["best_latency_us"] = b["p"]
-    pr["best_speedup_vs_preopt"] = round(pr["preopt_us"] / b["p"], 4) if b["p"] else None
+    pr["best_speedup_vs_preopt"] = (
+        round(pr["preopt_us"] / b["p"], 4) if b["p"] else None
+    )
     pr["global_stagnation"] = 0
-    for n in st["nodes"]["open"]:   # greedy accumulate: stack subsequent actions on the new best
+    for n in st["nodes"][
+        "open"
+    ]:  # greedy accumulate: stack subsequent actions on the new best
         n["parent"] = cid
     # re-analysis: the bottleneck shifts as we optimize -> re-point open beliefs (V) at the NEW
     # best kernel's current symptom, reusing the util/bubble we just measured (no extra eval).
     # `.get(k)` -> None when the key is absent, which is the point: an
     # unmeasured node must not be read as an idle one.
-    reboosted = _symptom_reboost(st, (b.get("m") or {}).get("util"),
-                                 (b.get("m") or {}).get("bubble"),
-                                 _op_file(st, a.op_dir), (b.get("m") or {}))
-    admitted = _admit(st, a.op_dir)   # the new best may have new structure
+    reboosted = _symptom_reboost(
+        st,
+        (b.get("m") or {}).get("util"),
+        (b.get("m") or {}).get("bubble"),
+        _op_file(st, a.op_dir),
+        (b.get("m") or {}),
+    )
+    admitted = _admit(st, a.op_dir)  # the new best may have new structure
     if admitted:
-        append_log(a.op_dir, st["op"],
-                   f"- admit: preconditions now met, {len(admitted)} action(s) "
-                   f"returned to the frontier: {admitted}")
+        append_log(
+            a.op_dir,
+            st["op"],
+            f"- admit: preconditions now met, {len(admitted)} action(s) "
+            f"returned to the frontier: {admitted}",
+        )
     gain = (prev_p - b["p"]) / prev_p if prev_p else 0.0
     if gain >= st["config"].get("stage_min_gain", 0.01):
         pr["stage_stagnation"] = 0
-        pr["cycle_productive"] = True   # productive (>=1%): keep mining this stage
+        pr["cycle_productive"] = True  # productive (>=1%): keep mining this stage
     else:
-        pr["stage_stagnation"] += 1                                 # marginal (<1%): counts toward advancing
+        pr["stage_stagnation"] += 1  # marginal (<1%): counts toward advancing
     return reboosted
 
 
@@ -2897,10 +3451,21 @@ def cmd_close(a):
     stage = act["stage"] if act else pr["active_stage"]
     reboosted = []
     cid = _next_id(st, "x")
-    st["nodes"]["closed"].append({"id": cid, "parent": act["parent"] if act else "root",
-                                  "stage": stage, "code_hash": b["code_hash"], "J": b["J"],
-                                  "eval": {"s": 1, "p": b["p"], "m": b["m"]}})
-    st["nodes"]["open"] = [n for n in st["nodes"]["open"] if n["id"] != a.action]  # consumed
+    st["nodes"]["closed"].append(
+        {
+            "id": cid,
+            "parent": act["parent"] if act else "root",
+            "stage": stage,
+            "code_hash": b["code_hash"],
+            "J": b["J"],
+            "eval": {"s": 1, "p": b["p"], "m": b["m"]},
+        }
+    )
+    remaining = []
+    for n in st["nodes"]["open"]:
+        if n["id"] != a.action:
+            remaining.append(n)
+    st["nodes"]["open"] = remaining  # consumed
     if b["J"] > pr["best_J"]:
         reboosted = _promote_new_best(a, st, pr, b, cid)
     else:
@@ -2911,21 +3476,37 @@ def cmd_close(a):
     save(a.op_dir, st)
     # leave the working file AT this action's best (= the new running best when it improved).
     _restore(a.op_dir, _op_file(st, a.op_dir), b["code_hash"])
-    append_log(a.op_dir, st["op"],
-               f"- close[{a.action}] -> {cid}: best j={b['j']} p={b['p']} "
-               f"(global best_J={pr['best_J']}) "
-               f"| stagnation {_gstag(st)}"
-               f" | symptoms {reboosted or '-'}")
-    out({"closed": cid, "best_J": pr["best_J"], "best_latency_us": pr["best_latency_us"],
-         "reboosted_symptoms": reboosted})
+    append_log(
+        a.op_dir,
+        st["op"],
+        f"- close[{a.action}] -> {cid}: best j={b['j']} p={b['p']} "
+        f"(global best_J={pr['best_J']}) "
+        f"| stagnation {_gstag(st)}"
+        f" | symptoms {reboosted or '-'}",
+    )
+    out(
+        {
+            "closed": cid,
+            "best_J": pr["best_J"],
+            "best_latency_us": pr["best_latency_us"],
+            "reboosted_symptoms": reboosted,
+        }
+    )
 
 
 def _apply_inserts(st, op_nodes, edits):
     for ins in edits.get("insert", []):
-        op_nodes.append({"id": _next_id(st, "u"), "parent": ins["parent"],
-                         "stage": ins["stage"], "delta": ins["delta"],
-                         "V": clamp_belief(ins.get("V", 0.5)),
-                         "prior_gain": float(ins.get("prior_gain", 0.5)), "tried": 0})
+        op_nodes.append(
+            {
+                "id": _next_id(st, "u"),
+                "parent": ins["parent"],
+                "stage": ins["stage"],
+                "delta": ins["delta"],
+                "V": clamp_belief(ins.get("V", 0.5)),
+                "prior_gain": float(ins.get("prior_gain", 0.5)),
+                "tried": 0,
+            }
+        )
 
 
 def _apply_updates(op_nodes, edits):
@@ -3019,6 +3600,28 @@ def _record_frontier(pr, edits, live, pruned_any):
     pr["expansion_required"] = True
 
 
+def _evolve_note(pr, live, ignored_held, unknown):
+    """The warnings an evolve appends to its log line, in words."""
+    note = ""
+    if not live:
+        if pr.get("expansion_declined"):
+            note += f" | FRONTIER EXHAUSTED, declared: {pr['expansion_declined']}"
+        else:
+            note += (
+                f" | FRONTIER EMPTY and nothing inserted: expansion required "
+                f"(request {pr.get('expansion_requests', 0)}). Propose new intents, "
+                f'or pass exhausted:"<reason>" to declare there are none.'
+            )
+    if ignored_held:
+        note += (
+            f" | {len(ignored_held)} prune(s) ignored: still held by unmet "
+            f"preconditions, not the optimizer's to delete: {sorted(ignored_held)}"
+        )
+    if unknown:
+        note += f" | {len(unknown)} prune(s) named no known node: {sorted(unknown)}"
+    return note
+
+
 def cmd_evolve(a):
     """Apply the optimizer's tree edits: {insert:[...], update:[...], prune:[ids]}."""
     st = load(a.op_dir)
@@ -3038,7 +3641,9 @@ def cmd_evolve(a):
     # action is disproved by a sweep over the program as it stands, another is
     # inexpressible without changing the operator's frozen layout. Only the
     # second is a fact about the operator. See `_live`.
-    permanent, conditional, ignored_held, unknown, sig = _apply_prunes(st, a, op_nodes, edits)
+    permanent, conditional, ignored_held, unknown, sig = _apply_prunes(
+        st, a, op_nodes, edits
+    )
 
     # Emptying the frontier is termination by another name, and termination is
     # not the model's decision. Extending the tree IS its job: `insert` is the
@@ -3057,32 +3662,30 @@ def cmd_evolve(a):
     # (stage progression is handled in cmd_close: cyclic advance on <stage_min_gain diminishing returns)
     save(a.op_dir, st)
     reasons = "; ".join(edits.get("reasons", [])) or "(no reason given)"
-    note = ""
-    if not live:
-        if pr.get("expansion_declined"):
-            note += f" | FRONTIER EXHAUSTED, declared: {pr['expansion_declined']}"
-        else:
-            note += (f" | FRONTIER EMPTY and nothing inserted: expansion required "
-                     f"(request {pr.get('expansion_requests', 0)}). Propose new intents, "
-                     f"or pass exhausted:\"<reason>\" to declare there are none.")
-    if ignored_held:
-        note += (f" | {len(ignored_held)} prune(s) ignored: still held by unmet "
-                 f"preconditions, not the optimizer's to delete: {sorted(ignored_held)}")
-    if unknown:
-        note += f" | {len(unknown)} prune(s) named no known node: {sorted(unknown)}"
-    append_log(a.op_dir, st["op"],
-               f"- evolve: +{len(edits.get('insert', []))} insert, "
-               f"{len(upd)} update, {len(conditional)} prune "
-               f"({len(permanent)} permanent) | reasons: {reasons}{note}")
-    out({"open": len(live), "active_stage": st["progress"]["active_stage"],
-         "pruned_permanently": sorted(permanent),
-         # Retired against this structure only, and named so the optimizer can
-         # see that its own evidence has an expiry date.
-         "pruned_on_structure": sorted(conditional), "structure": sig,
-         "prune_ignored_held": sorted(ignored_held),
-         "prune_unknown": sorted(unknown), "pruned_total": len(st["nodes"]["pruned"]),
-         "expansion_required": bool(pr.get("expansion_required")),
-         "expansion_declined": pr.get("expansion_declined")})
+    note = _evolve_note(pr, live, ignored_held, unknown)
+    append_log(
+        a.op_dir,
+        st["op"],
+        f"- evolve: +{len(edits.get('insert', []))} insert, "
+        f"{len(upd)} update, {len(conditional)} prune "
+        f"({len(permanent)} permanent) | reasons: {reasons}{note}",
+    )
+    out(
+        {
+            "open": len(live),
+            "active_stage": st["progress"]["active_stage"],
+            "pruned_permanently": sorted(permanent),
+            # Retired against this structure only, and named so the optimizer can
+            # see that its own evidence has an expiry date.
+            "pruned_on_structure": sorted(conditional),
+            "structure": sig,
+            "prune_ignored_held": sorted(ignored_held),
+            "prune_unknown": sorted(unknown),
+            "pruned_total": len(st["nodes"]["pruned"]),
+            "expansion_required": bool(pr.get("expansion_required")),
+            "expansion_declined": pr.get("expansion_declined"),
+        }
+    )
 
 
 def _delivered_check(st, op_dir):
@@ -3104,8 +3707,51 @@ def _delivered_check(st, op_dir):
     on_disk = None
     if f and os.path.exists(f):
         on_disk = hashlib.sha256(_read_bytes(f)).hexdigest()
-    return {"best_code_hash": best, "delivered_code_hash": on_disk,
-            "delivered_is_best": bool(best) and on_disk == best}
+    return {
+        "best_code_hash": best,
+        "delivered_code_hash": on_disk,
+        "delivered_is_best": bool(best) and on_disk == best,
+    }
+
+
+def _chip_mismatch_report(expected, live, how, device, env):
+    """The halt payload for an envelope derived for another chip."""
+    return {
+        "error": "chip_mismatch",
+        "reason": (
+            f"the envelope was derived for {expected} but device "
+            f"{device!r} reports {live} (via {how}). The buffer "
+            "capacities and core counts PANKO validates every candidate "
+            "against are the wrong chip's."
+        ),
+        "expected_soc": expected,
+        "live_soc": live,
+        "envelope_source": env.get("source", ""),
+        "ask_user": {
+            "question": (
+                f"PANKO was initialised for {expected}, and the device it is "
+                f"about to measure on is {live}. Continuing would filter the "
+                "search space with another chip's limits, rejecting legal tiles "
+                "before the device ever saw them. How do you want to proceed?"
+            ),
+            "options": [
+                {
+                    "id": "re_init",
+                    "label": f"Re-initialise for {live}",
+                    "action": "delete optimization/search_state.json and re-run "
+                    "init on this device; any search so far is scored "
+                    "against the wrong envelope and does not carry over",
+                },
+                {
+                    "id": "other_device",
+                    "label": f"Point PANKO at a {expected}",
+                    "action": "re-run with --device set to a device that holds the "
+                    "chip this run was initialised for",
+                },
+            ],
+        },
+        "hint": "relay the question to the user; do not choose for them",
+    }
 
 
 def confirm_chip(st, device, probe=None):
@@ -3134,37 +3780,16 @@ def confirm_chip(st, device, probe=None):
     if ask is None:
         return None
     verdict, live, how = ask(expected, device)
-    env["confirmed"] = {"verdict": verdict, "live_soc": live, "via": how,
-                        "at": int(time.time())}
+    env["confirmed"] = {
+        "verdict": verdict,
+        "live_soc": live,
+        "via": how,
+        "at": int(time.time()),
+    }
     st["chip_envelope"] = env
     if verdict != "mismatch":
         return None
-    return {
-        "error": "chip_mismatch",
-        "reason": (f"the envelope was derived for {expected} but device "
-                   f"{device!r} reports {live} (via {how}). The buffer "
-                   "capacities and core counts PANKO validates every candidate "
-                   "against are the wrong chip's."),
-        "expected_soc": expected, "live_soc": live,
-        "envelope_source": env.get("source", ""),
-        "ask_user": {
-            "question": (
-                f"PANKO was initialised for {expected}, and the device it is "
-                f"about to measure on is {live}. Continuing would filter the "
-                "search space with another chip's limits, rejecting legal tiles "
-                "before the device ever saw them. How do you want to proceed?"),
-            "options": [
-                {"id": "re_init",
-                 "label": f"Re-initialise for {live}",
-                 "action": "delete optimization/search_state.json and re-run "
-                           "init on this device; any search so far is scored "
-                           "against the wrong envelope and does not carry over"},
-                {"id": "other_device",
-                 "label": f"Point PANKO at a {expected}",
-                 "action": "re-run with --device set to a device that holds the "
-                           "chip this run was initialised for"},
-            ]},
-        "hint": "relay the question to the user; do not choose for them"}
+    return _chip_mismatch_report(expected, live, how, device, env)
 
 
 def _device_probe(st, run_cmd=None):
@@ -3183,14 +3808,17 @@ def _device_probe(st, run_cmd=None):
     """
     cmd = st.get("test_command")
     if not cmd:
-        return {"ran": False, "usable": False,
-                "note": "no test_command recorded; the block's observation stands"}
+        return {
+            "ran": False,
+            "usable": False,
+            "note": "no test_command recorded; the block's observation stands",
+        }
     # The same shell-free runner the evaluator uses, so the probe re-runs the
     # command exactly as the block did -- see `evaluator.command_steps`.
     runner = run_cmd or (lambda c, t: bayesian.evaluator.run_command(c, t)[0])
     try:
         text = runner(cmd, st["config"].get("eval_timeout_s", 300))
-    except Exception as e:                       # timeout, OSError, anything
+    except Exception as e:  # timeout, OSError, anything
         return {"ran": False, "usable": False, "note": f"probe could not run: {e}"}
     markers = getattr(bayesian.evaluator, "DEVICE_FAULT_MARKERS", ())
     hit = next((m for m in markers if m in text), None)
@@ -3232,11 +3860,16 @@ def _stop_condition(st, a):
         return "wall_clock"
     if cfg.get("eval_budget") and pr["evals_used"] >= cfg["eval_budget"]:
         return "eval_budget"
-    if (not _live(st, a.op_dir) and not pr.get("refine")
-            and pr.get("expansion_declined")):
+    if (
+        not _live(st, a.op_dir)
+        and not pr.get("refine")
+        and pr.get("expansion_declined")
+    ):
         return "frontier_exhausted"
-    if (cfg.get("global_stagnation_limit")
-            and pr["global_stagnation"] >= cfg["global_stagnation_limit"]):
+    if (
+        cfg.get("global_stagnation_limit")
+        and pr["global_stagnation"] >= cfg["global_stagnation_limit"]
+    ):
         return "global_stagnation"
     return None
 
@@ -3252,13 +3885,23 @@ def _deliver_best(st, a):
     op_f = _op_file(st, a.op_dir)
     if _restore(a.op_dir, op_f, best_hash) or _file_hash(op_f) == best_hash:
         return
-    out({"stop": False, "refused": True, "error": "restore_failed",
-         "best_code_hash": best_hash, "op_file": op_f,
-         "reason": ("the global best has no snapshot on disk"
-                    if best_hash else "no global best code_hash is recorded"),
-         "hint": "the run cannot be closed out on a file that is not the "
-                 "winner. Restore optimization/nodes/<best_code_hash>.py "
-                 "into the kernel, then call stop again."})
+    out(
+        {
+            "stop": False,
+            "refused": True,
+            "error": "restore_failed",
+            "best_code_hash": best_hash,
+            "op_file": op_f,
+            "reason": (
+                "the global best has no snapshot on disk"
+                if best_hash
+                else "no global best code_hash is recorded"
+            ),
+            "hint": "the run cannot be closed out on a file that is not the "
+            "winner. Restore optimization/nodes/<best_code_hash>.py "
+            "into the kernel, then call stop again.",
+        }
+    )
     raise Refusal(3)
 
 
@@ -3269,11 +3912,14 @@ def _record_probe(st, a, probe):
     """
     now = datetime.datetime.now(datetime.timezone.utc).isoformat(timespec="seconds")
     st["progress"]["device_probe"] = dict(probe, at=now)
-    append_log(a.op_dir, st["op"],
-               f"- device probe after env-fault abort: usable={probe.get('usable')}"
-               + (f" marker={probe['marker']}" if probe.get("marker") else "")
-               + (f" ({probe['note']})" if probe.get("note") else "")
-               + (" -> run continues" if probe.get("usable") else " -> device_unavailable"))
+    append_log(
+        a.op_dir,
+        st["op"],
+        f"- device probe after env-fault abort: usable={probe.get('usable')}"
+        + (f" marker={probe['marker']}" if probe.get("marker") else "")
+        + (f" ({probe['note']})" if probe.get("note") else "")
+        + (" -> run continues" if probe.get("usable") else " -> device_unavailable"),
+    )
 
 
 def cmd_stop(a):
@@ -3293,24 +3939,31 @@ def cmd_stop(a):
         pr["forced_stop"] = True
     if reason is not None:
         _deliver_best(st, a)
-        pr["stop_reason"] = reason   # sticky; the Stage-7 completion gate reads this
+        pr["stop_reason"] = reason  # sticky; the Stage-7 completion gate reads this
         evaluation_session.close_session(a.op_dir)
     if probe is not None:
         _record_probe(st, a, probe)
     delivered = _delivered_check(st, a.op_dir)
     save(a.op_dir, st)
-    out({"stop": reason is not None, "reason": reason,
-         "device_probe": probe,
-         **delivered,
-         "best_J": pr["best_J"], "best_latency_us": pr["best_latency_us"],
-         "wall_clock_s": pr["wall_clock_s"], "evals_used": pr["evals_used"],
-         "static_rejected": pr.get("static_rejected", 0),
-         "duplicate_rejected": pr.get("duplicate_rejected", 0),
-         "global_stagnation": pr["global_stagnation"],
-         "forced": bool(pr.get("forced_stop")),
-         "frontier_emptied_by_prune": pr.get("frontier_emptied_by_prune", 0),
-         "expansion_requests": pr.get("expansion_requests", 0),
-         "expansion_declined": pr.get("expansion_declined")})
+    out(
+        {
+            "stop": reason is not None,
+            "reason": reason,
+            "device_probe": probe,
+            **delivered,
+            "best_J": pr["best_J"],
+            "best_latency_us": pr["best_latency_us"],
+            "wall_clock_s": pr["wall_clock_s"],
+            "evals_used": pr["evals_used"],
+            "static_rejected": pr.get("static_rejected", 0),
+            "duplicate_rejected": pr.get("duplicate_rejected", 0),
+            "global_stagnation": pr["global_stagnation"],
+            "forced": bool(pr.get("forced_stop")),
+            "frontier_emptied_by_prune": pr.get("frontier_emptied_by_prune", 0),
+            "expansion_requests": pr.get("expansion_requests", 0),
+            "expansion_declined": pr.get("expansion_declined"),
+        }
+    )
 
 
 def cmd_report(a):
@@ -3324,7 +3977,12 @@ def cmd_report(a):
     st = load(a.op_dir)
     pr = st["progress"]
     if not pr.get("stop_reason"):
-        out({"reported": False, "note": "no stop yet — Final best is written only at a real halt"})
+        out(
+            {
+                "reported": False,
+                "note": "no stop yet — Final best is written only at a real halt",
+            }
+        )
         return
     # `report` is the last thing a run says, so it is where the deliverable is
     # checked. A run can report one best and ship a different kernel while the
@@ -3334,21 +3992,38 @@ def cmd_report(a):
         _restore(a.op_dir, _op_file(st, a.op_dir), d["best_code_hash"])
         d = _delivered_check(st, a.op_dir)
         d["repaired"] = True
-    append_log(a.op_dir, st["op"],
-               f"\n## Final best\n- latency: {pr['best_latency_us']} us | j: {pr['best_J']} "
-               f"| speedup_vs_preopt: {pr['best_speedup_vs_preopt']}x "
-               f"| evals: {pr['evals_used']} | wall: {pr['wall_clock_s']}s | stop: {pr['stop_reason']}"
-               f"\n- rejected without spending budget: {pr.get('static_rejected', 0)} static, "
-               f"{pr.get('duplicate_rejected', 0)} duplicate"
-               f"\n- code_version: {st.get('code_version')}"
-               f"\n- delivered: {str(d['delivered_code_hash'])[:12]} "
-               f"(best {str(d['best_code_hash'])[:12]}) "
-               + ("OK" if d["delivered_is_best"] else "MISMATCH — the kernel on disk is NOT the best found")
-               + (" | repaired from the snapshot" if d.get("repaired") and d["delivered_is_best"] else ""))
-    out({"reported": True, "best_J": pr["best_J"], "stop_reason": pr["stop_reason"],
-         **d,
-         "static_rejected": pr.get("static_rejected", 0),
-         "duplicate_rejected": pr.get("duplicate_rejected", 0)})
+    append_log(
+        a.op_dir,
+        st["op"],
+        f"\n## Final best\n- latency: {pr['best_latency_us']} us | j: {pr['best_J']} "
+        f"| speedup_vs_preopt: {pr['best_speedup_vs_preopt']}x "
+        f"| evals: {pr['evals_used']} | wall: {pr['wall_clock_s']}s | stop: {pr['stop_reason']}"
+        f"\n- rejected without spending budget: {pr.get('static_rejected', 0)} static, "
+        f"{pr.get('duplicate_rejected', 0)} duplicate"
+        f"\n- code_version: {st.get('code_version')}"
+        f"\n- delivered: {str(d['delivered_code_hash'])[:12]} "
+        f"(best {str(d['best_code_hash'])[:12]}) "
+        + (
+            "OK"
+            if d["delivered_is_best"]
+            else "MISMATCH — the kernel on disk is NOT the best found"
+        )
+        + (
+            " | repaired from the snapshot"
+            if d.get("repaired") and d["delivered_is_best"]
+            else ""
+        ),
+    )
+    out(
+        {
+            "reported": True,
+            "best_J": pr["best_J"],
+            "stop_reason": pr["stop_reason"],
+            **d,
+            "static_rejected": pr.get("static_rejected", 0),
+            "duplicate_rejected": pr.get("duplicate_rejected", 0),
+        }
+    )
 
 
 # --------------------------------------------------------------------------- cli
@@ -3358,32 +4033,91 @@ def _parser_block(sub):
     q.set_defaults(fn=cmd_block)
     q.add_argument("--op-dir", required=True)
     q.add_argument("--parent", required=True, help="the action this block belongs to")
-    q.add_argument("--test-command", dest="test_command", required=True,
-                   help="shell string that exits 0 iff golden+layout pass")
-    q.add_argument("--reason", default="",
-                   help="why tuning is needed now; recorded for audit")
-    q.add_argument("--live-tiles", dest="live_tiles", type=int, default=0,
-                   help="how many tile-shaped tensors are simultaneously resident. "
-                        "A FACT about the program, supplied because the extractor "
-                        "cannot read it after a fusion or a flatten. Never a bound.")
-    q.add_argument("--max-trials", dest="max_trials", type=int, default=0,
-                   help="upper bound requested by the optimizer; the core clamps it "
-                        "against the remaining budget and the run-level share")
+    q.add_argument(
+        "--test-command",
+        dest="test_command",
+        required=True,
+        help="shell string that exits 0 iff golden+layout pass",
+    )
+    q.add_argument(
+        "--reason", default="", help="why tuning is needed now; recorded for audit"
+    )
+    q.add_argument(
+        "--live-tiles",
+        dest="live_tiles",
+        type=int,
+        default=0,
+        help="how many tile-shaped tensors are simultaneously resident. "
+        "A FACT about the program, supplied because the extractor "
+        "cannot read it after a fusion or a flatten. Never a bound.",
+    )
+    q.add_argument(
+        "--max-trials",
+        dest="max_trials",
+        type=int,
+        default=0,
+        help="upper bound requested by the optimizer; the core clamps it "
+        "against the remaining budget and the run-level share",
+    )
     q.add_argument("--lint-root", dest="lint_root", default="")
-    q.add_argument("--evaluation-mode", choices=("subprocess", "resident", "cached", "prepared"),
-                   default="subprocess")
+    q.add_argument(
+        "--evaluation-mode",
+        choices=("subprocess", "resident", "cached", "prepared"),
+        default="subprocess",
+    )
 
 
 def _parser_normalize(sub):
     """Arguments for `normalize`."""
     q = sub.add_parser("normalize")
     q.set_defaults(fn=cmd_normalize)
-    q.add_argument("--before", required=True,
-                   help="the kernel as generated, before normalisation")
-    q.add_argument("--after", required=True,
-                   help="the normalised kernel")
+    q.add_argument(
+        "--before", required=True, help="the kernel as generated, before normalisation"
+    )
+    q.add_argument("--after", required=True, help="the normalised kernel")
     q.add_argument("--op-dir", default="", help="optional, to log the verdict")
     q.add_argument("--op", default="")
+
+
+# The optional preopt metric readings `init` accepts. All type=float,
+# default=None, and only the flag name and help text differ.
+_PREOPT_METRIC_ARGS = (
+    (
+        "--preopt-util",
+        "preopt_util",
+        "preopt core-util %% (optional; enables first-move symptom bias)",
+    ),
+    (
+        "--preopt-bubble",
+        "preopt_bubble",
+        "preopt bubble %% (optional; enables first-move symptom bias)",
+    ),
+    (
+        "--preopt-aic-util",
+        "preopt_aic_util",
+        "preopt cube-pipe core-util %% (optional; enables the per-pipe symptoms at INIT)",
+    ),
+    (
+        "--preopt-aiv-util",
+        "preopt_aiv_util",
+        "preopt vector-pipe core-util %% (optional)",
+    ),
+    (
+        "--preopt-pred-stall",
+        "preopt_pred_stall",
+        "preopt predecessor-wait %% (optional)",
+    ),
+    (
+        "--preopt-aic-bubble",
+        "preopt_aic_bubble",
+        "preopt cube-pipe wait-schedule %% (optional)",
+    ),
+    (
+        "--preopt-aiv-bubble",
+        "preopt_aiv_bubble",
+        "preopt vector-pipe wait-schedule %% (optional)",
+    ),
+)
 
 
 def _parser_init(sub):
@@ -3404,28 +4138,28 @@ def _parser_init(sub):
     q.add_argument("--preopt-s", dest="preopt_s", type=int, default=1)
     q.add_argument("--preopt-p", dest="preopt_p", type=float, required=True)
     q.add_argument("--preopt-hash", dest="preopt_hash", default="")
-    q.add_argument("--preopt-util", dest="preopt_util", type=float, default=None,
-                   help="preopt core-util %% (optional; enables first-move symptom bias)")
-    q.add_argument("--preopt-bubble", dest="preopt_bubble", type=float, default=None,
-                   help="preopt bubble %% (optional; enables first-move symptom bias)")
-    q.add_argument("--preopt-aic-util", dest="preopt_aic_util", type=float, default=None,
-                   help="preopt cube-pipe core-util %% (optional; enables the per-pipe symptoms at INIT)")
-    q.add_argument("--preopt-aiv-util", dest="preopt_aiv_util", type=float, default=None,
-                   help="preopt vector-pipe core-util %% (optional)")
-    q.add_argument("--preopt-pred-stall", dest="preopt_pred_stall", type=float, default=None,
-                   help="preopt predecessor-wait %% (optional)")
-    q.add_argument("--preopt-aic-bubble", dest="preopt_aic_bubble", type=float, default=None,
-                   help="preopt cube-pipe wait-schedule %% (optional)")
-    q.add_argument("--preopt-aiv-bubble", dest="preopt_aiv_bubble", type=float, default=None,
-                   help="preopt vector-pipe wait-schedule %% (optional)")
-    q.add_argument("--op-file", dest="op_file", default="",
-                   help="working <op>_impl.py the harness snapshots/restores (default: <op-dir>/<op>_impl.py)")
-    q.add_argument("--lint-root", dest="lint_root", default="",
-                   help="the same --lint-root the blocks will be given; checked here so a "
-                        "wrong one is reported before it faults every trial")
-    q.add_argument("--allow-unversioned", dest="allow_unversioned", action="store_true",
-                   help="start even when the harness build cannot be identified (CI only; "
-                        "a run started this way must not be reported)")
+    for flag, dest, help_text in _PREOPT_METRIC_ARGS:
+        q.add_argument(flag, dest=dest, type=float, default=None, help=help_text)
+    q.add_argument(
+        "--op-file",
+        dest="op_file",
+        default="",
+        help="working <op>_impl.py the harness snapshots/restores (default: <op-dir>/<op>_impl.py)",
+    )
+    q.add_argument(
+        "--lint-root",
+        dest="lint_root",
+        default="",
+        help="the same --lint-root the blocks will be given; checked here so a "
+        "wrong one is reported before it faults every trial",
+    )
+    q.add_argument(
+        "--allow-unversioned",
+        dest="allow_unversioned",
+        action="store_true",
+        help="start even when the harness build cannot be identified (CI only; "
+        "a run started this way must not be reported)",
+    )
 
 
 def _parser_select(sub):
@@ -3455,16 +4189,41 @@ def _parser_record(sub):
     # Per-pipe, from measure_latency (`aic_util` / `aiv_util` / `pred_stall` in
     # its result dict). Optional: they exist only when a bubble_analysis.log was
     # written, and the installed draw_swim_lane.py often skips it.
-    q.add_argument("--aic-util", dest="aic_util", type=float, default=None,
-                   help="cube-pipe core-util %% (optional; enables the per-pipe symptoms)")
-    q.add_argument("--aiv-util", dest="aiv_util", type=float, default=None,
-                   help="vector-pipe core-util %% (optional)")
-    q.add_argument("--pred-stall", dest="pred_stall", type=float, default=None,
-                   help="predecessor-wait %% (optional; separates a serial recurrence from a full pipe)")
-    q.add_argument("--aic-bubble", dest="aic_bubble", type=float, default=None,
-                   help="cube-pipe wait-schedule %% (optional)")
-    q.add_argument("--aiv-bubble", dest="aiv_bubble", type=float, default=None,
-                   help="vector-pipe wait-schedule %% (optional; rises when tasks get too big to fill the cores)")
+    q.add_argument(
+        "--aic-util",
+        dest="aic_util",
+        type=float,
+        default=None,
+        help="cube-pipe core-util %% (optional; enables the per-pipe symptoms)",
+    )
+    q.add_argument(
+        "--aiv-util",
+        dest="aiv_util",
+        type=float,
+        default=None,
+        help="vector-pipe core-util %% (optional)",
+    )
+    q.add_argument(
+        "--pred-stall",
+        dest="pred_stall",
+        type=float,
+        default=None,
+        help="predecessor-wait %% (optional; separates a serial recurrence from a full pipe)",
+    )
+    q.add_argument(
+        "--aic-bubble",
+        dest="aic_bubble",
+        type=float,
+        default=None,
+        help="cube-pipe wait-schedule %% (optional)",
+    )
+    q.add_argument(
+        "--aiv-bubble",
+        dest="aiv_bubble",
+        type=float,
+        default=None,
+        help="vector-pipe wait-schedule %% (optional; rises when tasks get too big to fill the cores)",
+    )
 
 
 def _parser_feasible(sub):
@@ -3511,10 +4270,13 @@ def _parser_stop(sub):
     q = sub.add_parser("stop")
     q.set_defaults(fn=cmd_stop)
     q.add_argument("--op-dir", required=True)
-    q.add_argument("--force", default="",
-                   help="record this stop_reason when no condition fired, e.g. session_ended. "
-                        "For the campaign driver to call after the agent exits; the agent must "
-                        "never pass it.")
+    q.add_argument(
+        "--force",
+        default="",
+        help="record this stop_reason when no condition fired, e.g. session_ended. "
+        "For the campaign driver to call after the agent exits; the agent must "
+        "never pass it.",
+    )
 
 
 def _parser_report(sub):

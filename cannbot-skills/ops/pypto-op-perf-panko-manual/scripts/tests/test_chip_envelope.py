@@ -23,7 +23,6 @@ the accident.
 from __future__ import annotations
 
 import ast
-import os
 import sys
 import tempfile
 import unittest
@@ -36,7 +35,7 @@ import feasibility  # noqa: E402
 import bayesian_optimization as bayesian  # noqa: E402
 
 
-KERNEL = '''import pypto
+KERNEL = """import pypto
 
 
 @pypto.frontend.jit()
@@ -48,11 +47,10 @@ def k(a, b):
 
 def w(x):
     return k(x, x)
-'''
+"""
 
 
 class OneEnvelopeTest(unittest.TestCase):
-
     def setUp(self):
         self._tmp = tempfile.TemporaryDirectory()
         self.op_file = Path(self._tmp.name) / "k.py"
@@ -61,16 +59,22 @@ class OneEnvelopeTest(unittest.TestCase):
 
     def test_the_two_gates_agree_on_l1(self):
         """The regression: 192 here against 512 there, a factor of 2.7."""
-        self.assertEqual(feasibility.HW().l1_budget_kb,
-                         bayesian.space.HW().l1_budget_kb)
+        self.assertEqual(
+            feasibility.HW().l1_budget_kb, bayesian.space.HW().l1_budget_kb
+        )
 
     def test_the_envelope_reaches_the_tile_search(self):
         """`hw_for` passed nothing, so the search used dataclass defaults and the
         CLI could not move it.
         """
-        env = dict(harness.CHIP_ENVELOPE,
-                   ub_kb=248, l1_kb=1024, l0c_kb=256,
-                   cube_cores=28, vector_cores=56)
+        env = dict(
+            harness.CHIP_ENVELOPE,
+            ub_kb=248,
+            l1_kb=1024,
+            l0c_kb=256,
+            cube_cores=28,
+            vector_cores=56,
+        )
         hw, _ = bayesian.block.hw_for(str(self.op_file), None, env)
         self.assertEqual(hw.ub_budget_kb, 248)
         self.assertEqual(hw.l1_budget_kb, 1024)
@@ -99,23 +103,30 @@ def _sibling_imports(tree, modules):
     imported = set()
     for n in ast.walk(tree):
         if isinstance(n, ast.ImportFrom) and (n.module is None or n.level):
-            imported |= {(a.asname or a.name) for a in n.names
-                         if (a.asname or a.name) in modules}
+            imported |= {
+                (a.asname or a.name) for a in n.names if (a.asname or a.name) in modules
+            }
     return imported
 
 
 def _bound_names(fn):
     """Every name a function binds: its parameters and its assignment targets."""
     bound = {a.arg for a in fn.args.args + fn.args.kwonlyargs}
-    bound |= {n.id for n in ast.walk(fn)
-              if isinstance(n, ast.Name) and isinstance(n.ctx, ast.Store)}
+    bound |= {
+        n.id
+        for n in ast.walk(fn)
+        if isinstance(n, ast.Name) and isinstance(n.ctx, ast.Store)
+    }
     return bound
 
 
 def _functions(tree):
     """Every function defined in this module, nested ones included."""
-    return [fn for fn in ast.walk(tree)
-            if isinstance(fn, (ast.FunctionDef, ast.AsyncFunctionDef))]
+    return [
+        fn
+        for fn in ast.walk(tree)
+        if isinstance(fn, (ast.FunctionDef, ast.AsyncFunctionDef))
+    ]
 
 
 def _module_reads(fn, clash):
@@ -135,8 +146,9 @@ def _shadowed_in(name, tree, imported):
     for fn in _functions(tree):
         clash = _bound_names(fn) & imported
         for lineno, mod, attr in _module_reads(fn, clash):
-            offenders.append(f"{name}:{lineno} {fn.name}() uses "
-                             f"{mod}.{attr} but binds {mod}")
+            offenders.append(
+                f"{name}:{lineno} {fn.name}() uses {mod}.{attr} but binds {mod}"
+            )
     return offenders
 
 
@@ -151,13 +163,18 @@ def _called_names(fn):
 
 def _self_shadowed_in(name, tree):
     """Every function that calls a module-level function whose name it also binds."""
-    top = {n.name for n in tree.body
-           if isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef))}
+    top = {
+        n.name
+        for n in tree.body
+        if isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef))
+    }
     offenders = []
     for fn in _functions(tree):
         for shadowed in sorted(_bound_names(fn) & top & _called_names(fn)):
-            offenders.append(f"{name}:{fn.lineno} {fn.name}() calls "
-                             f"{shadowed}() but also binds {shadowed}")
+            offenders.append(
+                f"{name}:{fn.lineno} {fn.name}() calls "
+                f"{shadowed}() but also binds {shadowed}"
+            )
     return offenders
 
 

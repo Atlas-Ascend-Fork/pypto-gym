@@ -1,6 +1,6 @@
 ---
 name: pypto-op-verify
-description: Validation runner requirements, detailed_tensor_compare usage, success criteria, required deliverables, and required output structure for the PyPTO Complex Kernel Workflow.
+description: Validation runner requirements, detailed_tensor_compare usage, success criteria, required deliverables, and required output structure for the PyPTO Complex Kernel Workflow. 触发：验证 PyPTO 算子实现正确性、运行精度对比测试、确认交付产物结构时使用。
 ---
 
 # PyPTO Complex Kernel — Validation and Deliverables

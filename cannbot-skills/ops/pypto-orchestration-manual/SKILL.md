@@ -1,6 +1,6 @@
 ---
 name: pypto-orchestration-manual
-description: pypto-op-orchestrator entry point. Bundles the 3 control documents (principles, team roster, mandatory rules) as one skill with progressive-disclosure references. Read this file first, then load the references on demand.
+description: pypto-op-orchestrator entry point. Bundles the 3 control documents (principles, team roster, mandatory rules) as one skill with progressive-disclosure references. Read this file first, then load the references on demand. 触发：PyPTO 算子开发团队编排入口，加载编排原则、团队名册与强制规则时使用。
 ---
 
 # pypto-op-orchestrator — PyPTO Kernel Development
@@ -58,4 +58,3 @@ update, not a direct message. Template:
 skill `pypto-memory-template`'s `../pypto-memory-template/templates/MEMORY.template.md`.
 
 ---
-

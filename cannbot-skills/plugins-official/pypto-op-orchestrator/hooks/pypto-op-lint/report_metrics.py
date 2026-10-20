@@ -1,6 +1,15 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
-# Copyright (c) Huawei Technologies Co., Ltd. 2024-2026. All rights reserved.
+# ----------------------------------------------------------------------------------------------------------
+# Copyright (c) 2026 Huawei Technologies Co., Ltd.
+# This program is free software, you can redistribute it and/or modify it under the terms and conditions of
+# CANN Open Software License Agreement Version 2.0 (the "License").
+# Please refer to the License for details. You may not use this file except in compliance with the License.
+# THIS SOFTWARE IS PROVIDED ON AN "AS IS" BASIS, WITHOUT WARRANTIES OF ANY KIND, EITHER EXPRESS OR IMPLIED,
+# INCLUDING BUT NOT LIMITED TO NON-INFRINGEMENT, MERCHANTABILITY, OR FITNESS FOR A PARTICULAR PURPOSE.
+# See LICENSE in the root of the software repository for the full text of the License.
+# ----------------------------------------------------------------------------------------------------------
+
 """
 Lint 指标报告生成器
 
@@ -50,9 +59,11 @@ _state_override = os.environ.get("PYPTO_OP_LINT_STATE_DIR", "").strip()
 _state_home = os.environ.get("XDG_STATE_HOME", "").strip()
 if not _state_home:
     _state_home = str(Path.home() / ".local" / "state")
-STATE_DIR = Path(_state_override).expanduser().resolve() if _state_override else Path(
-    _state_home
-) / "pypto-gym" / "pypto-op-lint"
+STATE_DIR = (
+    Path(_state_override).expanduser().resolve()
+    if _state_override
+    else Path(_state_home) / "pypto-gym" / "pypto-op-lint"
+)
 EVENTS = STATE_DIR / "lint_events.jsonl"
 OUT_JSON = STATE_DIR / "summary_latest.json"
 OUT_MD = STATE_DIR / "summary_latest.md"
@@ -60,9 +71,11 @@ OUT_MD = STATE_DIR / "summary_latest.md"
 _log = logging.getLogger(__name__)
 
 
-def load_events(path: Path | None = None,
-                since_ts: int | None = None,
-                op_dir_filter: str | None = None) -> list[dict[str, Any]]:
+def load_events(
+    path: Path | None = None,
+    since_ts: int | None = None,
+    op_dir_filter: str | None = None,
+) -> list[dict[str, Any]]:
     target = path or EVENTS
     events: list[dict[str, Any]] = []
     if not target.exists():
@@ -99,7 +112,9 @@ def _build_from_summaries(summaries: list[dict[str, Any]]) -> dict[str, Any]:
     all_failed: set[str] = set()
     s0_fails: set[str] = set()
     s1_fails: set[str] = set()
-    effort_agg: dict[str, dict[str, set[str]]] = defaultdict(lambda: {"fails": set(), "warns": set()})
+    effort_agg: dict[str, dict[str, set[str]]] = defaultdict(
+        lambda: {"fails": set(), "warns": set()}
+    )
     for s in summaries:
         all_failed.update(s.get("s0_fails", []))
         all_failed.update(s.get("s1_fails", []))
@@ -133,9 +148,13 @@ def _build_from_rule_checks(rule_checks: list[dict[str, Any]]) -> dict[str, Any]
     warn_c = sum(1 for e in rule_checks if e.get("status") == "WARN")
     skip_c = sum(1 for e in rule_checks if e.get("status") == "SKIP")
     duration = sum(float(e.get("duration_ms", 0)) for e in rule_checks)
-    failed_rules = sorted({e.get("rule_id") for e in rule_checks if e.get("status") == "FAIL"})
+    failed_rules = sorted(
+        {e.get("rule_id") for e in rule_checks if e.get("status") == "FAIL"}
+    )
 
-    effort_agg: dict[str, dict[str, set[str]]] = defaultdict(lambda: {"fails": set(), "warns": set()})
+    effort_agg: dict[str, dict[str, set[str]]] = defaultdict(
+        lambda: {"fails": set(), "warns": set()}
+    )
     for e in rule_checks:
         eff = e.get("fix_effort") or "unknown"
         if e.get("status") == "FAIL":
@@ -160,22 +179,26 @@ def _build_from_rule_checks(rule_checks: list[dict[str, Any]]) -> dict[str, Any]
     }
 
 
-def _build_invocation_breakdown(summaries: list[dict[str, Any]]) -> list[dict[str, Any]]:
+def _build_invocation_breakdown(
+    summaries: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
     rows = []
     for s in summaries:
-        rows.append({
-            "invocation_id": s.get("invocation_id", ""),
-            "op_dir": s.get("op_dir", ""),
-            "stage": s.get("stage", ""),
-            "mode": s.get("mode", ""),
-            "total": s.get("total", 0),
-            "pass": s.get("pass", 0),
-            "fail": s.get("fail", 0),
-            "warn": s.get("warn", 0),
-            "s0_fails": s.get("s0_fails", []),
-            "s1_fails": s.get("s1_fails", []),
-            "duration_ms": s.get("total_duration_ms", 0),
-        })
+        rows.append(
+            {
+                "invocation_id": s.get("invocation_id", ""),
+                "op_dir": s.get("op_dir", ""),
+                "stage": s.get("stage", ""),
+                "mode": s.get("mode", ""),
+                "total": s.get("total", 0),
+                "pass": s.get("pass", 0),
+                "fail": s.get("fail", 0),
+                "warn": s.get("warn", 0),
+                "s0_fails": s.get("s0_fails", []),
+                "s1_fails": s.get("s1_fails", []),
+                "duration_ms": s.get("total_duration_ms", 0),
+            }
+        )
     return rows
 
 
@@ -184,7 +207,14 @@ def _build_op_breakdown(summaries: list[dict[str, Any]]) -> dict[str, dict[str, 
     for s in summaries:
         op = s.get("op_dir", "unknown")
         if op not in ops:
-            ops[op] = {"invocations": 0, "total": 0, "pass": 0, "fail": 0, "warn": 0, "blocks": 0}
+            ops[op] = {
+                "invocations": 0,
+                "total": 0,
+                "pass": 0,
+                "fail": 0,
+                "warn": 0,
+                "blocks": 0,
+            }
         ops[op]["invocations"] += 1
         ops[op]["total"] += s.get("total", 0)
         ops[op]["pass"] += s.get("pass", 0)
@@ -292,7 +322,12 @@ def _per_op_lines(summary: dict[str, Any]) -> list[str]:
         ]
         for op, data in sorted(per_op.items())
     ]
-    return ["", "## 按算子统计", "", *_md_table(["算子目录", "调用次数", "通过/失败/警告"], rows)]
+    return [
+        "",
+        "## 按算子统计",
+        "",
+        *_md_table(["算子目录", "调用次数", "通过/失败/警告"], rows),
+    ]
 
 
 def _markdown_lines(summary: dict[str, Any]) -> list[str]:
@@ -313,9 +348,9 @@ def _markdown_lines(summary: dict[str, Any]) -> list[str]:
     return lines
 
 
-def write_outputs(summary: dict[str, Any],
-                  out_json: Path | None = None,
-                  out_md: Path | None = None) -> None:
+def write_outputs(
+    summary: dict[str, Any], out_json: Path | None = None, out_md: Path | None = None
+) -> None:
     json_path = out_json or OUT_JSON
     md_path = out_md or OUT_MD
 
@@ -329,19 +364,33 @@ def write_outputs(summary: dict[str, Any],
 
 def main() -> None:
     parser = argparse.ArgumentParser(description="Lint 指标报告生成器")
-    parser.add_argument("--input", type=Path, default=None,
-                        help="lint_events.jsonl 路径（默认：logs/lint_events.jsonl）")
-    parser.add_argument("--output-json", type=Path, default=None,
-                        help="输出 JSON 路径（默认：logs/summary_latest.json）")
-    parser.add_argument("--output-md", type=Path, default=None,
-                        help="输出 Markdown 路径（默认：logs/summary_latest.md）")
-    parser.add_argument("--op-dir", type=str, default=None,
-                        help="按算子目录过滤事件")
-    parser.add_argument("--since", type=int, default=None,
-                        help="仅包含 ts >= 此 Unix 时间戳的事件")
+    parser.add_argument(
+        "--input",
+        type=Path,
+        default=None,
+        help="lint_events.jsonl 路径（默认：logs/lint_events.jsonl）",
+    )
+    parser.add_argument(
+        "--output-json",
+        type=Path,
+        default=None,
+        help="输出 JSON 路径（默认：logs/summary_latest.json）",
+    )
+    parser.add_argument(
+        "--output-md",
+        type=Path,
+        default=None,
+        help="输出 Markdown 路径（默认：logs/summary_latest.md）",
+    )
+    parser.add_argument("--op-dir", type=str, default=None, help="按算子目录过滤事件")
+    parser.add_argument(
+        "--since", type=int, default=None, help="仅包含 ts >= 此 Unix 时间戳的事件"
+    )
     args = parser.parse_args()
 
-    events = load_events(path=args.input, since_ts=args.since, op_dir_filter=args.op_dir)
+    events = load_events(
+        path=args.input, since_ts=args.since, op_dir_filter=args.op_dir
+    )
     summary = build_summary(events)
     write_outputs(summary, out_json=args.output_json, out_md=args.output_md)
     _log.info(json.dumps(summary, ensure_ascii=False, indent=2))

@@ -27,6 +27,7 @@ Both are scored with a large penalty so TPE's surrogate learns to avoid that reg
 No LLM runs inside this loop: suggest -> static check -> deterministic apply -> E(x). Fully
 reproducible for a given seed.
 """
+
 import json
 import re
 
@@ -181,11 +182,11 @@ class SearchOptions:
     and says nothing about the rest.
     """
 
-    warm_start: Any = None            # configs measured before TPE draws
+    warm_start: Any = None  # configs measured before TPE draws
     n_trials: int = 40
     seed: int = 0
-    groups: Any = None                # site ids tied to one knob
-    on_trial: Any = None              # callback(record) after each trial
+    groups: Any = None  # site ids tied to one knob
+    on_trial: Any = None  # callback(record) after each trial
     stagnation_limit: int = 10
     domain: Any = None
     n_startup_trials: int = 3
@@ -193,9 +194,9 @@ class SearchOptions:
     fault_limit: int = 3
     failure_limit: int = 6
     memory: Any = None
-    anchor: Any = None                # the config the kernel is running
+    anchor: Any = None  # the config the kernel is running
     startup_min_feasible: int = 5
-    refusals: Any = None              # compiler refusals already earned
+    refusals: Any = None  # compiler refusals already earned
     tie: Any = None
 
 
@@ -229,15 +230,31 @@ def _known_value(ctx, cfg, key, trial):
     """
     if key in ctx["state"]["seen"]:
         v = ctx["state"]["seen"][key]
-        _emit(ctx, {"config": cfg, "status": "duplicate_config", "latency": None,
-                    "reason": f"already measured in this block ({v})"},
-              trial, "duplicate_config")
+        _emit(
+            ctx,
+            {
+                "config": cfg,
+                "status": "duplicate_config",
+                "latency": None,
+                "reason": f"already measured in this block ({v})",
+            },
+            trial,
+            "duplicate_config",
+        )
         return v
     if key in ctx["refused"]:
-        _emit(ctx, {"config": cfg, "status": "known_compile_failure", "latency": None,
-                    "reason": f"the compiler refused this configuration before "
-                              f"({ctx['refused'][key]}); carried across structures"},
-              trial, "known_compile_failure")
+        _emit(
+            ctx,
+            {
+                "config": cfg,
+                "status": "known_compile_failure",
+                "latency": None,
+                "reason": f"the compiler refused this configuration before "
+                f"({ctx['refused'][key]}); carried across structures",
+            },
+            trial,
+            "known_compile_failure",
+        )
         return PENALTY
     return None
 
@@ -252,10 +269,18 @@ def _static_verdict(ctx, cfg, key, trial):
     opts, hw = ctx["opts"], ctx["hw"]
     nb = _tile_bytes(cfg, opts.dtype_bytes)
     if nb and nb >= ctx["state"]["ceiling"]:
-        _emit(ctx, {"config": cfg, "status": "over_learned_ceiling", "latency": None,
-                    "reason": f"{nb}B >= {ctx['state']['ceiling']}B, "
-                              f"which the device refused"},
-              trial, "over_learned_ceiling")
+        _emit(
+            ctx,
+            {
+                "config": cfg,
+                "status": "over_learned_ceiling",
+                "latency": None,
+                "reason": f"{nb}B >= {ctx['state']['ceiling']}B, "
+                f"which the device refused",
+            },
+            trial,
+            "over_learned_ceiling",
+        )
         return PENALTY
     ok, reason = space.static_feasible(cfg, hw)
     if ok and opts.domain:
@@ -264,9 +289,18 @@ def _static_verdict(ctx, cfg, key, trial):
         # is rejected here, for free, instead of on the device.
         ok, reason = domain_mod.verify(opts.domain, cfg, hw.dtype_bytes)
     if not ok:
-        _emit(ctx, {"config": cfg, "status": "infeasible_static", "reason": reason,
-                    "latency": None},
-              trial, "infeasible_static", reason)
+        _emit(
+            ctx,
+            {
+                "config": cfg,
+                "status": "infeasible_static",
+                "reason": reason,
+                "latency": None,
+            },
+            trial,
+            "infeasible_static",
+            reason,
+        )
         return PENALTY
     return None
 
@@ -281,11 +315,15 @@ def _record_fault(ctx, cfg, exc, trial):
     with no way afterwards to tell whether the device had been held or the
     command mistyped.
     """
-    rec = {"config": cfg, "status": "env_fault", "reason": exc.marker,
-           "detail": getattr(exc, "detail", ""),
-           "kind": getattr(exc, "kind", "device"),
-           "retries": getattr(exc, "retries", 0),
-           "latency": None}
+    rec = {
+        "config": cfg,
+        "status": "env_fault",
+        "reason": exc.marker,
+        "detail": getattr(exc, "detail", ""),
+        "kind": getattr(exc, "kind", "device"),
+        "retries": getattr(exc, "retries", 0),
+        "latency": None,
+    }
     _emit(ctx, rec, trial, "env_fault")
     ctx["state"]["faults"] += 1
     ctx["state"]["fault_kind"] = rec["kind"]
@@ -332,10 +370,17 @@ def _record_refusal(ctx, cfg, key, outcome, trial):
         sig = error_signature(detail)
         if sig:
             ctx["new_refusals"].append({"params": json.loads(key), "sig": sig})
-    _emit(ctx, {"config": cfg,
-                "status": "incorrect_capacity" if kind == "capacity" else "incorrect",
-                "reason": detail or "s=0", "latency": None},
-          trial, "incorrect")
+    _emit(
+        ctx,
+        {
+            "config": cfg,
+            "status": "incorrect_capacity" if kind == "capacity" else "incorrect",
+            "reason": detail or "s=0",
+            "latency": None,
+        },
+        trial,
+        "incorrect",
+    )
     # A refusal is a measurement too: re-running it costs the same evaluation and
     # returns the same PENALTY.
     ctx["state"]["seen"][key] = PENALTY
@@ -363,9 +408,13 @@ def _record_ok(ctx, cfg, key, p, trial):
 def _objective(ctx, trial):
     """One trial: draw a configuration, reject it for free if we can, else measure it."""
     opts, sites = ctx["opts"], ctx["sites"]
-    cfg = space.suggest(trial, sites,
-                        space.DrawOptions(groups=opts.groups, anchor=ctx["anchor"],
-                                          domain=opts.domain, tie=opts.tie))
+    cfg = space.suggest(
+        trial,
+        sites,
+        space.DrawOptions(
+            groups=opts.groups, anchor=ctx["anchor"], domain=opts.domain, tie=opts.tie
+        ),
+    )
     key = json.dumps(space.flatten(cfg, sites, opts.groups, opts.tie), sort_keys=True)
     for gate in (_known_value, _static_verdict):
         known = gate(ctx, cfg, key, trial)
@@ -375,7 +424,7 @@ def _objective(ctx, trial):
         # An objective may return (s, p) or (s, p, kind). `kind` is "capacity"
         # only when the failure is monotone evidence about size.
         got = ctx["objective"](cfg)
-        s, p, kind = (got if len(got) == 3 else (got[0], got[1], None))
+        s, p, kind = got if len(got) == 3 else (got[0], got[1], None)
         detail = getattr(ctx["objective"], "last_detail", "")
     except evaluator.EnvironmentFault as e:
         _record_fault(ctx, cfg, e, trial)
@@ -408,8 +457,12 @@ def _stopper(ctx, study, trial):
     if state["faults"] >= opts.fault_limit:
         # The device, not the search, is the problem. Stop rather than spend the
         # rest of the block proving it.
-        _abort(ctx, study, f"{state['faults']} consecutive environment faults "
-                           f"({state['fault_kind']})", state["fault_kind"])
+        _abort(
+            ctx,
+            study,
+            f"{state['faults']} consecutive environment faults ({state['fault_kind']})",
+            state["fault_kind"],
+        )
         return
     if opts.failure_limit and state["failures"] >= opts.failure_limit:
         # The device ran and refused, over and over. Removing failures from the
@@ -419,8 +472,11 @@ def _stopper(ctx, study, trial):
         # measured exactly one of them. This is the brake that should have come
         # with it, counted separately so a block that is searching badly is
         # distinguishable from one that cannot search at all.
-        _abort(ctx, study, f"{state['failures']} consecutive candidates the "
-                           f"device would not run")
+        _abort(
+            ctx,
+            study,
+            f"{state['failures']} consecutive candidates the device would not run",
+        )
         return
     v = trial.value
     if v is None or v >= PENALTY:
@@ -470,8 +526,10 @@ def _make_study(opts):
     """
     return optuna.create_study(
         direction="minimize",
-        sampler=optuna.samplers.TPESampler(seed=opts.seed,
-                                           n_startup_trials=opts.n_startup_trials))
+        sampler=optuna.samplers.TPESampler(
+            seed=opts.seed, n_startup_trials=opts.n_startup_trials
+        ),
+    )
 
 
 def _replay(study, sites, opts, anchor, memory):
@@ -481,12 +539,17 @@ def _replay(study, sites, opts, anchor, memory):
         if t.get("value") is None:
             continue
         try:
-            study.add_trial(optuna.trial.create_trial(
-                params=t["params"],
-                distributions={k: _dist(k, sites, opts.groups, anchor) for k in t["params"]},
-                value=float(t["value"])))
+            study.add_trial(
+                optuna.trial.create_trial(
+                    params=t["params"],
+                    distributions={
+                        k: _dist(k, sites, opts.groups, anchor) for k in t["params"]
+                    },
+                    value=float(t["value"]),
+                )
+            )
             replayed += 1
-        except Exception:            # a param that no longer exists on this program
+        except Exception:  # a param that no longer exists on this program
             continue
     return replayed
 
@@ -497,8 +560,10 @@ def _warm_start(study, sites, opts, memory):
     Skipped for anything already replayed -- re-measuring it would spend an
     evaluation to learn what the study was just handed.
     """
-    seen = {json.dumps(t.get("params"), sort_keys=True) for t in memory.get("trials", [])}
-    for cfg in (opts.warm_start or []):
+    seen = set()
+    for t in memory.get("trials", []):
+        seen.add(json.dumps(t.get("params"), sort_keys=True))
+    for cfg in opts.warm_start or []:
         flat = space.flatten(cfg, sites, opts.groups, opts.tie)
         if json.dumps(flat, sort_keys=True) in seen:
             continue
@@ -516,14 +581,21 @@ def _initial_state(memory, anchor, opts):
     want different limits, and neither is a stagnation: stagnation counts
     MEASUREMENTS that failed to improve, and none of these measured anything.
     """
-    return {"ceiling": float(memory.get("ceiling") or float("inf")),
-            "faults": 0, "failures": 0, "fault_kind": None,
-            "floor": _tile_bytes(anchor, opts.dtype_bytes) if anchor else 0,
-            # flattened params -> what the device returned. Seeded from the
-            # predecessor block's observations so a resumed block does not pay
-            # again for what its predecessor already measured.
-            "seen": {json.dumps(t["params"], sort_keys=True): float(t["value"])
-                     for t in memory.get("trials", []) if t.get("value") is not None}}
+    return {
+        "ceiling": float(memory.get("ceiling") or float("inf")),
+        "faults": 0,
+        "failures": 0,
+        "fault_kind": None,
+        "floor": _tile_bytes(anchor, opts.dtype_bytes) if anchor else 0,
+        # flattened params -> what the device returned. Seeded from the
+        # predecessor block's observations so a resumed block does not pay
+        # again for what its predecessor already measured.
+        "seen": {
+            json.dumps(t["params"], sort_keys=True): float(t["value"])
+            for t in memory.get("trials", [])
+            if t.get("value") is not None
+        },
+    }
 
 
 def _carried_refusals(opts):
@@ -548,8 +620,11 @@ def _carried_refusals(opts):
     call's own arguments is a different kind of fact: it is about the tile, and it
     survives the restructure.
     """
-    return {_refusal_key(r["params"]): r.get("sig", "")
-            for r in (opts.refusals or []) if r.get("params")}
+    return {
+        _refusal_key(r["params"]): r.get("sig", "")
+        for r in (opts.refusals or [])
+        if r.get("params")
+    }
 
 
 def _result(study, ctx, memory, replayed):
@@ -560,8 +635,11 @@ def _result(study, ctx, memory, replayed):
     best = min(feasible, key=lambda t: t.value) if feasible else None
     ceiling = None if state["ceiling"] == float("inf") else int(state["ceiling"])
     return {
-        "best_config": (space.unflatten(best.params, ctx["sites"], opts.groups, opts.tie)
-                        if best else None),
+        "best_config": (
+            space.unflatten(best.params, ctx["sites"], opts.groups, opts.tie)
+            if best
+            else None
+        ),
         "best_latency": best.value if best else None,
         # Trials the study RAN, not trials it holds. `enqueue_trial` creates a
         # WAITING trial immediately, so `len(study.trials)` counts points that
@@ -570,8 +648,9 @@ def _result(study, ctx, memory, replayed):
         # would report 5. The number is logged as the block's cost and read as
         # "how much did this action explore", so it has to be what happened.
         # (Charging was never affected: that path counts `device_trials`.)
-        "n_trials": sum(1 for t in study.trials
-                        if t.state != optuna.trial.TrialState.WAITING),
+        "n_trials": sum(
+            1 for t in study.trials if t.state != optuna.trial.TrialState.WAITING
+        ),
         "n_feasible": len(feasible),
         "stopped_early": stag["stopped"],
         "aborted": stag["aborted"],
@@ -586,16 +665,18 @@ def _result(study, ctx, memory, replayed):
         # often it
         # appears, so the duplicates quietly biased the surrogate toward
         # whatever the interrupted block happened to measure first.
-        "memory": {"trials": _dedup([{"params": t.params, "value": t.value}
-                                     for t in feasible],
-                                    memory.get("trials", [])),
-                   "ceiling": ceiling},
+        "memory": {
+            "trials": _dedup(
+                [{"params": t.params, "value": t.value} for t in feasible],
+                memory.get("trials", []),
+            ),
+            "ceiling": ceiling,
+        },
         # Structure-INDEPENDENT, so it is returned separately from `memory` and
         # the caller stores it at run level rather than under the structure key.
         "refusals": _dedup_refusals((opts.refusals or []) + ctx["new_refusals"]),
         "env_faults": sum(1 for h in history if h.get("status") == "env_fault"),
-        "failures": sum(1 for h in history
-                        if h.get("status") in _FAILURE_STATUSES),
+        "failures": sum(1 for h in history if h.get("status") in _FAILURE_STATUSES),
         "history": history,
     }
 
@@ -642,11 +723,21 @@ def run_bo(objective, sites, hw, opts=None):
     anchor = opts.anchor or (opts.warm_start[0] if opts.warm_start else None)
     replayed = _replay(study, sites, opts, anchor, memory)
     _warm_start(study, sites, opts, memory)
-    ctx = {"objective": objective, "sites": sites, "hw": hw, "opts": opts,
-           "anchor": anchor, "history": [], "new_refusals": [],
-           "state": _initial_state(memory, anchor, opts),
-           "refused": _carried_refusals(opts),
-           "stag": {"best": float("inf"), "since": 0, "stopped": False, "aborted": None}}
-    study.optimize(partial(_objective, ctx), n_trials=opts.n_trials,
-                   callbacks=[partial(_stopper, ctx)] if opts.stagnation_limit else None)
+    ctx = {
+        "objective": objective,
+        "sites": sites,
+        "hw": hw,
+        "opts": opts,
+        "anchor": anchor,
+        "history": [],
+        "new_refusals": [],
+        "state": _initial_state(memory, anchor, opts),
+        "refused": _carried_refusals(opts),
+        "stag": {"best": float("inf"), "since": 0, "stopped": False, "aborted": None},
+    }
+    study.optimize(
+        partial(_objective, ctx),
+        n_trials=opts.n_trials,
+        callbacks=[partial(_stopper, ctx)] if opts.stagnation_limit else None,
+    )
     return _result(study, ctx, memory, replayed)

@@ -1,5 +1,13 @@
 # -*- coding: utf-8 -*-
-# Copyright (c) Huawei Technologies Co., Ltd. 2024-2025. All rights reserved.
+# ----------------------------------------------------------------------------------------------------------
+# Copyright (c) 2026 Huawei Technologies Co., Ltd.
+# This program is free software, you can redistribute it and/or modify it under the terms and conditions of
+# CANN Open Software License Agreement Version 2.0 (the "License").
+# Please refer to the License for details. You may not use this file except in compliance with the License.
+# THIS SOFTWARE IS PROVIDED ON AN "AS IS" BASIS, WITHOUT WARRANTIES OF ANY KIND, EITHER EXPRESS OR IMPLIED,
+# INCLUDING BUT NOT LIMITED TO NON-INFRINGEMENT, MERCHANTABILITY, OR FITNESS FOR A PARTICULAR PURPOSE.
+# See LICENSE in the root of the software repository for the full text of the License.
+# ----------------------------------------------------------------------------------------------------------
 
 from __future__ import annotations
 
@@ -29,7 +37,9 @@ ParsedImpl = tuple[str, ast.Module, set[str]]
 JitImpl = tuple[str, ast.Module, set[str], list[ast.FunctionDef]]
 
 
-def _iter_parsed_impls(ctx: CheckContext, impl_files: list[str]) -> Iterator[ParsedImpl]:
+def _iter_parsed_impls(
+    ctx: CheckContext, impl_files: list[str]
+) -> Iterator[ParsedImpl]:
     for impl_file in impl_files:
         tree = ctx.parse_file(impl_file)
         if tree is not None:
@@ -184,7 +194,9 @@ def check_ol02(ctx: CheckContext) -> Finding:
                 return failure
     if not saw_jit:
         return ctx.make_finding("OL02", "SKIP", "no jit functions")
-    return ctx.make_finding("OL02", "PASS", "all impl files use correct output write-back")
+    return ctx.make_finding(
+        "OL02", "PASS", "all impl files use correct output write-back"
+    )
 
 
 def _ol02_function_failure(
@@ -196,7 +208,11 @@ def _ol02_function_failure(
     for node in ast.walk(func):
         if isinstance(node, ast.Assign):
             target = next(
-                (item for item in node.targets if isinstance(item, ast.Name) and item.id in param_names),
+                (
+                    item
+                    for item in node.targets
+                    if isinstance(item, ast.Name) and item.id in param_names
+                ),
                 None,
             )
             if target is not None:
@@ -235,7 +251,9 @@ def check_ol03(ctx: CheckContext) -> Finding:
     for impl_file, _, _, jit_funcs in _iter_jit_impls(ctx, impl_files):
         saw_jit = True
         for func in jit_funcs:
-            return_node = next((node for node in ast.walk(func) if isinstance(node, ast.Return)), None)
+            return_node = next(
+                (node for node in ast.walk(func) if isinstance(node, ast.Return)), None
+            )
             if return_node is not None:
                 return ctx.make_finding(
                     "OL03",
@@ -246,7 +264,9 @@ def check_ol03(ctx: CheckContext) -> Finding:
                 )
     if not saw_jit:
         return ctx.make_finding("OL03", "SKIP", "no jit functions")
-    return ctx.make_finding("OL03", "PASS", "no jit function in any impl file has a return statement")
+    return ctx.make_finding(
+        "OL03", "PASS", "no jit function in any impl file has a return statement"
+    )
 
 
 @register("OL04")
@@ -318,7 +338,9 @@ def check_ol05(ctx: CheckContext) -> Finding:
     if not saw_jit:
         return ctx.make_finding("OL05", "SKIP", "no jit functions")
     return ctx.make_finding(
-        "OL05", "PASS", "jit function tensor parameters all have pypto.Tensor type annotations"
+        "OL05",
+        "PASS",
+        "jit function tensor parameters all have pypto.Tensor type annotations",
     )
 
 
@@ -433,7 +455,9 @@ def check_ol07(ctx: CheckContext) -> Finding:
     if not parsed_any:
         return ctx.make_finding("OL07", "SKIP", "no impl files to parse")
     return ctx.make_finding(
-        "OL07", "PASS", f"all impl files use the canonical `import pypto` ({len(impl_files)} in total)"
+        "OL07",
+        "PASS",
+        f"all impl files use the canonical `import pypto` ({len(impl_files)} in total)",
     )
 
 
@@ -453,9 +477,8 @@ def _pypto_import_node_status(
         if alias.name == "pypto" and alias.asname is None:
             found_canonical = True
         if (
-            (alias.name == "pypto" and alias.asname is not None)
-            or alias.name.startswith("pypto.")
-        ):
+            alias.name == "pypto" and alias.asname is not None
+        ) or alias.name.startswith("pypto."):
             bad_alias = alias
             break
     if bad_alias is None:
@@ -490,7 +513,8 @@ def check_ol08(ctx: CheckContext) -> Finding:
     for impl_file, tree, _ in _iter_parsed_impls(ctx, impl_files):
         wrapper = next(
             (
-                node for node in ast.iter_child_nodes(tree)
+                node
+                for node in ast.iter_child_nodes(tree)
                 if isinstance(node, ast.FunctionDef) and node.name.endswith("_wrapper")
             ),
             None,
@@ -553,11 +577,15 @@ def check_ol23(ctx: CheckContext) -> Finding:
             "OL23",
             "WARN",
             "The following impl files have no loop-related structures detected; if the op needs tiling or iteration, "
-            "please confirm the design explicitly states no loop is needed: " + ", ".join(files_without_loop),
+            "please confirm the design explicitly states no loop is needed: "
+            + ", ".join(files_without_loop),
             file=files_without_loop[0],
         )
     return ctx.make_finding(
-        "OL23", "PASS", "loop-related structures detected in all impl files", file=last_pass_file
+        "OL23",
+        "PASS",
+        "loop-related structures detected in all impl files",
+        file=last_pass_file,
     )
 
 
@@ -703,7 +731,9 @@ def check_ol28(ctx: CheckContext) -> Finding:
     if not saw_jit:
         return ctx.make_finding("OL28", "SKIP", "no jit functions")
     return ctx.make_finding(
-        "OL28", "PASS", "FP32-only API usage and dtype annotations are consistent in all impl files"
+        "OL28",
+        "PASS",
+        "FP32-only API usage and dtype annotations are consistent in all impl files",
     )
 
 
@@ -714,9 +744,9 @@ def _ol28_function_finding(
     aliases: set[str],
 ) -> Finding | None:
     used_apis = {
-        node.func.attr
-        for node in ast.walk(func)
-        if _is_fp32_only_call(node, aliases)
+        call_node.func.attr
+        for call_node in ast.walk(func)
+        if _is_fp32_only_call(call_node, aliases)
     }
     if not used_apis:
         return None
@@ -724,7 +754,10 @@ def _ol28_function_finding(
         annotation = arg.annotation
         if not isinstance(annotation, ast.Call):
             continue
-        if not _is_pypto_tensor_annotation(annotation, aliases) or len(annotation.args) < 2:
+        if (
+            not _is_pypto_tensor_annotation(annotation, aliases)
+            or len(annotation.args) < 2
+        ):
             continue
         if "DT_FP32" in ast.dump(annotation.args[1]):
             continue
@@ -760,7 +793,9 @@ def check_ol29(ctx: CheckContext) -> Finding:
             continue
         dynamic_aliases = _extract_symbolic_dynamic_aliases(tree, aliases)
         tensor_count, has_dynamic = _dynamic_tensor_annotation_status(
-            jit_funcs, aliases, dynamic_aliases,
+            jit_funcs,
+            aliases,
+            dynamic_aliases,
         )
         if tensor_count == 0:
             continue
@@ -780,7 +815,10 @@ def check_ol29(ctx: CheckContext) -> Finding:
             file=files_without_dynamic[0],
         )
     return ctx.make_finding(
-        "OL29", "PASS", "Tensor annotations include DYNAMIC dimension declarations", file=last_file_seen
+        "OL29",
+        "PASS",
+        "Tensor annotations include DYNAMIC dimension declarations",
+        file=last_file_seen,
     )
 
 
@@ -854,9 +892,12 @@ def _calls_pypto_helper(node: ast.AST) -> int:
     return count
 
 
-def _function_defs(tree: ast.Module) -> Iterator[ast.FunctionDef | ast.AsyncFunctionDef]:
+def _function_defs(
+    tree: ast.Module,
+) -> Iterator[ast.FunctionDef | ast.AsyncFunctionDef]:
     return (
-        node for node in ast.walk(tree)
+        node
+        for node in ast.walk(tree)
         if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
     )
 
@@ -910,7 +951,7 @@ def check_ol45(ctx: CheckContext) -> Finding:
     return ctx.make_finding(
         "OL45",
         "PASS",
-        "Layer K wrapper functions do not call the kernel via Python loop tiling"
+        "Layer K wrapper functions do not call the kernel via Python loop tiling",
     )
 
 
@@ -951,9 +992,7 @@ def check_ol46(ctx: CheckContext) -> Finding:
                     line=line if line > 0 else None,
                 )
     return ctx.make_finding(
-        "OL46",
-        "PASS",
-        "no redundant pypto.loop(1) wrapping detected"
+        "OL46", "PASS", "no redundant pypto.loop(1) wrapping detected"
     )
 
 
@@ -1002,7 +1041,7 @@ def check_ol47(ctx: CheckContext) -> Finding:
     return ctx.make_finding(
         "OL47",
         "PASS",
-        "tile-shape scope configuration appears to match the kernel structure"
+        "tile-shape scope configuration appears to match the kernel structure",
     )
 
 
@@ -1011,7 +1050,8 @@ def _top_level_tile_count(
     aliases: set[str],
 ) -> int:
     values = [
-        node.value for node in ast.iter_child_nodes(func)
+        node.value
+        for node in ast.iter_child_nodes(func)
         if isinstance(node, (ast.Expr, ast.Assign))
     ]
     return sum(_is_tile_call(value, aliases) for value in values)
@@ -1057,8 +1097,11 @@ def _collect_func_local_assigns(func: ast.FunctionDef, before_lineno: int) -> di
     按源代码行号顺序覆盖，后赋值的胜出。函数参数本身不会进入此 scope。
     """
     relevant = sorted(
-        [n for n in ast.walk(func)
-         if isinstance(n, ast.Assign) and getattr(n, "lineno", 0) < before_lineno],
+        [
+            n
+            for n in ast.walk(func)
+            if isinstance(n, ast.Assign) and getattr(n, "lineno", 0) < before_lineno
+        ],
         key=lambda n: n.lineno,
     )
     scope: dict = {}
@@ -1110,7 +1153,11 @@ def _get_positional_or_kw(call_node: ast.Call, pos_index: int, kw_name: str):
 
 def _int_literal_value(node) -> int | None:
     """正/任意 int 字面量的值；非 int 字面量 (含 bool) 返回 None。"""
-    if isinstance(node, ast.Constant) and isinstance(node.value, int) and not isinstance(node.value, bool):
+    if (
+        isinstance(node, ast.Constant)
+        and isinstance(node.value, int)
+        and not isinstance(node.value, bool)
+    ):
         return node.value
     return None
 
@@ -1204,7 +1251,9 @@ def _tile_violation_message(
             "· set_cube_tile_shapes tile list structure / divisibility violations "
             "(see docs/zh/api/config/pypto-set_cube_tile_shapes.md): "
         )
-        lines.extend(f"  - at line {line}: {message}" for message, line in cube_violations)
+        lines.extend(
+            f"  - at line {line}: {message}" for message, line in cube_violations
+        )
     lines.append(
         "dynamic values such as kernel input parameters, tensor.shape[i], "
         "SymbolicScalar, or runtime computation must not be used as "
@@ -1234,7 +1283,9 @@ def check_ol48(ctx: CheckContext) -> Finding:
         cube_struct: list[CubeViolation] = []
         for func in jit_funcs:
             func_violations, func_cube_struct = _tile_call_issues(
-                func, aliases, module_scope,
+                func,
+                aliases,
+                module_scope,
             )
             violations.extend(func_violations)
             cube_struct.extend(func_cube_struct)
@@ -1341,9 +1392,7 @@ def check_ol49(ctx: CheckContext) -> Finding:
     if not saw_jit:
         return ctx.make_finding("OL49", "SKIP", "no jit functions")
     return ctx.make_finding(
-        "OL49",
-        "PASS",
-        "all unroll_list are placed on the innermost pypto.loop"
+        "OL49", "PASS", "all unroll_list are placed on the innermost pypto.loop"
     )
 
 
@@ -1414,9 +1463,8 @@ def check_ol56(ctx: CheckContext) -> Finding:
     为 [4, 5, 6]，不含 7。
     """
     # ── DESIGN.md（design 着火点）─────────────────────────────────────────
-    design_scope_ok = (
-        ctx.file_scope is None
-        or _basename_match_ol56(ctx.file_scope, "DESIGN.md")
+    design_scope_ok = ctx.file_scope is None or _basename_match_ol56(
+        ctx.file_scope, "DESIGN.md"
     )
     if ctx.file_exists("DESIGN.md") and design_scope_ok:
         if _scan_design_md_for_multivalue_unroll(ctx, "DESIGN.md"):
@@ -1458,9 +1506,7 @@ def check_ol56(ctx: CheckContext) -> Finding:
     if not ctx.file_exists("DESIGN.md") and not saw_jit:
         return ctx.make_finding("OL56", "SKIP", "no DESIGN.md / jit functions to check")
     return ctx.make_finding(
-        "OL56",
-        "PASS",
-        "all unroll_list are single values (constraint before Stage 6)"
+        "OL56", "PASS", "all unroll_list are single values (constraint before Stage 6)"
     )
 
 
@@ -1569,7 +1615,7 @@ def check_ol52(ctx: CheckContext) -> Finding:
     return ctx.make_finding(
         "OL52",
         "PASS",
-        "shape/offsets/valid_shape of pypto.view all have matching ranks (or are non-literal)"
+        "shape/offsets/valid_shape of pypto.view all have matching ranks (or are non-literal)",
     )
 
 
@@ -1658,7 +1704,9 @@ def _forbidden_loop_kind(node: ast.AST, aliases: set[str]) -> str | None:
     if isinstance(node, ast.While):
         return "while"
     if isinstance(node, (ast.For, ast.AsyncFor)):
-        if not _is_pypto_loop_iter(node.iter, aliases) and not _is_range_iter(node.iter):
+        if not _is_pypto_loop_iter(node.iter, aliases) and not _is_range_iter(
+            node.iter
+        ):
             return "for"
     comprehensions = (ast.ListComp, ast.SetComp, ast.DictComp, ast.GeneratorExp)
     if isinstance(node, comprehensions) and _contains_pypto_call(node, aliases):
@@ -1727,7 +1775,9 @@ def check_ol57(ctx: CheckContext) -> Finding:
     if not saw_jit:
         return ctx.make_finding("OL57", "SKIP", "no jit functions")
     return ctx.make_finding(
-        "OL57", "PASS", "no non-pypto.loop/loop_unroll/range Python loops found in JIT graph code"
+        "OL57",
+        "PASS",
+        "no non-pypto.loop/loop_unroll/range Python loops found in JIT graph code",
     )
 
 
@@ -1883,7 +1933,10 @@ def _jit_arg_violation(
             if not isinstance(arg, ast.Name):
                 continue
             origin, evidence = _resolve_to_alloc_origin(
-                arg.id, local_assigns, params, aliases,
+                arg.id,
+                local_assigns,
+                params,
+                aliases,
             )
             if origin == "pypto_creation":
                 return call, callee, arg, origin, evidence
@@ -1989,7 +2042,8 @@ def check_ol58(ctx: CheckContext) -> Finding:
             saw_wrapper = True
             bad_call = next(
                 (
-                    call for node in ast.walk(top)
+                    call
+                    for node in ast.walk(top)
                     if (call := _is_pypto_creation_call(node, aliases)) is not None
                 ),
                 None,
@@ -2006,5 +2060,5 @@ def check_ol58(ctx: CheckContext) -> Finding:
     return ctx.make_finding(
         "OL58",
         "PASS",
-        "Layer K wrapper output buffer is pre-allocated with torch.*; no pypto.zeros/empty/ones/full misuse found"
+        "Layer K wrapper output buffer is pre-allocated with torch.*; no pypto.zeros/empty/ones/full misuse found",
     )

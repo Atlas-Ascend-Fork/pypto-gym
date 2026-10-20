@@ -35,6 +35,7 @@ inserting the knob at real values — every candidate still gated by E(x), so an
 simply dropped. Absent CUBE/VEC tiles are not materialized: there is no deterministic place to insert
 a tile the generator never wrote (that is a structural decision, left to PANKO).
 """
+
 import ast
 import re
 from dataclasses import dataclass, field
@@ -50,17 +51,24 @@ from . import const, space
 # `trip` is the loop's iteration count when `pypto.loop(<int literal>, ...)`
 # writes one, else None. master's rule for unroll is "the largest value must not
 # exceed the trip count", and this is the only place that number exists.
-Site = namedtuple("Site", "id kind ordinal func_text start end loop_depth loop_span trip",
-                  defaults=(0, None, None))
+Site = namedtuple(
+    "Site",
+    "id kind ordinal func_text start end loop_depth loop_span trip",
+    defaults=(0, None, None),
+)
 
 _TILE_FUNCS = ("set_cube_tile_shapes", "set_vec_tile_shapes")
 _TUNABLE = ("cube", "vec", "global", "unroll", "pass", "const")
-MAX_VEC_ARITY = 4                                 # set_vec_tile_shapes(d0[, d1[, d2[, d3]]])
+MAX_VEC_ARITY = 4  # set_vec_tile_shapes(d0[, d1[, d2[, d3]]])
 # How a jit decorator can be spelled at the call site.
 _JIT_NAMES = ("jit", "frontend.jit", "pypto.frontend.jit")
-_RUNTIME_KNOBS = tuple(space.GLOBAL_DOMAINS)   # runtime_options keys BO tunes (single source: space)
-_PASS_KNOBS = tuple(space.PASS_DOMAINS)        # pass_options keys BO tunes (compiler merge passes)
-UNSET = "__unset__"                               # absent-knob sentinel: "do not write this knob"
+_RUNTIME_KNOBS = tuple(
+    space.GLOBAL_DOMAINS
+)  # runtime_options keys BO tunes (single source: space)
+_PASS_KNOBS = tuple(
+    space.PASS_DOMAINS
+)  # pass_options keys BO tunes (compiler merge passes)
+UNSET = "__unset__"  # absent-knob sentinel: "do not write this knob"
 
 
 def _func_name(func):
@@ -90,8 +98,9 @@ def _signed_int(n):
         return n.value
     if not (isinstance(n, ast.UnaryOp) and isinstance(n.op, (ast.USub, ast.UAdd))):
         return None
-    signed_literal = (isinstance(n.operand, ast.Constant)
-                      and isinstance(n.operand.value, int))
+    signed_literal = isinstance(n.operand, ast.Constant) and isinstance(
+        n.operand.value, int
+    )
     if not signed_literal:
         return None
     return -n.operand.value if isinstance(n.op, ast.USub) else n.operand.value
@@ -99,7 +108,9 @@ def _signed_int(n):
 
 def _int_list(n):
     """[<int>, <int>, ...] — a tile-dim list of integer literals."""
-    return isinstance(n, ast.List) and bool(n.elts) and all(_int_const(e) for e in n.elts)
+    return (
+        isinstance(n, ast.List) and bool(n.elts) and all(_int_const(e) for e in n.elts)
+    )
 
 
 def _line_starts(src):
@@ -115,8 +126,10 @@ def _func_spans(tree, off):
     spans = {}
     for n in ast.walk(tree):
         if isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef)) and n.body:
-            spans[n.name] = (off(n.body[0].lineno, n.body[0].col_offset),
-                             off(n.body[-1].end_lineno, n.body[-1].end_col_offset))
+            spans[n.name] = (
+                off(n.body[0].lineno, n.body[0].col_offset),
+                off(n.body[-1].end_lineno, n.body[-1].end_col_offset),
+            )
     return spans
 
 
@@ -147,7 +160,7 @@ def _inherited_depth(tree, off, loops, spans):
     to keep a site: keeping a cold one costs the sampler a dimension, dropping a
     hot one costs the whole lever.
     """
-    edges = {}                      # callee -> [(caller or None, lexical depth of the call)]
+    edges = {}  # callee -> [(caller or None, lexical depth of the call)]
     for n in ast.walk(tree):
         if not isinstance(n, ast.Call):
             continue
@@ -156,7 +169,8 @@ def _inherited_depth(tree, off, loops, spans):
             continue
         pos = off(n.lineno, n.col_offset)
         edges.setdefault(name, []).append(
-            (_enclosing_func(spans, pos), sum(1 for a, b in loops if a <= pos < b)))
+            (_enclosing_func(spans, pos), sum(1 for a, b in loops if a <= pos < b))
+        )
 
     def depth(name, seen):
         # A cycle contributes no bound we can read, so it stops here rather than
@@ -164,8 +178,10 @@ def _inherited_depth(tree, off, loops, spans):
         if name in seen:
             return 0
         seen = seen | {name}
-        return max((d + (depth(c, seen) if c else 0)
-                    for c, d in edges.get(name, ())), default=0)
+        return max(
+            (d + (depth(c, seen) if c else 0) for c, d in edges.get(name, ())),
+            default=0,
+        )
 
     return {name: depth(name, frozenset()) for name in spans}
 
@@ -180,15 +196,29 @@ class _Found:
     that has to be written whole.
     """
 
-    tiles: list = field(default_factory=list)       # (start, end, func_text, kind, depth, span)
-    g_present: list = field(default_factory=list)   # runtime_options scalar: (vstart, vend, knob)
-    g_absent: list = field(default_factory=list)    # runtime_options knob missing: (pos, knob)
-    u_present: list = field(default_factory=list)   # unroll_list=[...]: (start, end, trip)
-    u_absent: list = field(default_factory=list)    # loop with no unroll_list: (pos, trip)
-    p_present: list = field(default_factory=list)   # pass_options {-1: N}: (vstart, vend, knob)
-    p_in_dict: list = field(default_factory=list)   # dict exists, knob missing: (pos, knob)
+    tiles: list = field(
+        default_factory=list
+    )  # (start, end, func_text, kind, depth, span)
+    g_present: list = field(
+        default_factory=list
+    )  # runtime_options scalar: (vstart, vend, knob)
+    g_absent: list = field(
+        default_factory=list
+    )  # runtime_options knob missing: (pos, knob)
+    u_present: list = field(
+        default_factory=list
+    )  # unroll_list=[...]: (start, end, trip)
+    u_absent: list = field(
+        default_factory=list
+    )  # loop with no unroll_list: (pos, trip)
+    p_present: list = field(
+        default_factory=list
+    )  # pass_options {-1: N}: (vstart, vend, knob)
+    p_in_dict: list = field(
+        default_factory=list
+    )  # dict exists, knob missing: (pos, knob)
     p_no_kwarg: list = field(default_factory=list)  # no pass_options kwarg: (pos, knob)
-    p_named: set = field(default_factory=set)       # knob present in a form we do not sweep
+    p_named: set = field(default_factory=set)  # knob present in a form we do not sweep
 
 
 def _tile_kind(node, name):
@@ -203,9 +233,10 @@ def _tile_kind(node, name):
         # a 2-element [L0, L1] integer pair. A 3-element k axis ([kL0, kAL1,
         # kBL1]) or a split_k variant is left as cube_dyn rather than mis-parsed
         # -- the six-knob reader assumes two values per axis.
-        lit = (len(node.args) >= 3
-               and all(isinstance(a, ast.List) and len(a.elts) == 2 and _int_list(a)
-                       for a in node.args[:3]))
+        lit = len(node.args) >= 3 and all(
+            isinstance(a, ast.List) and len(a.elts) == 2 and _int_list(a)
+            for a in node.args[:3]
+        )
         return "cube" if lit else "cube_dyn"
     if 1 <= len(node.args) <= MAX_VEC_ARITY and all(_int_const(a) for a in node.args):
         # Any arity from one to four. The 2-argument form was the only tunable one
@@ -233,8 +264,9 @@ def _collect_tile(node, name, ctx, found):
     # it run in the same loop body and hand tiles to each other; that is the
     # relation `tie_groups` needs and nothing else in the parser records it.
     span = min(enclosing, key=lambda ab: ab[1] - ab[0]) if enclosing else None
-    found.tiles.append((cstart, cend, src[fstart:fend], _tile_kind(node, name),
-                        depth, span))
+    found.tiles.append(
+        (cstart, cend, src[fstart:fend], _tile_kind(node, name), depth, span)
+    )
 
 
 def _collect_runtime_options(kw, off, found):
@@ -244,9 +276,14 @@ def _collect_runtime_options(kw, off, found):
             continue
         present.add(k.value)
         if isinstance(v, ast.Constant) and isinstance(v.value, int):
-            found.g_present.append((off(v.lineno, v.col_offset),
-                                    off(v.end_lineno, v.end_col_offset), k.value))
-    insert = off(kw.value.end_lineno, kw.value.end_col_offset) - 1   # just before "}"
+            found.g_present.append(
+                (
+                    off(v.lineno, v.col_offset),
+                    off(v.end_lineno, v.end_col_offset),
+                    k.value,
+                )
+            )
+    insert = off(kw.value.end_lineno, kw.value.end_col_offset) - 1  # just before "}"
     for knob in _RUNTIME_KNOBS:
         if knob not in present:
             found.g_absent.append((insert, knob))
@@ -263,11 +300,18 @@ def _collect_pass_options(kw, off, found):
         # subgraphs to merge; sweeping a scalar over it would be meaningless, and
         # the reference forbids mixing the two forms in one dict anyway.
         one_entry = isinstance(vv, ast.Dict) and len(vv.keys) == 1
-        both_ints = one_entry and (_signed_int(vv.keys[0]) is not None
-                                   and _signed_int(vv.values[0]) is not None)
+        both_ints = one_entry and (
+            _signed_int(vv.keys[0]) is not None
+            and _signed_int(vv.values[0]) is not None
+        )
         if both_ints:
-            found.p_present.append((off(vv.lineno, vv.col_offset),
-                                    off(vv.end_lineno, vv.end_col_offset), kk.value))
+            found.p_present.append(
+                (
+                    off(vv.lineno, vv.col_offset),
+                    off(vv.end_lineno, vv.end_col_offset),
+                    kk.value,
+                )
+            )
         else:
             found.p_named.add(kk.value)
     insert = off(kw.value.end_lineno, kw.value.end_col_offset) - 1
@@ -277,9 +321,14 @@ def _collect_pass_options(kw, off, found):
 
 
 def _is_unroll_list(kw):
-    return (kw.arg == "unroll_list" and isinstance(kw.value, ast.List)
-            and all(isinstance(e, ast.Constant) and isinstance(e.value, int)
-                    for e in kw.value.elts))
+    return (
+        kw.arg == "unroll_list"
+        and isinstance(kw.value, ast.List)
+        and all(
+            isinstance(e, ast.Constant) and isinstance(e.value, int)
+            for e in kw.value.elts
+        )
+    )
 
 
 def _collect_keywords(node, off, trip, found):
@@ -288,15 +337,24 @@ def _collect_keywords(node, off, trip, found):
     for kw in node.keywords:
         # global JIT knobs, carried in the runtime_options dict -- e.g. the
         # device_sched_mode entry
-        if kw.arg == "runtime_options" and isinstance(kw.value, ast.Dict) and kw.value.keys:
+        if (
+            kw.arg == "runtime_options"
+            and isinstance(kw.value, ast.Dict)
+            and kw.value.keys
+        ):
             _collect_runtime_options(kw, off, found)
         elif kw.arg == "pass_options" and isinstance(kw.value, ast.Dict):
             _collect_pass_options(kw, off, found)
             has_pass_options = True
         # loop unroll schedule: the unroll_list keyword on a pypto loop
         elif _is_unroll_list(kw):
-            found.u_present.append((off(kw.value.lineno, kw.value.col_offset),
-                                    off(kw.value.end_lineno, kw.value.end_col_offset), trip))
+            found.u_present.append(
+                (
+                    off(kw.value.lineno, kw.value.col_offset),
+                    off(kw.value.end_lineno, kw.value.end_col_offset),
+                    trip,
+                )
+            )
             loop_has_unroll = True
     return has_pass_options, loop_has_unroll
 
@@ -319,7 +377,7 @@ def _walk_calls(tree, ctx):
         name = _func_name(node.func)
         if name in _TILE_FUNCS:
             _collect_tile(node, name, ctx, found)
-        is_loop = (name == "loop")
+        is_loop = name == "loop"
         trip = _literal_trip(node) if is_loop else None
         has_pass_options, loop_has_unroll = _collect_keywords(node, off, trip, found)
         takes_arguments = bool(node.args or node.keywords)
@@ -331,7 +389,9 @@ def _walk_calls(tree, ctx):
             # else, so a search that only edits an existing dict can never reach
             # these passes.
             for knob in _PASS_KNOBS:
-                found.p_no_kwarg.append((off(node.end_lineno, node.end_col_offset) - 1, knob))
+                found.p_no_kwarg.append(
+                    (off(node.end_lineno, node.end_col_offset) - 1, knob)
+                )
     return found
 
 
@@ -340,8 +400,18 @@ def _tile_sites(found):
     for cstart, cend, func_text, kind, depth, span in sorted(found.tiles):
         i = counters.get(kind, 0)
         counters[kind] = i + 1
-        sites.append(Site(id=f"{kind}#{i}", kind=kind, ordinal=i, func_text=func_text,
-                          start=cstart, end=cend, loop_depth=depth, loop_span=span))
+        sites.append(
+            Site(
+                id=f"{kind}#{i}",
+                kind=kind,
+                ordinal=i,
+                func_text=func_text,
+                start=cstart,
+                end=cend,
+                loop_depth=depth,
+                loop_span=span,
+            )
+        )
     return sites
 
 
@@ -355,17 +425,33 @@ def _pass_sites(found):
     for it would write the key a second time.
     """
     have = {knob for _, _, knob in found.p_present} | found.p_named
-    pall = ([(vs, ve, knob, "") for (vs, ve, knob) in found.p_present]
-            + [(pos, pos, knob, ", ") for (pos, knob) in found.p_in_dict
-               if knob not in have]
-            + [(pos, pos, knob, ", pass_options={") for (pos, knob) in found.p_no_kwarg
-               if knob not in have])
+    pall = (
+        [(vs, ve, knob, "") for (vs, ve, knob) in found.p_present]
+        + [
+            (pos, pos, knob, ", ")
+            for (pos, knob) in found.p_in_dict
+            if knob not in have
+        ]
+        + [
+            (pos, pos, knob, ", pass_options={")
+            for (pos, knob) in found.p_no_kwarg
+            if knob not in have
+        ]
+    )
     count, sites = {}, []
     for start, end, knob, prefix in sorted(pall):
         i = count.get(knob, 0)
         count[knob] = i + 1
-        sites.append(Site(id=f"pass:{knob}#{i}", kind="pass", ordinal=i,
-                          func_text=prefix, start=start, end=end))
+        sites.append(
+            Site(
+                id=f"pass:{knob}#{i}",
+                kind="pass",
+                ordinal=i,
+                func_text=prefix,
+                start=start,
+                end=end,
+            )
+        )
     return sites
 
 
@@ -374,23 +460,42 @@ def _global_sites(found):
     one gets a zero-width insertion point whose func_text is the comma and space
     that will precede it. Ordinal per knob, by source position.
     """
-    gall = ([(vs, ve, knob, "") for (vs, ve, knob) in found.g_present]
-            + [(p, p, knob, ", ") for (p, knob) in found.g_absent])
+    gall = [(vs, ve, knob, "") for (vs, ve, knob) in found.g_present] + [
+        (p, p, knob, ", ") for (p, knob) in found.g_absent
+    ]
     count, sites = {}, []
     for start, end, knob, prefix in sorted(gall):
         i = count.get(knob, 0)
         count[knob] = i + 1
-        sites.append(Site(id=f"g:{knob}#{i}", kind="global", ordinal=i,
-                          func_text=prefix, start=start, end=end))
+        sites.append(
+            Site(
+                id=f"g:{knob}#{i}",
+                kind="global",
+                ordinal=i,
+                func_text=prefix,
+                start=start,
+                end=end,
+            )
+        )
     return sites
 
 
 def _unroll_sites(found):
-    uall = ([(ls, le, "", t) for (ls, le, t) in found.u_present]
-            + [(p, p, ", ", t) for (p, t) in found.u_absent])
-    return [Site(id=f"unroll#{i}", kind="unroll", ordinal=i, func_text=prefix,
-                 start=start, end=end, trip=trip)
-            for i, (start, end, prefix, trip) in enumerate(sorted(uall))]
+    uall = [(ls, le, "", t) for (ls, le, t) in found.u_present] + [
+        (p, p, ", ", t) for (p, t) in found.u_absent
+    ]
+    return [
+        Site(
+            id=f"unroll#{i}",
+            kind="unroll",
+            ordinal=i,
+            func_text=prefix,
+            start=start,
+            end=end,
+            trip=trip,
+        )
+        for i, (start, end, prefix, trip) in enumerate(sorted(uall))
+    ]
 
 
 def _const_sites(src):
@@ -398,9 +503,20 @@ def _const_sites(src):
     default-deny: a constant reaching the operator's declared interface is
     excluded, and only what reaches a loop bound is admitted.
     """
-    return [Site(id=f"const:{name}", kind="const", ordinal=i, func_text="",
-                 start=start, end=end)
-            for i, (name, (_v, start, end)) in enumerate(sorted(const.admitted(src).items()))]
+    sites = []
+    admitted = sorted(const.admitted(src).items())
+    for i, (name, (_v, start, end)) in enumerate(admitted):
+        sites.append(
+            Site(
+                id=f"const:{name}",
+                kind="const",
+                ordinal=i,
+                func_text="",
+                start=start,
+                end=end,
+            )
+        )
+    return sites
 
 
 def discover_sites(src):
@@ -418,13 +534,22 @@ def discover_sites(src):
     for n in ast.walk(tree):
         if not isinstance(n, (ast.For, ast.AsyncFor, ast.While)) or not n.body:
             continue
-        loops.append((off(n.body[0].lineno, n.body[0].col_offset),
-                      off(n.body[-1].end_lineno, n.body[-1].end_col_offset)))
+        loops.append(
+            (
+                off(n.body[0].lineno, n.body[0].col_offset),
+                off(n.body[-1].end_lineno, n.body[-1].end_col_offset),
+            )
+        )
     fspans = _func_spans(tree, off)
     ctx = (off, src, loops, _inherited_depth(tree, off, loops, fspans), fspans)
     found = _walk_calls(tree, ctx)
-    return (_tile_sites(found) + _pass_sites(found) + _global_sites(found)
-            + _unroll_sites(found) + _const_sites(src))
+    return (
+        _tile_sites(found)
+        + _pass_sites(found)
+        + _global_sites(found)
+        + _unroll_sites(found)
+        + _const_sites(src)
+    )
 
 
 def tie_groups(sites, anchor):
@@ -504,9 +629,9 @@ def _cube_args(c):
     # tile, wrote back malformed pairs that pypto rejected as `Invalid L1/L0
     # relation` (the third list [mL0,nL0] became n=[nL0=mL0, nL1=nL0]), and never
     # tuned L1 at all -- the axis the hand-optimised 3768us kernel wins on.
-    return (f"[{c['mL0']}, {c['mL1']}], "
-            f"[{c['kL0']}, {c['kL1']}], "
-            f"[{c['nL0']}, {c['nL1']}]")
+    return (
+        f"[{c['mL0']}, {c['mL1']}], [{c['kL0']}, {c['kL1']}], [{c['nL0']}, {c['nL1']}]"
+    )
 
 
 def _vec_args(v):
@@ -527,13 +652,13 @@ def _pass_text(s, cfg, absent, kwarg_inserts):
     if v == UNSET:
         return _SKIP
     knob = space.pass_knob(s.id)
-    body = f'{{-1: {v}}}'
+    body = f"{{-1: {v}}}"
     if not absent:
-        return body                                       # replace {-1: N}
+        return body  # replace {-1: N}
     if s.func_text.startswith(", pass_options={"):
-        kwarg_inserts.setdefault(s.start, {})[knob] = v    # merged by the caller
+        kwarg_inserts.setdefault(s.start, {})[knob] = v  # merged by the caller
         return _MERGED
-    return f'{s.func_text}"{knob}": {body}'               # key into the dict
+    return f'{s.func_text}"{knob}": {body}'  # key into the dict
 
 
 def _global_text(s, cfg, absent):
@@ -556,7 +681,9 @@ def _unroll_text(s, cfg, absent):
 
 def _site_text(s, cfg, kwarg_inserts):
     """The replacement text for one site, dispatched on its kind."""
-    absent = (s.start == s.end)   # zero-width -> INSERT a missing knob (func_text = ", " prefix)
+    absent = (
+        s.start == s.end
+    )  # zero-width -> INSERT a missing knob (func_text = ", " prefix)
     if s.kind == "cube":
         return f"{s.func_text}({_cube_args(cfg)})"
     if s.kind == "vec":
@@ -611,9 +738,14 @@ def _read_site(kind, nums):
     if kind == "cube":
         # Six values in source order: m=[nums0,nums1], k=[nums2,nums3],
         # n=[nums4,nums5]. The first of each pair is L0, the second L1.
-        return {"mL0": nums[0], "mL1": nums[1],
-                "kL0": nums[2], "kL1": nums[3],
-                "nL0": nums[4], "nL1": nums[5]}
+        return {
+            "mL0": nums[0],
+            "mL1": nums[1],
+            "kL0": nums[2],
+            "kL1": nums[3],
+            "nL0": nums[4],
+            "nL1": nums[5],
+        }
     if kind in ("global", "const"):
         return {"value": nums[0]}
     if kind == "pass":
@@ -637,10 +769,10 @@ def current_config(src):
     """
     cfg = {}
     for s in tunable_sites(src):
-        if s.start == s.end:                 # absent knob (insertion site) -> currently unset
+        if s.start == s.end:  # absent knob (insertion site) -> currently unset
             cfg[s.id] = {"value": UNSET}
             continue
-        nums = [int(x) for x in re.findall(r"-?\d+", src[s.start:s.end])]
+        nums = [int(x) for x in re.findall(r"-?\d+", src[slice(s.start, s.end)])]
         cfg[s.id] = _read_site(s.kind, nums)
     return cfg
 
@@ -674,7 +806,9 @@ def group_identical(src):
     """
     groups = {}
     for s in tunable_sites(src):
-        seg = src[s.start:s.end]
-        key = ("g", space.global_knob(s.id), seg) if s.kind == "global" else (s.kind, seg)
+        seg = src[slice(s.start, s.end)]
+        key = (
+            ("g", space.global_knob(s.id), seg) if s.kind == "global" else (s.kind, seg)
+        )
         groups.setdefault(key, []).append(s.id)
     return list(groups.values())

@@ -1,6 +1,15 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
-# Copyright (c) Huawei Technologies Co., Ltd. 2024-2026. All rights reserved.
+# ----------------------------------------------------------------------------------------------------------
+# Copyright (c) 2026 Huawei Technologies Co., Ltd.
+# This program is free software, you can redistribute it and/or modify it under the terms and conditions of
+# CANN Open Software License Agreement Version 2.0 (the "License").
+# Please refer to the License for details. You may not use this file except in compliance with the License.
+# THIS SOFTWARE IS PROVIDED ON AN "AS IS" BASIS, WITHOUT WARRANTIES OF ANY KIND, EITHER EXPRESS OR IMPLIED,
+# INCLUDING BUT NOT LIMITED TO NON-INFRINGEMENT, MERCHANTABILITY, OR FITNESS FOR A PARTICULAR PURPOSE.
+# See LICENSE in the root of the software repository for the full text of the License.
+# ----------------------------------------------------------------------------------------------------------
+
 """Generate a module_interfaces.yaml skeleton for completion by hand.
 
 Codifies the deterministic parts of the YAML previously transcribed by
@@ -58,7 +67,9 @@ def _parse_front_matter(content: str) -> dict:
     try:
         yaml = importlib.import_module("yaml")
     except ImportError as exc:
-        raise RuntimeError("PyYAML not available; cannot read SPEC front matter.") from exc
+        raise RuntimeError(
+            "PyYAML not available; cannot read SPEC front matter."
+        ) from exc
     return yaml.safe_load("\n".join(lines[1:end])) or {}
 
 
@@ -124,7 +135,9 @@ def build_skeleton(op: str, params: list[str], meta: dict) -> str:
 
 
 def _self_test() -> int:
-    golden = "import torch\ndef relu_golden(x, scale):\n    return torch.relu(x) * scale\n"
+    golden = (
+        "import torch\ndef relu_golden(x, scale):\n    return torch.relu(x) * scale\n"
+    )
     spec = (
         "---\n"
         "supported_dtypes: [float16, float32]\n"
@@ -135,9 +148,15 @@ def _self_test() -> int:
     params = _golden_param_names(golden)
     meta = _parse_front_matter(spec)
     out = build_skeleton("relu", params, meta)
-    ok = (params == ["x", "scale"]
-          and "op: relu" in out and "name: x" in out and "name: scale" in out
-          and "dtype: float16" in out and "atol: 0.001" in out and "modules:" in out)
+    ok = (
+        params == ["x", "scale"]
+        and "op: relu" in out
+        and "name: x" in out
+        and "name: scale" in out
+        and "dtype: float16" in out
+        and "atol: 0.001" in out
+        and "modules:" in out
+    )
     _LOGGER.error("%s self-test: params=%s", "PASS" if ok else "FAIL", params)
     return 0 if ok else 1
 
@@ -155,7 +174,9 @@ def main() -> int:
     if not args.golden:
         ap.error("golden path required (or --self-test)")
     params = _golden_param_names(args.golden.read_text(encoding="utf-8"))
-    meta = _parse_front_matter(args.spec.read_text(encoding="utf-8")) if args.spec else {}
+    meta = (
+        _parse_front_matter(args.spec.read_text(encoding="utf-8")) if args.spec else {}
+    )
     op = args.op or args.golden.stem.replace("_golden", "")
     _LOGGER.info(build_skeleton(op, params, meta))
     return 0

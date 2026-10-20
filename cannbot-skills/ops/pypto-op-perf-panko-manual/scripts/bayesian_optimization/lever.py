@@ -31,8 +31,8 @@ so the study is rebuilt from `search_state.json` on every call. `ask` / `tell`
 rather than `study.optimize`, because the evaluation happens in the optimizer's
 own cycle, not here.
 """
+
 import hashlib
-import json
 import math
 import re
 
@@ -41,7 +41,7 @@ from typing import Any
 
 from . import apply, space
 
-PENALTY = 1e12                 # same sentinel as driver: any real latency is far below
+PENALTY = 1e12  # same sentinel as driver: any real latency is far below
 
 # The four catalogue actions this lever serves, each with the site kind it is
 # DEFINED over. Twenty of the forty-eight actions carry a number, but only these
@@ -67,6 +67,7 @@ def scope_of(catalog_id):
 
 def _scoped(sites, scope):
     return [s for s in sites if scope is None or s.kind == scope]
+
 
 # `basic-block-optimization.md`, the Vector TileShape section, rule 3: the data block
 # should sit between 16 and 64 KB. Only the floor is taken from that document.
@@ -95,6 +96,7 @@ def ceil_kb(hw=None):
     ub = getattr(hw, "ub_budget_kb", 0) or 0
     return int(ub // 2) if ub else CEIL_KB
 
+
 # Seed family, expressed in FOOTPRINT rather than in per-dimension scale. A
 # factor here multiplies the tile's byte count; each dimension moves by the
 # factor's n-th root, so a 1-D and a 4-D tile sweep the same range of footprints.
@@ -120,10 +122,36 @@ def ceil_kb(hw=None):
 # the fifteen gets both seeds on the correct sides.
 
 
-BYTE_FACTORS = (1 / 64.0, 1 / 48.0, 1 / 32.0, 1 / 24.0, 1 / 16.0, 1 / 12.0,
-                1 / 8.0, 1 / 6.0, 1 / 4.0, 1 / 3.0, 1 / 2.0, 2 / 3.0,
-                1.5, 2.0, 3.0, 4.0, 6.0, 8.0, 12.0, 16.0, 24.0, 32.0,
-                48.0, 64.0, 96.0, 128.0, 192.0, 256.0)
+BYTE_FACTORS = (
+    1 / 64.0,
+    1 / 48.0,
+    1 / 32.0,
+    1 / 24.0,
+    1 / 16.0,
+    1 / 12.0,
+    1 / 8.0,
+    1 / 6.0,
+    1 / 4.0,
+    1 / 3.0,
+    1 / 2.0,
+    2 / 3.0,
+    1.5,
+    2.0,
+    3.0,
+    4.0,
+    6.0,
+    8.0,
+    12.0,
+    16.0,
+    24.0,
+    32.0,
+    48.0,
+    64.0,
+    96.0,
+    128.0,
+    192.0,
+    256.0,
+)
 
 _NUM = re.compile(r"-?\d+")
 
@@ -155,7 +183,7 @@ def structural_signature(src):
         return "unparseable"
     out, cur = [], 0
     for s in sorted(sites, key=lambda x: x.start):
-        out.append(src[cur:s.start])
+        out.append(src[slice(cur, s.start)])
         out.append(f"<{s.kind}>")
         cur = s.end
     out.append(src[cur:])
@@ -264,19 +292,20 @@ def _scaled(cfg, byte_factor):
     out = {}
     for sid, c in cfg.items():
         d = dict(c)
-        fields = sorted((k for k in c if k.startswith("d")),
-                        key=lambda k: int(k[1:]))
+        fields = sorted((k for k in c if k.startswith("d")), key=lambda k: int(k[1:]))
         if fields:
             f = byte_factor ** (1.0 / len(fields))
             for i, k in enumerate(fields):
-                dom = (space.VEC_TRAILING_CHOICES if i == len(fields) - 1
-                       else space.VEC_CHOICES)
+                dom = (
+                    space.VEC_TRAILING_CHOICES
+                    if i == len(fields) - 1
+                    else space.VEC_CHOICES
+                )
                 d[k] = _snap(c[k] * f, space.admit(dom, c[k]))
         elif "mL0" in c:
-            f = byte_factor ** 0.5          # the L0A footprint is mL0 x kL0
+            f = byte_factor**0.5  # the L0A footprint is mL0 x kL0
             for k in ("mL0", "kL0", "nL0"):
-                d[k] = _snap(c[k] * f,
-                             space.admit(space.CUBE_CHOICES, c[k]))
+                d[k] = _snap(c[k] * f, space.admit(space.CUBE_CHOICES, c[k]))
             for ax in ("m", "k", "n"):
                 d[f"{ax}L1"] = _cube_l1(c, d, ax)
         out[sid] = d
@@ -286,8 +315,10 @@ def _scaled(cfg, byte_factor):
 def _rung(value, domain, step):
     """The value `step` rungs from `value` on `domain`, clamped at both ends."""
     d = sorted(domain)
-    i = min(range(len(d)),
-            key=lambda j: (abs(math.log(d[j]) - math.log(max(value, 1e-9))), d[j]))
+    i = min(
+        range(len(d)),
+        key=lambda j: (abs(math.log(d[j]) - math.log(max(value, 1e-9))), d[j]),
+    )
     return d[max(0, min(len(d) - 1, i + step))]
 
 
@@ -310,12 +341,14 @@ def _nudged(cur, idx, step):
     out, changed = {}, False
     for sid, c in cur.items():
         d = dict(c)
-        fields = sorted((k for k in c if k.startswith("d")),
-                        key=lambda k: int(k[1:]))
+        fields = sorted((k for k in c if k.startswith("d")), key=lambda k: int(k[1:]))
         if fields and idx < len(fields):
             f = fields[idx]
-            dom = (space.VEC_TRAILING_CHOICES if idx == len(fields) - 1
-                   else space.VEC_CHOICES)
+            dom = (
+                space.VEC_TRAILING_CHOICES
+                if idx == len(fields) - 1
+                else space.VEC_CHOICES
+            )
             d[f] = _rung(c[f], space.admit(dom, c[f]), step)
             changed |= d[f] != c[f]
         elif "mL0" in c and idx < 3:
@@ -386,8 +419,11 @@ def seed_points(src, hw, dtype_bytes=4, current_latency=None, scope=None):
     are bounded by the same buffer.
     """
     cur = apply.current_config(src)
-    cur = {k: v for k, v in cur.items()
-           if _is_tile(v, k) and (scope is None or k.startswith(scope + "#"))}
+    cur = {
+        k: v
+        for k, v in cur.items()
+        if _is_tile(v, k) and (scope is None or k.startswith(scope + "#"))
+    }
     if not cur:
         return []
     out = [(cur, current_latency, "current")]
@@ -401,8 +437,11 @@ def seed_points(src, hw, dtype_bytes=4, current_latency=None, scope=None):
     # ceiling: without it the floor seed can come out many times larger than
     # the buffer holds, which the harness gate then refuses.
     lo, hi = FLOOR_KB * 1024, ceil_kb(hw) * 1024
-    band = [(nb, cfg) for nb, cfg in fam
-            if lo <= nb <= hi and space.static_feasible(cfg, hw)[0]]
+    band = [
+        (nb, cfg)
+        for nb, cfg in fam
+        if lo <= nb <= hi and space.static_feasible(cfg, hw)[0]
+    ]
     if band:
         out.append((band[0][1], None, "floor"))
         if len(band) > 1:
@@ -414,6 +453,7 @@ def seed_points(src, hw, dtype_bytes=4, current_latency=None, scope=None):
 def _rebuild(record, sites, groups, anchor, seed=0):
     """Reconstruct the Optuna study from the trials persisted in the state file."""
     import optuna
+
     optuna.logging.set_verbosity(optuna.logging.WARNING)
     study = optuna.create_study(
         direction="minimize",
@@ -425,11 +465,13 @@ def _rebuild(record, sites, groups, anchor, seed=0):
     for t in record.get("trials", []):
         if t.get("value") is None:
             continue
-        study.add_trial(optuna.trial.create_trial(
-            params=t["params"],
-            distributions={k: _dist(k, sites, groups, anchor)
-                           for k in t["params"]},
-            value=float(t["value"])))
+        study.add_trial(
+            optuna.trial.create_trial(
+                params=t["params"],
+                distributions={k: _dist(k, sites, groups, anchor) for k in t["params"]},
+                value=float(t["value"]),
+            )
+        )
     return study
 
 
@@ -438,6 +480,7 @@ def _dist(name, sites, groups, anchor):
     parameters `<rep_site_id>.<field>`, and every field is categorical.
     """
     import optuna
+
     sid, field = name.rsplit(".", 1)
     kind = space.kind_of(sites, sid)
     a = (anchor or {}).get(sid, {})
@@ -449,23 +492,24 @@ def _dist(name, sites, groups, anchor):
         ax = field[0]
         if field.endswith("L1x"):
             base = space.mult_dom(a.get(f"{ax}L0"), a.get(f"{ax}L1"))
-            val = (a.get(f"{ax}L1", 0) // a["{}L0".format(ax)]
-                   if a.get(f"{ax}L0") and a.get(f"{ax}L1")
-                   and a[f"{ax}L1"] % a[f"{ax}L0"] == 0 else None)
-            return optuna.distributions.CategoricalDistribution(
-                space.admit(base, val))
+            val = (
+                a.get(f"{ax}L1", 0) // a["{}L0".format(ax)]
+                if a.get(f"{ax}L0")
+                and a.get(f"{ax}L1")
+                and a[f"{ax}L1"] % a[f"{ax}L0"] == 0
+                else None
+            )
+            return optuna.distributions.CategoricalDistribution(space.admit(base, val))
         base = space.CUBE_CHOICES
     elif field.startswith("d"):
         # Which rung ladder depends on the position, and the position depends on
         # the arity, which only the anchor knows. Trailing dimension: 16-aligned
         # values only, matching what `suggest` drew from.
         fields = space.vec_fields(a)
-        base = (space.VEC_TRAILING_CHOICES if field == fields[-1]
-                else space.VEC_CHOICES)
+        base = space.VEC_TRAILING_CHOICES if field == fields[-1] else space.VEC_CHOICES
     else:
         base = space.GLOBAL_DOMAINS.get(space.global_knob(sid), [])
-    return optuna.distributions.CategoricalDistribution(
-        space.admit(base, a.get(field)))
+    return optuna.distributions.CategoricalDistribution(space.admit(base, a.get(field)))
 
 
 @dataclass
@@ -489,9 +533,15 @@ def _fill_seeds(rec, sites, pts):
     rec["queue"] = []
     for cfg, val, label in pts:
         if val is not None:
-            rec["trials"].append({"params": space.flatten(cfg, sites),
-                                  "value": float(val), "label": label,
-                                  "status": "ok", "free": True})
+            rec["trials"].append(
+                {
+                    "params": space.flatten(cfg, sites),
+                    "value": float(val),
+                    "label": label,
+                    "status": "ok",
+                    "free": True,
+                }
+            )
         else:
             rec["queue"].append({"config": cfg, "label": label})
 
@@ -502,10 +552,15 @@ def _next_seed(rec, sites, scope):
     if not queue:
         return None
     item = queue.pop(0)
-    rec["pending"] = {"params": space.flatten(item["config"], sites),
-                      "label": item["label"]}
-    return item["config"], {"label": item["label"], "scope": scope,
-                            "trial": len(rec["trials"]) + 1}
+    rec["pending"] = {
+        "params": space.flatten(item["config"], sites),
+        "label": item["label"],
+    }
+    return item["config"], {
+        "label": item["label"],
+        "scope": scope,
+        "trial": len(rec["trials"]) + 1,
+    }
 
 
 def _draw_one_site(study, ctx):
@@ -531,8 +586,9 @@ def _draw_one_site(study, ctx):
     site = sites[rec.get("cursor", 0) % len(sites)]
     rec["cursor"] = rec.get("cursor", 0) + 1
     held = {site.id: dict(anchor.get(site.id, {}))}
-    trial = study.ask({k: _dist(k, sites, None, anchor)
-                       for k in space.flatten(held, [site])})
+    trial = study.ask(
+        {k: _dist(k, sites, None, anchor) for k in space.flatten(held, [site])}
+    )
     cfg = dict(anchor)
     cfg.update(space.unflatten(trial.params, [site]))
     return trial, cfg, site.id
@@ -555,10 +611,59 @@ def _gate(cfg, hw, dtype_bytes):
     cap = ceil_kb(hw)
     nb = _tile_bytes(cfg, dtype_bytes)
     if nb > cap * 1024:
-        return False, "over_buffer", (
-            f"tile {nb / 1024:.0f}KB > {cap}KB "
-            f"({getattr(hw, 'ub_budget_kb', CEIL_KB * 2)}KB UB / 2 buffers)")
+        return (
+            False,
+            "over_buffer",
+            (
+                f"tile {nb / 1024:.0f}KB > {cap}KB "
+                f"({getattr(hw, 'ub_budget_kb', CEIL_KB * 2)}KB UB / 2 buffers)"
+            ),
+        )
     return True, "ok", reason
+
+
+def _tpe_candidate(rec, sites, src, scope, hw, opts):
+    """Draw from the TPE surrogate until the gate accepts, penalising rejections."""
+    anchor = apply.current_config(src)
+    in_scope = {s.id for s in sites}
+    ctx = {"rec": rec, "sites": sites, "anchor": anchor}
+    study = _rebuild(rec, sites, None, anchor, opts.seed)
+    tried_sites = []
+    for _ in range(32):  # gate rejections are free; keep asking
+        trial, cfg, site_id = _draw_one_site(study, ctx)
+        tried_sites.append(site_id)
+        ok, status, reason = _gate(cfg, hw, opts.dtype_bytes)
+        if ok:
+            rec["pending"] = {"params": trial.params, "label": "tpe"}
+            # Feasibility is judged on the WHOLE program -- the buffer is shared,
+            # so a cube tile's legality depends on what the vec sites hold -- but
+            # what goes back is the scoped subset. The caller writes what it is
+            # handed, and an action that cannot express a change outside its
+            # scope cannot make one by accident.
+            return (
+                {k: v for k, v in cfg.items() if k in in_scope},
+                {"label": "tpe", "scope": scope, "trial": len(rec["trials"]) + 1},
+            )
+        rec["trials"].append(
+            {
+                "params": trial.params,
+                "value": PENALTY,
+                "label": "tpe",
+                "status": status,
+                "reason": reason,
+                "free": True,
+            }
+        )
+        study.tell(trial, PENALTY)
+    # Name the sites, so a refusal is a fact about the kernel rather than about
+    # the lever. Thirty-two single-site draws covering every site and finding
+    # nothing means the neighbourhood really is closed; the old message could
+    # not distinguish that from the combinatorial collapse above.
+    return None, {
+        "reason": "no feasible candidate in 32 draws",
+        "scope": scope,
+        "sites_tried": sorted(set(tried_sites)),
+    }
 
 
 def ask(state_bo, catalog_id, src, hw, opts=None):
@@ -582,47 +687,24 @@ def ask(state_bo, catalog_id, src, hw, opts=None):
         # vec sites and no cube ones reads as a broken lever; "no cube tile site"
         # is the Cube action correctly declining a kernel with no Cube work, and
         # the optimizer should retire it rather than retry.
-        return None, {"reason": f"no {scope} tile site" if scope
-                      else "no tunable tile site", "scope": scope}
+        return None, {
+            "reason": f"no {scope} tile site" if scope else "no tunable tile site",
+            "scope": scope,
+        }
 
     # --- seeds first -------------------------------------------------------
     if not rec["seeded"]:
-        _fill_seeds(rec, sites,
-                    seed_points(src, hw, opts.dtype_bytes, opts.current_latency, scope))
+        _fill_seeds(
+            rec,
+            sites,
+            seed_points(src, hw, opts.dtype_bytes, opts.current_latency, scope),
+        )
     seeded = _next_seed(rec, sites, scope)
     if seeded:
         return seeded
 
     # --- then the sampler --------------------------------------------------
-    anchor = apply.current_config(src)
-    in_scope = {s.id for s in sites}
-    ctx = {"rec": rec, "sites": sites, "anchor": anchor}
-    study = _rebuild(rec, sites, None, anchor, opts.seed)
-    tried_sites = []
-    for _ in range(32):                      # gate rejections are free; keep asking
-        trial, cfg, site_id = _draw_one_site(study, ctx)
-        tried_sites.append(site_id)
-        ok, status, reason = _gate(cfg, hw, opts.dtype_bytes)
-        if ok:
-            rec["pending"] = {"params": trial.params, "label": "tpe"}
-            # Feasibility is judged on the WHOLE program -- the buffer is shared,
-            # so a cube tile's legality depends on what the vec sites hold -- but
-            # what goes back is the scoped subset. The caller writes what it is
-            # handed, and an action that cannot express a change outside its
-            # scope cannot make one by accident.
-            return ({k: v for k, v in cfg.items() if k in in_scope},
-                    {"label": "tpe", "scope": scope,
-                     "trial": len(rec["trials"]) + 1})
-        rec["trials"].append({"params": trial.params, "value": PENALTY,
-                              "label": "tpe", "status": status,
-                              "reason": reason, "free": True})
-        study.tell(trial, PENALTY)
-    # Name the sites, so a refusal is a fact about the kernel rather than about
-    # the lever. Thirty-two single-site draws covering every site and finding
-    # nothing means the neighbourhood really is closed; the old message could
-    # not distinguish that from the combinatorial collapse above.
-    return None, {"reason": "no feasible candidate in 32 draws",
-                  "scope": scope, "sites_tried": sorted(set(tried_sites))}
+    return _tpe_candidate(rec, sites, src, scope, hw, opts)
 
 
 def tell(state_bo, catalog_id, src, s, p):
@@ -632,7 +714,12 @@ def tell(state_bo, catalog_id, src, s, p):
     if not rec or not rec.get("pending"):
         return False
     pend = rec.pop("pending")
-    rec["trials"].append({"params": pend["params"], "label": pend["label"],
-                          "value": float(p) if (s and p and p > 0) else PENALTY,
-                          "status": "ok" if (s and p and p > 0) else "incorrect"})
+    rec["trials"].append(
+        {
+            "params": pend["params"],
+            "label": pend["label"],
+            "value": float(p) if (s and p and p > 0) else PENALTY,
+            "status": "ok" if (s and p and p > 0) else "incorrect",
+        }
+    )
     return True

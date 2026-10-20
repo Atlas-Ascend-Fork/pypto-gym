@@ -51,6 +51,7 @@ losing trials and caches their bytes so they can never be paid for twice; the
 winner is deliberately left uncached so the ordinary `record` path charges it and
 runs the ratchet. The ratchet therefore stays in exactly one place.
 """
+
 import hashlib
 import os
 import sys
@@ -162,17 +163,87 @@ class BlockOptions:
     envelope, and this.
     """
 
-    stagnation_k: int = 7             # non-improving trials that close the block
-    max_trials: Any = None            # the remaining evaluation budget
-    current_latency: Any = None       # what the incumbent measured, if known
+    stagnation_k: int = 7  # non-improving trials that close the block
+    max_trials: Any = None  # the remaining evaluation budget
+    current_latency: Any = None  # what the incumbent measured, if known
     dtype_bytes: int = 4
     on_trial: Any = None
     seed: int = 0
     domain: Any = None
     memory: Any = None
     startup_min_feasible: int = 5
-    startup_cover: int = 3            # space-covering points before TPE draws
+    startup_cover: int = 3  # space-covering points before TPE draws
     refusals: Any = None
+
+
+def _search_options(opts, warm, incumbent, sites):
+    """The driver's options for one block, translated from BlockOptions."""
+    return driver.SearchOptions(
+        warm_start=warm,
+        anchor=incumbent,
+        n_trials=opts.max_trials if opts.max_trials is not None else 10**6,
+        seed=opts.seed,
+        on_trial=opts.on_trial,
+        stagnation_limit=opts.stagnation_k,
+        domain=opts.domain,
+        dtype_bytes=opts.dtype_bytes,
+        memory=opts.memory,
+        startup_min_feasible=opts.startup_min_feasible,
+        # Run level, not structure level: what the compiler will not accept about
+        # a tile call outlives the program shape that first asked it.
+        refusals=opts.refusals,
+        # The row extent of vec scopes inside one loop body is a hand-off, not a
+        # per-site choice. Left untied, the sampler draws mismatched extents,
+        # and those are reliably among the worst configurations of a run,
+        # against an otherwise identical coherent baseline.
+        tie=apply.tie_groups(sites, incumbent),
+    )
+
+
+def _seeded_warm_starts(src, hw, opts, sites):
+    """The warm-start set for one block: the incumbent scaled up and down, plus
+    space-covering points, filtered against the derived domain.
+
+    `warm` starts as the incumbent scaled up and down -- two points on one line
+    through the space. Everything else the block measures before TPE has a
+    surrogate comes from uniform draws over the PARAMETER domains, and those
+    cluster: one recorded block spent two of its six measurements on mL0 192 /
+    kL0 32 / nL0 32 at 22,198 us, and mL0 512 / kL0 64 / nL0 32 (14,114 us),
+    which are the same operating regime described twice.
+
+    `seed.cover` replaces the random startup with points chosen to sit far
+    apart in the space of things that can be computed without the device --
+    buffer occupancies, trip counts, trips per core. It asserts nothing about
+    which is fast: every predictor tried on this benchmark has been refuted by
+    measurement. It only guarantees the device is asked a different question
+    each time.
+    """
+    warm, measured, incumbent = seeds_for(
+        src, hw, opts.dtype_bytes, opts.current_latency
+    )
+    if opts.startup_cover:
+        warm = warm + seed_mod.cover(
+            sites,
+            hw,
+            incumbent,
+            opts.startup_cover,
+            seed_mod.CoverOptions(
+                domain=opts.domain,
+                seed=opts.seed,
+                exclude=warm + ([incumbent] if incumbent else []),
+            ),
+        )
+    # Seeds are drawn from the current shape by scaling, so one can land outside
+    # the derived domain. Dropping it is right -- it would be rejected on the
+    # first draw anyway -- but the incumbent is never dropped, because a domain
+    # that excludes the running program is describing a different kernel.
+    if opts.domain:
+        kept = []
+        for c in warm:
+            if domain_mod.verify(opts.domain, c, opts.dtype_bytes)[0]:
+                kept.append(c)
+        warm = kept
+    return warm, measured, incumbent
 
 
 def run(op_file, objective, hw, opts=None):
@@ -201,57 +272,20 @@ def run(op_file, objective, hw, opts=None):
         # returned as an empty result: a kernel whose tile call is written with
         # named constants has no tunable site, and normalisation at INIT is what
         # fixes it. Silence here is what a whole recorded run looked like.
-        return _empty("no tunable tile site; the tile call is not written with "
-                      "integer literals (normalise at INIT)")
+        return _empty(
+            "no tunable tile site; the tile call is not written with "
+            "integer literals (normalise at INIT)"
+        )
     if opts.max_trials is not None and opts.max_trials <= 0:
         return _empty("no evaluation budget remaining")
 
-    warm, measured, incumbent = seeds_for(src, hw, opts.dtype_bytes, opts.current_latency)
-    # `warm` at this point is the incumbent scaled up and down -- two points on
-    # one line through the space. Everything else the block measures before TPE
-    # has a surrogate comes from uniform draws over the PARAMETER domains, and
-    # those cluster: one recorded block spent two of its six measurements on
-    # mL0 192 / kL0 32 / nL0 32 at 22,198 us, and mL0 512 / kL0 64 / nL0 32
-    # (14,114 us), which are the same operating regime described twice.
-    #
-    # `seed.cover` replaces the random startup with points chosen to sit far
-    # apart in the space of things that can be computed without the device --
-    # buffer occupancies, trip counts, trips per core. It asserts nothing about
-    # which is fast: every predictor tried on this benchmark has been refuted by
-    # measurement. It only guarantees the device is asked a different question
-    # each time.
-    if opts.startup_cover:
-        warm = warm + seed_mod.cover(
-            sites, hw, incumbent, opts.startup_cover,
-            seed_mod.CoverOptions(
-                domain=opts.domain, seed=opts.seed,
-                exclude=warm + ([incumbent] if incumbent else [])))
-    # Seeds are drawn from the current shape by scaling, so one can land outside
-    # the derived domain. Dropping it is right -- it would be rejected on the
-    # first draw anyway -- but the incumbent is never dropped, because a domain
-    # that excludes the running program is describing a different kernel.
-    if opts.domain:
-        warm = [c for c in warm if domain_mod.verify(opts.domain, c, opts.dtype_bytes)[0]]
-    result = driver.run_bo(objective, sites, hw, driver.SearchOptions(
-        warm_start=warm,
-        anchor=incumbent,
-        n_trials=opts.max_trials if opts.max_trials is not None else 10 ** 6,
-        seed=opts.seed,
-        on_trial=opts.on_trial,
-        stagnation_limit=opts.stagnation_k,
-        domain=opts.domain,
-        dtype_bytes=opts.dtype_bytes,
-        memory=opts.memory,
-        startup_min_feasible=opts.startup_min_feasible,
-        # Run level, not structure level: what the compiler will not accept about
-        # a tile call outlives the program shape that first asked it.
-        refusals=opts.refusals,
-        # The row extent of vec scopes inside one loop body is a hand-off, not a
-        # per-site choice. Left untied, the sampler draws mismatched extents,
-        # and those are reliably among the worst configurations of a run,
-        # against an otherwise identical coherent baseline.
-        tie=apply.tie_groups(sites, incumbent),
-    ))
+    warm, measured, incumbent = _seeded_warm_starts(src, hw, opts, sites)
+    result = driver.run_bo(
+        objective,
+        sites,
+        hw,
+        _search_options(opts, warm, incumbent, sites),
+    )
     # An already-measured configuration is evidence and costs nothing, so it
     # competes with what the block found rather than being discarded.
     for cfg, val in measured:
@@ -276,11 +310,24 @@ def apply_best(src, best_config):
 
 
 def _empty(reason):
-    return {"best_config": None, "best_latency": None, "n_trials": 0,
-            "n_feasible": 0, "stopped_early": False, "history": [],
-            "best_was_incumbent": False, "aborted": None, "fault_kind": None,
-            "learned_ceiling": None, "env_faults": 0, "failures": 0,
-            "replayed": 0, "memory": {}, "refusals": [], "reason": reason}
+    return {
+        "best_config": None,
+        "best_latency": None,
+        "n_trials": 0,
+        "n_feasible": 0,
+        "stopped_early": False,
+        "history": [],
+        "best_was_incumbent": False,
+        "aborted": None,
+        "fault_kind": None,
+        "learned_ceiling": None,
+        "env_faults": 0,
+        "failures": 0,
+        "replayed": 0,
+        "memory": {},
+        "refusals": [],
+        "reason": reason,
+    }
 
 
 def _merge_bounds(op_file):
@@ -299,6 +346,7 @@ def _merge_bounds(op_file):
     try:
         sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
         import swimlane
+
         trace = swimlane.find_trace(os.path.dirname(op_file or ""), os.getcwd())
         return swimlane.subgraph_counts(trace) if trace else {}
     except Exception:
@@ -308,13 +356,15 @@ def _merge_bounds(op_file):
 # space.HW's field name for each chip-envelope key. The two differ because the
 # envelope is named after the chip's own datasheet and HW after what the static
 # check calls the same quantity.
-_HW_FROM_ENVELOPE = (("ub_budget_kb", "ub_kb"),
-                     ("l1_budget_kb", "l1_kb"),
-                     ("l0a_kb", "l0a_kb"),
-                     ("l0b_kb", "l0b_kb"),
-                     ("l0c_kb", "l0c_kb"),
-                     ("cube_cores", "cube_cores"),
-                     ("vector_cores", "vector_cores"))
+_HW_FROM_ENVELOPE = (
+    ("ub_budget_kb", "ub_kb"),
+    ("l1_budget_kb", "l1_kb"),
+    ("l0a_kb", "l0a_kb"),
+    ("l0b_kb", "l0b_kb"),
+    ("l0c_kb", "l0c_kb"),
+    ("cube_cores", "cube_cores"),
+    ("vector_cores", "vector_cores"),
+)
 
 
 def hw_for(op_file, live_tiles=None, envelope=None):
@@ -337,13 +387,15 @@ def hw_for(op_file, live_tiles=None, envelope=None):
     None keeps the defaults, for a caller that has no envelope to hand.
     """
     env = envelope or {}
-    domain = domain_mod.derive(op_file, live_tiles,
-                           ub_budget_kb=env.get("ub_kb", 192))
+    domain = domain_mod.derive(op_file, live_tiles, ub_budget_kb=env.get("ub_kb", 192))
     bounds = _merge_bounds(op_file)
     if bounds:
         domain["subgraph_counts"] = bounds
     kw = {field: env[key] for field, key in _HW_FROM_ENVELOPE if key in env}
-    hw = space.HW(calibrated=False,
-                  dtype_bytes=domain.get("dtype_bytes", 4),
-                  n_live_tiles=domain.get("live_tiles", 0), **kw)
+    hw = space.HW(
+        calibrated=False,
+        dtype_bytes=domain.get("dtype_bytes", 4),
+        n_live_tiles=domain.get("live_tiles", 0),
+        **kw,
+    )
     return hw, domain

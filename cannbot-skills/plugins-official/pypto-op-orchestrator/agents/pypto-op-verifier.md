@@ -64,12 +64,12 @@ For every operator with a decomposition, the layout is:
 
 ```
 custom/<op>/
-├── SPEC.md, API_REPORT.md            
-├── DESIGN.md                         
+├── SPEC.md, API_REPORT.md  
+├── DESIGN.md  
 ├── MEMORY.md                          ← shared narrative ledger (append-only by all agents)
-├── README.md                         
-├── <op>_golden.py                    
-├── <op>_impl.py                      
+├── README.md  
+├── <op>_golden.py  
+├── <op>_impl.py  
 ├── test_<op>.py                       ← YOU produce (E2E test)
 ├── modules/
 │   ├── <op>_module<suffix_k>_golden.py    ← YOU produce when dispatched for scaffolding step A

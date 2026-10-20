@@ -1,3 +1,13 @@
+// ----------------------------------------------------------------------------------------------------------
+// Copyright (c) 2026 Huawei Technologies Co., Ltd.
+// This program is free software, you can redistribute it and/or modify it under the terms and conditions of
+// CANN Open Software License Agreement Version 2.0 (the "License").
+// Please refer to the License for details. You may not use this file except in compliance with the License.
+// THIS SOFTWARE IS PROVIDED ON AN "AS IS" BASIS, WITHOUT WARRANTIES OF ANY KIND, EITHER EXPRESS OR IMPLIED,
+// INCLUDING BUT NOT LIMITED TO NON-INFRINGEMENT, MERCHANTABILITY, OR FITNESS FOR A PARTICULAR PURPOSE.
+// See LICENSE in the root of the software repository for the full text of the License.
+// ----------------------------------------------------------------------------------------------------------
+
 import { type Plugin, tool } from "@opencode-ai/plugin";
 import crypto from "node:crypto";
 import fs from "node:fs";
@@ -38,13 +48,46 @@ const ALLOWED_ACTIONS = new Set<TransitionAction>([
   "rollback_to_stage",
 ]);
 
-/** The AGENTS.md primary runs as "build"; the legacy named primary remains compatible. */
+/**
+ * The AGENTS.md primary runs as "build"; the legacy named primary remains compatible.
+ * Harness compatibility: in "node-as-agent" workflows each stage node runs as the
+ * generic executor/verifier agent, and that node process IS the stage's acting body,
+ * so it must be allowed to write the state machine. These names do not exist in the
+ * classic gym workspace, so gym semantics are unchanged.
+ */
 const ALLOWED_AGENTS = new Set<string>([
   "build",
   "pypto-op-orchestrator",
+  "general-executor",
+  "general-verifier",
 ]);
 
 const DEFAULT_MAX_STAGE = 7;
+
+/**
+ * Resolve a skill script shipped with this plugin across the two supported
+ * workspace layouts. In both layouts this hook lands at
+ * `<workspace>/.opencode/plugins/`, but the skills dir differs:
+ * - gym/opencode layout: skills at `<workspace>/.opencode/skills/` → `../skills/`
+ * - cannbot assembled layout: skills at `<workspace>/.agents/skills/` → `../../.agents/skills/`
+ * The first candidate that exists wins; if neither exists the error lists
+ * every path that was tried.
+ */
+export function resolveSkillScript(scriptRel: string, baseUrl: string): string {
+  const candidates = [
+    new URL(`../skills/${scriptRel}`, baseUrl).pathname,
+    new URL(`../../.agents/skills/${scriptRel}`, baseUrl).pathname,
+  ];
+  for (const candidate of candidates) {
+    if (fs.existsSync(candidate)) return candidate;
+  }
+  throw new Error(
+    `skill script not found: ${scriptRel}. Looked in:\n` +
+    candidates.map((c) => `  - ${c}`).join("\n") +
+    `\nEnsure the pypto skills are assembled into .opencode/skills/ (gym layout) ` +
+    `or .agents/skills/ (cannbot layout).`,
+  );
+}
 
 function parseState(content: string): OrchestratorState {
   const parsed = JSON.parse(content);
@@ -199,10 +242,7 @@ export const PyptoStateTransitionPlugin: Plugin = async (input) => {
     "../hooks/pypto-op-lint/pypto_op_lint.py",
     import.meta.url,
   ).pathname;
-  const designChecker = new URL(
-    "../skills/pypto-op-design/scripts/validate_artifacts.py",
-    import.meta.url,
-  ).pathname;
+  const designCheckerRel = "pypto-op-design/scripts/validate_artifacts.py";
 
   /** Check both design outputs before leaving design or preparing verification.
    * Existing lint remains responsible for API checks and implementation gates.
@@ -214,6 +254,7 @@ export const PyptoStateTransitionPlugin: Plugin = async (input) => {
     phase: string | undefined,
   ): Promise<GateSummary> {
     if (action === "submit_design" || (action === "complete_stage" && (stage === 3 || stage === 4))) {
+      const designChecker = resolveSkillScript(designCheckerRel, import.meta.url);
       const check = await $`python3 ${designChecker} --op-dir ${opDir}`.cwd(baseDir).quiet().nothrow();
       if (check.exitCode !== 0) {
         throw new Error(`Design or module interfaces are incomplete. Re-dispatch pypto-op-architect.\n${check.stdout.toString()}${check.stderr.toString()}`);
@@ -307,12 +348,12 @@ export const PyptoStateTransitionPlugin: Plugin = async (input) => {
           failed_phase: tool.schema.string().optional(),
         },
         execute: async (args, context) => {
-          // ── Permission check: AGENTS.md primary only ──
+          // ── Permission check: AGENTS.md primary or harness generic executor/verifier only ──
           const callerAgent = context?.agent ?? "";
           if (!ALLOWED_AGENTS.has(callerAgent)) {
             throw new Error(
-              `permission denied: state_transition is restricted to the PyPTO classic primary, ` +
-              `but was called by "${callerAgent || "(unknown)"}". ` +
+              `permission denied: state_transition is restricted to the PyPTO classic primary ` +
+              `or the harness generic executor/verifier agent, but was called by "${callerAgent || "(unknown)"}". ` +
               `Subagents must not modify .orchestrator_state.json; return stage results to the orchestrator instead.`,
             );
           }

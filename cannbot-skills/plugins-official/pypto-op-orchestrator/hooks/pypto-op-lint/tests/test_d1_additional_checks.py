@@ -1,7 +1,16 @@
 # -*- coding: utf-8 -*-
-# Copyright (c) Huawei Technologies Co., Ltd. 2024-2025. All rights reserved.
+# ----------------------------------------------------------------------------------------------------------
+# Copyright (c) 2026 Huawei Technologies Co., Ltd.
+# This program is free software, you can redistribute it and/or modify it under the terms and conditions of
+# CANN Open Software License Agreement Version 2.0 (the "License").
+# Please refer to the License for details. You may not use this file except in compliance with the License.
+# THIS SOFTWARE IS PROVIDED ON AN "AS IS" BASIS, WITHOUT WARRANTIES OF ANY KIND, EITHER EXPRESS OR IMPLIED,
+# INCLUDING BUT NOT LIMITED TO NON-INFRINGEMENT, MERCHANTABILITY, OR FITNESS FOR A PARTICULAR PURPOSE.
+# See LICENSE in the root of the software repository for the full text of the License.
+# ----------------------------------------------------------------------------------------------------------
 
 """D1 框架约束合规规则（OL04-OL06, OL25, OL26）补充测试。"""
+
 from pathlib import Path
 
 from .helpers import build_stateless_op_dir, load_lint_module, run_rule, write_file
@@ -100,6 +109,7 @@ def demo_module1_wrapper(x, y):
 
 # ── OL05: kernel 张量参数必须有 pypto.Tensor 类型注解 ──
 
+
 def test_ol05_pass_when_tensor_annotated(tmp_path: Path):
     mod = load_lint_module()
     op_dir = build_stateless_op_dir(tmp_path, "demo")
@@ -125,6 +135,7 @@ def demo_wrapper(x, y):
 
 
 # ── OL06: kernel 内禁用 Python 原生 min()/max() ──
+
 
 def test_ol06_pass_when_no_native_minmax(tmp_path: Path):
     mod = load_lint_module()
@@ -175,6 +186,7 @@ def demo_module1_wrapper(x, y):
 
 # ── OL25: 禁止 pypto.Tensor() 空参数注解 ──
 
+
 def test_ol25_pass_when_tensor_has_args(tmp_path: Path):
     mod = load_lint_module()
     op_dir = build_stateless_op_dir(tmp_path, "demo")
@@ -223,6 +235,7 @@ def demo_module1_wrapper(x, y):
 
 
 # ── OL26: 张量参数必须在非张量参数之前 ──
+
 
 def test_ol26_pass_when_order_correct(tmp_path: Path):
     mod = load_lint_module()

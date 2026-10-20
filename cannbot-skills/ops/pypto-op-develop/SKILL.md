@@ -1,6 +1,6 @@
 ---
 name: pypto-op-develop
-description: PyPTO 算子 impl 编码手册。用于 per-Phase 累计构建 `<op>_module<k>_impl.py`，最后一个 Phase 通过验证后 cleanup 整理出 `<op>_impl.py` + `README.md`。基于 Layer A–L 设计规范，配合 `impl_template.py.tmpl` 模板生成符合规范的 PyPTO 实现代码。触发词：实现算子、写 kernel、编写实现、写 impl、算子编码、code the op、op develop、kernel 实现。
+description: PyPTO 算子 impl 编码手册。用于 per-Phase 累计构建分模块 impl 文件（OP_moduleK_impl.py），最后一个 Phase 通过验证后 cleanup 整理出 OP_impl.py + README.md。基于 Layer A–L 设计规范，配合 `impl_template.py.tmpl` 模板生成符合规范的 PyPTO 实现代码。触发：实现算子、写 kernel、编写实现、写 impl、算子编码、code the op、op develop、kernel 实现。
 ---
 
 # PyPTO 算子 impl 实现

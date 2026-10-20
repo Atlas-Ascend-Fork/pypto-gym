@@ -26,7 +26,7 @@ import unittest
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent))
-from _support import SCRIPTS_DIR, harness  # noqa: E402
+from _support import harness  # noqa: E402
 
 
 PARAMS = {"vec#0": {"d0": 16384}}
@@ -39,7 +39,6 @@ def _observed():
 
 
 class RefusalScopeTest(unittest.TestCase):
-
     def test_a_first_sighting_is_scoped_to_its_structure(self):
         rows = harness.merge_refusals([], _observed(), "structA")
         self.assertEqual(rows[0]["scope"], "structure")
@@ -95,8 +94,14 @@ class RefusalScopeTest(unittest.TestCase):
         self.assertEqual(harness.refusals_for_structure(rows, "structA"), [])
 
     def test_malformed_rows_are_dropped(self):
-        st = {"bayesian_optimization_refusals": [
-            {"params": PARAMS}, {"sig": SIG}, {}, {"params": PARAMS, "sig": SIG}]}
+        st = {
+            "bayesian_optimization_refusals": [
+                {"params": PARAMS},
+                {"sig": SIG},
+                {},
+                {"params": PARAMS, "sig": SIG},
+            ]
+        }
         self.assertEqual(len(harness.stored_refusals(st)), 1)
 
     def test_the_state_distinguishes_the_two_scopes(self):

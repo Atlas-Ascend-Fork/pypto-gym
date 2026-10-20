@@ -1,3 +1,13 @@
+// ----------------------------------------------------------------------------------------------------------
+// Copyright (c) 2026 Huawei Technologies Co., Ltd.
+// This program is free software, you can redistribute it and/or modify it under the terms and conditions of
+// CANN Open Software License Agreement Version 2.0 (the "License").
+// Please refer to the License for details. You may not use this file except in compliance with the License.
+// THIS SOFTWARE IS PROVIDED ON AN "AS IS" BASIS, WITHOUT WARRANTIES OF ANY KIND, EITHER EXPRESS OR IMPLIED,
+// INCLUDING BUT NOT LIMITED TO NON-INFRINGEMENT, MERCHANTABILITY, OR FITNESS FOR A PARTICULAR PURPOSE.
+// See LICENSE in the root of the software repository for the full text of the License.
+// ----------------------------------------------------------------------------------------------------------
+
 import { describe, expect, test } from "bun:test";
 import { $ } from "bun";
 import { PyptoOpLintPlugin } from "../pypto-op-lint";
@@ -157,6 +167,34 @@ test("runs lint for PyPTO subagents", async () => {
       { args: { command: "cat > custom/foo/foo_impl.py <<EOF\nimport pypto\nEOF" } } as never,
     ),
   ).rejects.toThrow("禁止通过 bash/shell 写入算子产物文件");
+});
+
+test("runs lint for harness generic executor/verifier agents", async () => {
+  const plugin = await PyptoOpLintPlugin({
+    $,
+    client: { app: { log: async () => {} } },
+    directory: process.cwd(),
+    worktree: process.cwd(),
+    project: {},
+  } as never);
+  const before = plugin["tool.execute.before"];
+
+  for (const agent of ["general-executor", "general-verifier"]) {
+    const sessionID = `session-${agent}`;
+    await rememberAgent(plugin, agent, sessionID);
+    await expect(
+      before?.(
+        { tool: "bash", sessionID } as never,
+        { args: { command: "cat > custom/foo/foo_impl.py <<EOF\nimport pypto\nEOF" } } as never,
+      ),
+    ).rejects.toThrow("禁止通过 bash/shell 写入算子产物文件");
+    await expect(
+      before?.(
+        { tool: "bash", sessionID } as never,
+        { args: { command: "echo '{}' > /tmp/qat/.orchestrator_state.json" } } as never,
+      ),
+    ).rejects.toThrow("禁止通过 bash/shell 直接写入");
+  }
 });
 
 test("agent skip state is isolated by session", async () => {

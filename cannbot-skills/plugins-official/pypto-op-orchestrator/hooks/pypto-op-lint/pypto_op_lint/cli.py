@@ -1,6 +1,14 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
-# Copyright (c) Huawei Technologies Co., Ltd. 2024-2026. All rights reserved.
+# ----------------------------------------------------------------------------------------------------------
+# Copyright (c) 2026 Huawei Technologies Co., Ltd.
+# This program is free software, you can redistribute it and/or modify it under the terms and conditions of
+# CANN Open Software License Agreement Version 2.0 (the "License").
+# Please refer to the License for details. You may not use this file except in compliance with the License.
+# THIS SOFTWARE IS PROVIDED ON AN "AS IS" BASIS, WITHOUT WARRANTIES OF ANY KIND, EITHER EXPRESS OR IMPLIED,
+# INCLUDING BUT NOT LIMITED TO NON-INFRINGEMENT, MERCHANTABILITY, OR FITNESS FOR A PARTICULAR PURPOSE.
+# See LICENSE in the root of the software repository for the full text of the License.
+# ----------------------------------------------------------------------------------------------------------
 
 from __future__ import annotations
 
@@ -96,7 +104,9 @@ def cmd_check_phase_gate(op_dir: str, phase: str, stage: int = 5) -> int:
     for rule in ctx.rules:
         target = rule.get("target")
         rid = rule["id"]
-        is_phase_rule = target == "impl" or (target == "gate" and rid in phase_gate_allow)
+        is_phase_rule = target == "impl" or (
+            target == "gate" and rid in phase_gate_allow
+        )
         if not is_phase_rule:
             continue
         if stage not in rule.get("stages", []):
@@ -143,34 +153,45 @@ def cmd_check_design_gate(op_dir: str, stage: int = 4) -> int:
 
 
 def _build_parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(description="PyPTO operator development deterministic check tool")
-    parser.add_argument("--hook",
-                        choices=["post-edit", "post-bash",
-                                 "pre-edit-backup", "stop"],
-                        help="Hook mode (read JSON from stdin)")
-    parser.add_argument("--lint-impl", action="store_true",
-                        help="Check impl files")
-    parser.add_argument("--lint-golden", action="store_true",
-                        help="Check golden files")
-    parser.add_argument("--lint-test", action="store_true",
-                        help="Check test files")
-    parser.add_argument("--lint-consistency", action="store_true",
-                        help="Check cross-file consistency (D5 rules)")
-    parser.add_argument("--check-gate", action="store_true",
-                        help="Check stage gates")
-    parser.add_argument("--check-phase-gate", action="store_true",
-                        help="Check Stage 5 phase gate (scan only current phase cumulative module impls)")
-    parser.add_argument("--check-design-gate", action="store_true",
-                        help="Check Stage 4 design gate (after Architect, before Verifier)")
-    parser.add_argument("--phase",
-                        help="Stage 5 phase ID (e.g. M1, M2, ...), used with --check-phase-gate")
+    parser = argparse.ArgumentParser(
+        description="PyPTO operator development deterministic check tool"
+    )
+    parser.add_argument(
+        "--hook",
+        choices=["post-edit", "post-bash", "pre-edit-backup", "stop"],
+        help="Hook mode (read JSON from stdin)",
+    )
+    parser.add_argument("--lint-impl", action="store_true", help="Check impl files")
+    parser.add_argument("--lint-golden", action="store_true", help="Check golden files")
+    parser.add_argument("--lint-test", action="store_true", help="Check test files")
+    parser.add_argument(
+        "--lint-consistency",
+        action="store_true",
+        help="Check cross-file consistency (D5 rules)",
+    )
+    parser.add_argument("--check-gate", action="store_true", help="Check stage gates")
+    parser.add_argument(
+        "--check-phase-gate",
+        action="store_true",
+        help="Check Stage 5 phase gate (scan only current phase cumulative module impls)",
+    )
+    parser.add_argument(
+        "--check-design-gate",
+        action="store_true",
+        help="Check Stage 4 design gate (after Architect, before Verifier)",
+    )
+    parser.add_argument(
+        "--phase",
+        help="Stage 5 phase ID (e.g. M1, M2, ...), used with --check-phase-gate",
+    )
     parser.add_argument("--op-dir", help="Operator working directory")
-    parser.add_argument("--stage", type=int, default=5,
-                        help="Current stage (1-7)")
+    parser.add_argument("--stage", type=int, default=5, help="Current stage (1-7)")
     return parser
 
 
-def _require_op_dir(parser: argparse.ArgumentParser, args: argparse.Namespace, option: str) -> str:
+def _require_op_dir(
+    parser: argparse.ArgumentParser, args: argparse.Namespace, option: str
+) -> str:
     if not args.op_dir:
         parser.error(f"{option} requires --op-dir")
     return args.op_dir

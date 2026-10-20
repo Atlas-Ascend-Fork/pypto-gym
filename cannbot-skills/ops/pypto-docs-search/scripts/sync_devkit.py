@@ -1,5 +1,14 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
+# ----------------------------------------------------------------------------------------------------------
+# Copyright (c) 2026 Huawei Technologies Co., Ltd.
+# This program is free software, you can redistribute it and/or modify it under the terms and conditions of
+# CANN Open Software License Agreement Version 2.0 (the "License").
+# Please refer to the License for details. You may not use this file except in compliance with the License.
+# THIS SOFTWARE IS PROVIDED ON AN "AS IS" BASIS, WITHOUT WARRANTIES OF ANY KIND, EITHER EXPRESS OR IMPLIED,
+# INCLUDING BUT NOT LIMITED TO NON-INFRINGEMENT, MERCHANTABILITY, OR FITNESS FOR A PARTICULAR PURPOSE.
+# See LICENSE in the root of the software repository for the full text of the License.
+# ----------------------------------------------------------------------------------------------------------
 """装配 PyPTO 算子开发资源到本地缓存：docs（主仓）、ops/tests（算子仓）。
 
 工作树已含某类资源则符号链接复用、免重复下载；否则 sparse-checkout 下载。
@@ -10,6 +19,7 @@
     PYPTO_SRC_URL / PYPTO_SRC              docs 主仓：远程 URL / 本地已有工作树
     PYPTO_GYM_URL / PYPTO_GYM_SRC          ops+tests 算子仓：远程 URL / 本地已有工作树
 """
+
 import argparse
 import json
 import logging
@@ -95,8 +105,10 @@ def relink(dst, src):
 
 def git(args, cwd=None):
     return subprocess.run(
-        ["git"] + args, cwd=(str(cwd) if cwd else None),
-        stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+        ["git"] + args,
+        cwd=(str(cwd) if cwd else None),
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
     ).returncode
 
 
@@ -113,7 +125,10 @@ def _link_resources(request, base, manifest, mode, source_for):
 
 def _reuse_local(request, base, manifest):
     _link_resources(
-        request, base, manifest, "symlink",
+        request,
+        base,
+        manifest,
+        "symlink",
         lambda _sub, source: str(source),
     )
     LOGGER.info("[reuse] %s ← %s", request.tag, base)
@@ -121,16 +136,26 @@ def _reuse_local(request, base, manifest):
 
 def _checkout_sparse_repo(request, tmp):
     clone_args = [
-        "clone", "--depth", "1", "--filter=blob:none", "--no-checkout",
-        request.url, str(tmp),
+        "clone",
+        "--depth",
+        "1",
+        "--filter=blob:none",
+        "--no-checkout",
+        request.url,
+        str(tmp),
     ]
     if git(clone_args) != 0:
-        LOGGER.error("[download failed] %s (set corresponding *_URL to override, or check the network)", request.url)
+        LOGGER.error(
+            "[download failed] %s (set corresponding *_URL to override, or check the network)",
+            request.url,
+        )
         return 4
     # 自定义 Git 模板可能省略 info；旧版 Git 的 sparse-checkout 不会补建。
     (tmp / ".git/info").mkdir(parents=True, exist_ok=True)
-    if (git(["config", "core.sparseCheckout", "true"], cwd=tmp) != 0
-            or git(["config", "core.sparseCheckoutCone", "true"], cwd=tmp) != 0):
+    if (
+        git(["config", "core.sparseCheckout", "true"], cwd=tmp) != 0
+        or git(["config", "core.sparseCheckoutCone", "true"], cwd=tmp) != 0
+    ):
         LOGGER.error("[sparse init failed] %s", request.tag)
         return 4
     subs = [sub for _name, sub in request.pairs]
@@ -158,12 +183,21 @@ def _download_resources(request, manifest):
     result = _checkout_sparse_repo(request, tmp)
     if result != 0:
         return result
-    revision = subprocess.run(
-        ["git", "rev-parse", "--short", "HEAD"], cwd=str(tmp),
-        stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, text=True,
-    ).stdout.strip() or "unknown"
+    revision = (
+        subprocess.run(
+            ["git", "rev-parse", "--short", "HEAD"],
+            cwd=str(tmp),
+            stdout=subprocess.PIPE,
+            stderr=subprocess.DEVNULL,
+            text=True,
+        ).stdout.strip()
+        or "unknown"
+    )
     _link_resources(
-        request, tmp, manifest, "download@" + revision,
+        request,
+        tmp,
+        manifest,
+        "download@" + revision,
         lambda sub, _source: f"{request.url}:{sub}",
     )
     LOGGER.info("[download] %s ← %s@%s", request.tag, request.url, revision)
@@ -187,13 +221,22 @@ def _provision_requests(devkit, pin):
     gym_url = os.environ.get("PYPTO_GYM_URL", "https://gitcode.com/cann/pypto-gym.git")
     return [
         ProvisionRequest(
-            devkit, "pypto", "docs/zh/api", src_url,
-            os.environ.get("PYPTO_SRC", ""), [("docs", "docs/zh")], pin,
+            devkit,
+            "pypto",
+            "docs/zh/api",
+            src_url,
+            os.environ.get("PYPTO_SRC", ""),
+            [("docs", "docs/zh")],
+            pin,
         ),
         ProvisionRequest(
-            devkit, "gym", "ops", gym_url,
+            devkit,
+            "gym",
+            "ops",
+            gym_url,
             os.environ.get("PYPTO_GYM_SRC", ""),
-            [("ops", "ops"), ("tests", "tests/ops")], pin,
+            [("ops", "ops"), ("tests", "tests/ops")],
+            pin,
         ),
     ]
 
@@ -220,7 +263,8 @@ def main(argv=None):
             return rc
 
     (devkit / "MANIFEST.json").write_text(
-        json.dumps(manifest, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+        json.dumps(manifest, ensure_ascii=False, indent=2) + "\n", encoding="utf-8"
+    )
     dirs = " ".join(sorted(name + "/" for name in manifest))
     LOGGER.info("[done] Cache: %s (%s + MANIFEST.json)", devkit, dirs)
     return 0

@@ -1,7 +1,15 @@
 #!/usr/bin/env python3
 # coding: utf-8
-# Copyright (c) Huawei Technologies Co., Ltd. 2024-2026. All rights reserved.
-# -----------------------------------------------------------------------------
+# ----------------------------------------------------------------------------------------------------------
+# Copyright (c) 2026 Huawei Technologies Co., Ltd.
+# This program is free software, you can redistribute it and/or modify it under the terms and conditions of
+# CANN Open Software License Agreement Version 2.0 (the "License").
+# Please refer to the License for details. You may not use this file except in compliance with the License.
+# THIS SOFTWARE IS PROVIDED ON AN "AS IS" BASIS, WITHOUT WARRANTIES OF ANY KIND, EITHER EXPRESS OR IMPLIED,
+# INCLUDING BUT NOT LIMITED TO NON-INFRINGEMENT, MERCHANTABILITY, OR FITNESS FOR A PARTICULAR PURPOSE.
+# See LICENSE in the root of the software repository for the full text of the License.
+# ----------------------------------------------------------------------------------------------------------
+
 # snapshot_manifest_schema.py
 #
 # Validates a snapshot_manifest.yaml against the schema documented in
@@ -43,6 +51,7 @@ SUPPORTED_DTYPES = {"float32", "float16", "bfloat16", "int32", "int64", "bool"}
 # Errors
 # -----------------------------------------------------------------------------
 
+
 class SnapshotManifestError(ValueError):
     """Raised when a snapshot manifest fails schema validation."""
 
@@ -50,6 +59,7 @@ class SnapshotManifestError(ValueError):
 # -----------------------------------------------------------------------------
 # Validators
 # -----------------------------------------------------------------------------
+
 
 def _require(cond: bool, msg: str) -> None:
     if not cond:
@@ -63,31 +73,43 @@ def _validate_intermediate(idx: int, entry: Dict[str, Any], op: str) -> Dict[str
     _require("probe_point" in entry, f"intermediates[{idx}] missing 'probe_point'")
 
     name = entry["name"]
-    _require(isinstance(name, str) and name.isidentifier(),
-             f"intermediates[{idx}].name must be a valid Python identifier, got {name!r}")
-    _require(not name.startswith("inspection_"),
-             f"intermediates[{idx}].name must NOT start with 'inspection_' "
-             f"(the generator adds that prefix). Got {name!r}.")
+    _require(
+        isinstance(name, str) and name.isidentifier(),
+        f"intermediates[{idx}].name must be a valid Python identifier, got {name!r}",
+    )
+    _require(
+        not name.startswith("inspection_"),
+        f"intermediates[{idx}].name must NOT start with 'inspection_' "
+        f"(the generator adds that prefix). Got {name!r}.",
+    )
 
     shape = entry["shape"]
-    _require(isinstance(shape, list) and all(isinstance(d, (str, int)) for d in shape),
-             f"intermediates[{idx}].shape must be a list of int|str, got {shape!r}")
+    _require(
+        isinstance(shape, list) and all(isinstance(d, (str, int)) for d in shape),
+        f"intermediates[{idx}].shape must be a list of int|str, got {shape!r}",
+    )
 
     pp = entry["probe_point"]
-    _require(pp in PROBE_POINTS,
-             f"intermediates[{idx}].probe_point must be one of {sorted(PROBE_POINTS)}, got {pp!r}")
+    _require(
+        pp in PROBE_POINTS,
+        f"intermediates[{idx}].probe_point must be one of {sorted(PROBE_POINTS)}, got {pp!r}",
+    )
 
     dtype = entry.get("dtype", "float32")
-    _require(dtype in SUPPORTED_DTYPES,
-             f"intermediates[{idx}].dtype must be one of {sorted(SUPPORTED_DTYPES)}, got {dtype!r}")
+    _require(
+        dtype in SUPPORTED_DTYPES,
+        f"intermediates[{idx}].dtype must be one of {sorted(SUPPORTED_DTYPES)}, got {dtype!r}",
+    )
 
     # Optional golden-side expression for the probe point. If absent, the
     # generator will stub the golden companion and require @pypto-op-debugger to fill it in
     # manually — emit a warning later.
     golden_expression = entry.get("golden_expression")
     if golden_expression is not None:
-        _require(isinstance(golden_expression, str),
-                 f"intermediates[{idx}].golden_expression must be a string (torch expression)")
+        _require(
+            isinstance(golden_expression, str),
+            f"intermediates[{idx}].golden_expression must be a string (torch expression)",
+        )
 
     return {
         "name": name,
@@ -96,6 +118,36 @@ def _validate_intermediate(idx: int, entry: Dict[str, Any], op: str) -> Dict[str
         "dtype": dtype,
         "golden_expression": golden_expression,
     }
+
+
+def _validate_top_fields(raw: Dict[str, Any]) -> tuple:
+    """Validate and normalize the scalar top-level fields of a manifest."""
+    _require("op" in raw, "missing 'op'")
+    _require("module" in raw, "missing 'module'")
+    _require("case" in raw, "missing 'case'")
+    _require("intermediates" in raw, "missing 'intermediates'")
+
+    op = raw["op"]
+    _require(
+        isinstance(op, str) and op.isidentifier(),
+        f"'op' must be a valid Python identifier, got {op!r}",
+    )
+
+    module = raw["module"]
+    _require(
+        isinstance(module, str) and module.startswith("M") and module[1:].isdigit(),
+        f"'module' must match 'M<digits>' (e.g. 'M2'), got {module!r}",
+    )
+
+    case = raw["case"]
+    _require(isinstance(case, str), f"'case' must be a string, got {case!r}")
+
+    modes = raw.get("modes", ["sim", "npu"])
+    _require(
+        isinstance(modes, list) and all(m in SUPPORTED_MODES for m in modes),
+        f"'modes' must be a subset of {sorted(SUPPORTED_MODES)}, got {modes!r}",
+    )
+    return op, module, case, modes
 
 
 def load_manifest(path: str | Path) -> Dict[str, Any]:
@@ -119,35 +171,27 @@ def load_manifest(path: str | Path) -> Dict[str, Any]:
     _require(path.exists(), f"snapshot manifest not found at {path}")
     with path.open("r") as f:
         raw = yaml.safe_load(f)
-    _require(isinstance(raw, dict), f"snapshot manifest root must be a mapping, got {type(raw).__name__}")
+    _require(
+        isinstance(raw, dict),
+        f"snapshot manifest root must be a mapping, got {type(raw).__name__}",
+    )
 
-    _require("op" in raw, "missing 'op'")
-    _require("module" in raw, "missing 'module'")
-    _require("case" in raw, "missing 'case'")
-    _require("intermediates" in raw, "missing 'intermediates'")
-
-    op = raw["op"]
-    _require(isinstance(op, str) and op.isidentifier(),
-             f"'op' must be a valid Python identifier, got {op!r}")
-
-    module = raw["module"]
-    _require(isinstance(module, str) and module.startswith("M") and module[1:].isdigit(),
-             f"'module' must match 'M<digits>' (e.g. 'M2'), got {module!r}")
-
-    case = raw["case"]
-    _require(isinstance(case, str), f"'case' must be a string, got {case!r}")
-
-    modes = raw.get("modes", ["sim", "npu"])
-    _require(isinstance(modes, list) and all(m in SUPPORTED_MODES for m in modes),
-             f"'modes' must be a subset of {sorted(SUPPORTED_MODES)}, got {modes!r}")
+    op, module, case, modes = _validate_top_fields(raw)
 
     intermediates_raw = raw["intermediates"]
-    _require(isinstance(intermediates_raw, list) and bool(intermediates_raw),
-             "'intermediates' must be a non-empty list")
-    intermediates = [_validate_intermediate(i, e, op) for i, e in enumerate(intermediates_raw)]
+    _require(
+        isinstance(intermediates_raw, list) and bool(intermediates_raw),
+        "'intermediates' must be a non-empty list",
+    )
+    intermediates = [
+        _validate_intermediate(index, entry, op)
+        for index, entry in enumerate(intermediates_raw)
+    ]
     names = [e["name"] for e in intermediates]
-    _require(len(names) == len(set(names)),
-             f"intermediates have duplicate names: {[n for n in names if names.count(n) > 1]}")
+    _require(
+        len(names) == len(set(names)),
+        f"intermediates have duplicate names: {[n for n in names if names.count(n) > 1]}",
+    )
 
     return {
         "op": op,
@@ -165,11 +209,14 @@ def load_manifest(path: str | Path) -> Dict[str, Any]:
 # CLI entry point — validate a manifest standalone
 # -----------------------------------------------------------------------------
 
+
 def _main() -> int:
     logging.basicConfig(level=logging.INFO, format="%(message)s")
     ap = argparse.ArgumentParser(description="Validate a snapshot manifest YAML.")
     ap.add_argument("manifest", help="path to snapshot_manifest.yaml")
-    ap.add_argument("--print", action="store_true", help="print normalized manifest as JSON")
+    ap.add_argument(
+        "--print", action="store_true", help="print normalized manifest as JSON"
+    )
     args = ap.parse_args()
     try:
         m = load_manifest(args.manifest)
@@ -178,7 +225,11 @@ def _main() -> int:
         return 1
     logging.info(
         "[OK] manifest for op=%s module=%s case=%s intermediates=%d modes=%s",
-        m["op"], m["module"], m["case"], len(m["intermediates"]), m["modes"],
+        m["op"],
+        m["module"],
+        m["case"],
+        len(m["intermediates"]),
+        m["modes"],
     )
     if args.print:
         logging.info(json.dumps(m, indent=2, default=str))

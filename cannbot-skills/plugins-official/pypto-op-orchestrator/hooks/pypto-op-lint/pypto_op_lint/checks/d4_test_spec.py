@@ -1,5 +1,13 @@
 # -*- coding: utf-8 -*-
-# Copyright (c) Huawei Technologies Co., Ltd. 2024-2025. All rights reserved.
+# ----------------------------------------------------------------------------------------------------------
+# Copyright (c) 2026 Huawei Technologies Co., Ltd.
+# This program is free software, you can redistribute it and/or modify it under the terms and conditions of
+# CANN Open Software License Agreement Version 2.0 (the "License").
+# Please refer to the License for details. You may not use this file except in compliance with the License.
+# THIS SOFTWARE IS PROVIDED ON AN "AS IS" BASIS, WITHOUT WARRANTIES OF ANY KIND, EITHER EXPRESS OR IMPLIED,
+# INCLUDING BUT NOT LIMITED TO NON-INFRINGEMENT, MERCHANTABILITY, OR FITNESS FOR A PARTICULAR PURPOSE.
+# See LICENSE in the root of the software repository for the full text of the License.
+# ----------------------------------------------------------------------------------------------------------
 
 from __future__ import annotations
 
@@ -32,11 +40,15 @@ def check_ol19(ctx: CheckContext) -> Finding:
                 has_compare = True
                 break
     if not has_compare:
-        return ctx.make_finding("OL19", "FAIL",
+        return ctx.make_finding(
+            "OL19",
+            "FAIL",
             "no assert_allclose / detailed_tensor_compare call found, handwritten assert with max_diff is forbidden",
-            file=test_file)
-    return ctx.make_finding("OL19", "PASS",
-        "uses assert_allclose / detailed_tensor_compare", file=test_file)
+            file=test_file,
+        )
+    return ctx.make_finding(
+        "OL19", "PASS", "uses assert_allclose / detailed_tensor_compare", file=test_file
+    )
 
 
 @register("OL20")
@@ -49,15 +61,20 @@ def check_ol20(ctx: CheckContext) -> Finding:
     has_device_id = "TILE_FWK_DEVICE_ID" in source
     has_set_device = "set_device" in source
     if has_device_id and has_set_device:
-        return ctx.make_finding("OL20", "PASS",
-            "found TILE_FWK_DEVICE_ID handling and set_device call", file=test_file)
+        return ctx.make_finding(
+            "OL20",
+            "PASS",
+            "found TILE_FWK_DEVICE_ID handling and set_device call",
+            file=test_file,
+        )
     missing = []
     if not has_device_id:
         missing.append("TILE_FWK_DEVICE_ID env var handling")
     if not has_set_device:
         missing.append("set_device call")
-    return ctx.make_finding("OL20", "FAIL",
-        f"Missing: {', '.join(missing)}", file=test_file)
+    return ctx.make_finding(
+        "OL20", "FAIL", f"Missing: {', '.join(missing)}", file=test_file
+    )
 
 
 @register("OL21")
@@ -69,7 +86,9 @@ def check_ol21(ctx: CheckContext) -> Finding:
         return ctx.make_finding("OL21", "SKIP", f"{test_file} does not exist")
     tree = ctx.parse_file(test_file)
     if tree is None:
-        return ctx.make_finding("OL21", "SKIP", f"{test_file} does not exist or cannot be parsed")
+        return ctx.make_finding(
+            "OL21", "SKIP", f"{test_file} does not exist or cannot be parsed"
+        )
     has_level0, has_level1 = _has_test_level_markers(tree, source)
     missing = []
     if not has_level0:
@@ -77,16 +96,20 @@ def check_ol21(ctx: CheckContext) -> Finding:
     if not has_level1:
         missing.append("level1")
     if missing:
-        return ctx.make_finding("OL21", "FAIL",
+        return ctx.make_finding(
+            "OL21",
+            "FAIL",
             f"Missing test levels: {', '.join(missing)}."
             "Compliant naming (function name containing any of the following substrings is acceptable): "
             "level0 → `_l0` or `level0`, level1 → `_l1` or `level1`; "
             f"e.g., `def test_{ctx.op_name}_l0_basic():` and "
             f"`def test_{ctx.op_name}_l1_basic():`."
             "(functional_P0 / performance_P0 naming is also acceptable: func_p0 / perf_p0)",
-            file=test_file)
-    return ctx.make_finding("OL21", "PASS",
-        "contains Level 0 and Level 1 tests", file=test_file)
+            file=test_file,
+        )
+    return ctx.make_finding(
+        "OL21", "PASS", "contains Level 0 and Level 1 tests", file=test_file
+    )
 
 
 @register("OL22")
@@ -97,11 +120,15 @@ def check_ol22(ctx: CheckContext) -> Finding:
     if not source:
         return ctx.make_finding("OL22", "SKIP", f"{test_file} does not exist")
     if "manual_seed" in source:
-        return ctx.make_finding("OL22", "PASS",
-            "found manual_seed setting", file=test_file)
-    return ctx.make_finding("OL22", "WARN",
+        return ctx.make_finding(
+            "OL22", "PASS", "found manual_seed setting", file=test_file
+        )
+    return ctx.make_finding(
+        "OL22",
+        "WARN",
         "torch.manual_seed not set; explicit setting is recommended to ensure reproducible tests",
-        file=test_file)
+        file=test_file,
+    )
 
 
 # =============================================================================
@@ -137,7 +164,11 @@ def _ol60_test_failure(ctx, test_file, impl_stems):
             continue
         for entry_name in names:
             failure = _ol60_entry_failure(
-                ctx, test_file, impl_stem, entry_name, graph,
+                ctx,
+                test_file,
+                impl_stem,
+                entry_name,
+                graph,
             )
             if failure is not None:
                 return failure, True
@@ -383,8 +414,11 @@ def check_ol42(ctx: CheckContext) -> Finding:
 
     # 检测是否有 NPU 环境
     if not _check_npu_available():
-        return ctx.make_finding("OL42", "SKIP",
-            "no NPU environment detected (npu-smi unavailable), skipping sim mode check")
+        return ctx.make_finding(
+            "OL42",
+            "SKIP",
+            "no NPU environment detected (npu-smi unavailable), skipping sim mode check",
+        )
 
     # 在有 NPU 的环境下，检查是否硬编码了 sim 模式
     problems = []
@@ -401,8 +435,12 @@ def check_ol42(ctx: CheckContext) -> Finding:
             problems.append(f"L{i}: run_mode hardcoded to sim")
 
     if problems:
-        return ctx.make_finding("OL42", "FAIL",
+        return ctx.make_finding(
+            "OL42",
+            "FAIL",
             f"sim mode should not be used under an NPU environment: {'; '.join(problems)}",
-            file=f"test_{ctx.op_name}.py")
-    return ctx.make_finding("OL42", "PASS",
-        "no sim mode hardcoding found", file=f"test_{ctx.op_name}.py")
+            file=f"test_{ctx.op_name}.py",
+        )
+    return ctx.make_finding(
+        "OL42", "PASS", "no sim mode hardcoding found", file=f"test_{ctx.op_name}.py"
+    )
