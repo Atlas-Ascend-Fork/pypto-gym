@@ -55,6 +55,41 @@ NPU 端到端用例在无设备时自动跳过（`@requires_npu`）。用例矩�
 （T=64 2.08×、T=16 1.82×、T=512 1.76×）；`T ≥ 4096` 融合约 **慢 8–15%**（T=4096 0.92×、T=8192 0.88×），
 故 `> FUSED_T_MAX` 走两 kernel。
 
+### 3.1 管线占用（MFU / MTE）
+
+采集：`msprof --ai-core=on --aic-mode=task-based --aic-metrics=PipeUtilization --aic-freq=100
+--task-time=on --ascendcl=on`，每个 case 单进程单独采集（使采到的都是目标 kernel 的 warm 稳态），
+warm-up 后连采 12 次取中位；单卡独占窗口内采集，Task Duration 与上表一致。
+
+指标口径：`aic_mac_ratio` = Cube MAC 管线 cycle 占比（MFU 代理）；`aic_mte1/2/3_ratio` =
+Cube 侧 MTE1(L1→L0A/L0B) / MTE2(GM→L1) / MTE3(L0C→GM) 占比；`aiv_vec_ratio` /
+`aiv_mte2_ratio` / `aiv_scalar_ratio` = Vector 侧 VEC / MTE2 / Scalar 占比；
+`cube%` = `cube_utilization(%)`。判定阈值：`*_mte2_ratio > 50%` = MTE2 Bound；
+`aiv_vec_ratio > 50%` = VEC Bound；`ai*_scalar_ratio > 30%` = SCALAR Bound；
+`aic_fixpipe_ratio > 15%` = 地址未对齐。
+
+| case | 核 | dur (µs) | MAC(MFU) | MTE1 | MTE2 | MTE3 | FixPipe | Cube-Scalar | VEC | VEC-MTE2 | VEC-Scalar | cube% | 判定 |
+|---|---|---|---|---|---|---|---|---|---|---|---|---|---|
+| decode | fused | 18.0 | 0.045 | 0.078 | 0.110 | 0.0 | 0.001 | 0.123 | 0.022 | 0.031 | 0.119 | 79.8 | 核未打满 / 固定开销主导 |
+| wide | fused | 82.8 | 0.386 | 0.660 | **0.945** | 0.0 | 0.014 | 0.408 | 0.142 | 0.026 | 0.185 | 64.9 | MTE2 Bound |
+| prefill | projection | 495.4 | 0.363 | 0.567 | **0.998** | 0.0 | 0.017 | 0.466 | – | – | – | 94.0 | MTE2 Bound |
+| prefill | postprocess | 142.9 | – | – | – | – | – | – | **0.694** | 0.091 | 0.646 | 0.0 | VEC / SCALAR Bound |
+| combined | projection | 466.0 | 0.370 | 0.585 | **0.998** | 0.0 | 0.017 | 0.472 | – | – | – | 98.1 | MTE2 Bound |
+| combined | postprocess | 168.0 | – | – | – | – | – | – | **0.651** | 0.077 | 0.696 | 0.0 | VEC / SCALAR Bound |
+
+- **投影（Cube）**：`MTE2≈1.0` → **MTE2-bound**，瓶颈是 GM→L1 搬入 `latent`/`wk`（K 循环按
+  `base_k` 重读，K=7168）而非 Cube 算力，`MAC≈0.37`；`MTE3=0`（L0C→GM 写回未饱和）、
+  `FixPipe≈0.017`（<15%，搬入地址对齐良好），与 §4.1 的访存估算一致。
+- **后处理（Vector）**：`VEC≈0.65–0.69`、`VEC-Scalar≈0.65–0.70` → **VEC / SCALAR Bound**；
+  `VEC-MTE2≈0.08`（低，非访存受限），瓶颈是 SIMT 逐行的 RMSNorm/RoPE/MXFP4 标量+向量指令链。
+- **融合（decode/wide）**：`wide` 与投影同属 **MTE2 Bound**；`decode`（T=16）cube tile 仅
+  `ceil(16/16)·4 = 4` 个、各占比均低（`MAC 0.045`）→ **核未打满、下发/固定开销主导**，与
+  该 case 的 e2e（0.781 ms）远大于 kernel（18 µs）一致。
+- `MTE3` 与 `FixPipe` 在所有核上恒 ≈0：写回路径（cache scatter、L0C→GM）不是瓶颈。
+
+> 本机为共享 2 卡环境，以上为单卡独占窗口内的 warm 稳态中位值；复采需在空闲卡上使用同一
+> msprof 配置。
+
 ## 4. 理论评估与对比
 
 ### 4.1 计算量与访存量（模型规格 H=7168, D=512, 每 token）
@@ -103,4 +138,5 @@ NPU 端到端用例在无设备时自动跳过（`@requires_npu`）。用例矩�
 
 - 实现/设计：`op_kernel/indexer_prologue_k.py`、`DESIGN.md`。
 - 精度基准：`tests/assets/indexer_prologue_k_golden.py`；用例：`tests/test_indexer_prologue_k.py`（60 passed）。
-- 性能采集脚本（会话产物，未入库）：`proj/post/e2e` 分段、`grid sweep`、`fused vs two`。
+- 性能采集脚本（会话产物，未入库）：`proj/post/e2e` 分段、`grid sweep`、`fused vs two`；
+  管线占用（§3.1）由 `msprof --aic-mode=task-based --aic-metrics=PipeUtilization` 按 case 单独采集（每 case warm 后 12 次取中位）。

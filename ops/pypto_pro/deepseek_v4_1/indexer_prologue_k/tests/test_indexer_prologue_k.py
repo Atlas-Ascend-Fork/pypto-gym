@@ -23,13 +23,15 @@ import numpy as np
 import pytest
 import torch
 
-_HERE = os.path.dirname(os.path.abspath(__file__))
-# 加入仓库 src 以导入 PyPTO-Pro kernel（tests/ 上溯 6 级到仓库 src）。
-sys.path.insert(0, os.path.join(_HERE, "..", "..", "..", "..", "..", ".."))
-# golden 位于 tests/assets/。
-sys.path.insert(0, os.path.join(_HERE, "assets"))
+_THIS_DIR = os.path.dirname(os.path.abspath(__file__))
+_OP_DIR = os.path.dirname(_THIS_DIR)
+# 加入本测试目录、golden（tests/assets/）与 kernel（op_kernel/）。
+for _path in (_THIS_DIR, os.path.join(_THIS_DIR, "assets"),
+              os.path.join(_OP_DIR, "op_kernel")):
+    if _path not in sys.path:
+        sys.path.insert(0, _path)
 
-from ops.pypto_pro.deepseek_v4_1.indexer_prologue_k.op_kernel import indexer_prologue_k as op  # noqa: E402
+import indexer_prologue_k as op  # noqa: E402
 import indexer_prologue_k_golden as golden  # noqa: E402
 
 pytestmark = pytest.mark.soc("950")
