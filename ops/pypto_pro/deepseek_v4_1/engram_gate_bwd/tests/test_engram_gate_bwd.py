@@ -44,8 +44,8 @@ def _npu_available():
         return False
 
 
+# soc 标记逐用例添加，便于按用例筛选；skipif 对整文件生效。
 pytestmark = [
-    pytest.mark.soc("950"),
     pytest.mark.skipif(not _npu_available(), reason="torch_npu / NPU not available"),
 ]
 
@@ -84,50 +84,62 @@ def _run_case(name):
         raise AssertionError(f"{name} precision failed: {summary}")
 
 
+@pytest.mark.soc("950")
 def test_t512_h2048():
     _run_case("t512_h2048")
 
 
+@pytest.mark.soc("950")
 def test_t512_h2560():
     _run_case("t512_h2560")
 
 
+@pytest.mark.soc("950")
 def test_t512_h3072():
     _run_case("t512_h3072")
 
 
+@pytest.mark.soc("950")
 def test_t512_h4096():
     _run_case("t512_h4096")
 
 
+@pytest.mark.soc("950")
 def test_t512_h6144():
     _run_case("t512_h6144")
 
 
+@pytest.mark.soc("950")
 def test_t512_h7168():
     _run_case("t512_h7168")
 
 
+@pytest.mark.soc("950")
 def test_t8001_h2048():
     _run_case("t8001_h2048")
 
 
+@pytest.mark.soc("950")
 def test_t8001_h2560():
     _run_case("t8001_h2560")
 
 
+@pytest.mark.soc("950")
 def test_t8001_h3072():
     _run_case("t8001_h3072")
 
 
+@pytest.mark.soc("950")
 def test_t8001_h4096():
     _run_case("t8001_h4096")
 
 
+@pytest.mark.soc("950")
 def test_t8001_h6144():
     _run_case("t8001_h6144")
 
 
+@pytest.mark.soc("950")
 def test_t8001_h7168():
     _run_case("t8001_h7168")
 
