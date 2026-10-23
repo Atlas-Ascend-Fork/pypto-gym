@@ -232,9 +232,10 @@ def _npu_device():
     pytest.importorskip("torch_npu")
     device = torch.device(
         "npu",
-        int(os.environ.get("NPU_DEVICE_ID", os.environ.get("TILE_FWK_DEVICE_ID", "0"))),
+        int(os.environ.get("TILE_FWK_DEVICE_ID", "0")),
     )
     torch.npu.set_device(device)
+    _LOG.info(f"======== device id: {device}")
     return device
 
 
