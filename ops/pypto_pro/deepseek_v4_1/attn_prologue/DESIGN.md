@@ -1,198 +1,150 @@
 # attn_prologue 设计说明（PyPTO-Pro）
 
-对应实现：`op_kernel/attn_prologue.py`（单模块：一个 `@pl.jit(auto_mutex=True)` 的 MIX kernel
-`attn_prologue_kernel`、一个公开 host 函数 `attn_prologue`、一个权重加载期工具 `to_nz`）。本文
-描述设备侧结构与流水设计；接口与约束见 `README.md`，精度与性能数据见 `RESULTS.md`。
+对应实现：[attn_prologue.py](op_kernel/attn_prologue.py)。单模块包含 MIX kernel `attn_prologue_kernel`、公开 host 函数 `attn_prologue` 和权重转换工具 `to_nz`。本文根据当前 kernel 描述计算、分核、缓冲区与同步；接口见 [README.md](README.md)，测试及历史性能见 [RESULTS.md](RESULTS.md)。
+
+一个核组包含 1 个 AIC 和 2 个 AIV。本文的 tile 是连续的最多 128 个 token；输出列块为 128 列。QA、QB 分别指代码中的第一次、第二次 Q 投影，QR 是两者之间经过 RMSNorm 和量化的中间表示。阶段编号 A1、A2、B、B-epi 沿用源码注释，分别对应第一次投影、归一化与量化、第二次 Q 投影及最终 Q 输出处理。
 
 ## 计算阶段划分
 
-kernel 内有两条并发指令流：`section_cube`（AIC，矩阵乘）与 `section_vector`（AIV，向量处理），
-由两次 `pl.system.sync_all(core_type=MIX)` 全局屏障衔接为四个逻辑阶段。代码注释中四个阶段分别
-记作 A1、A2、B、B-epi，本文沿用该编号并在首次出现时给出含义：
+`section_cube` 和 `section_vector` 定义 AIC、AIV 的两条执行流；它们通过两次 MIX 全局同步连接，只有后半段 QB 与 Q 输出处理使用逐输出块的流水握手。
 
-| 阶段 | 执行部件 | 内容 |
+| 阶段 | 执行部件 | 输入、计算与写出 |
 | :--- | :--- | :--- |
-| 阶段 1：QA/KV 投影（A1） | AIC | `qa = X @ Wqa^T`（输出 R=1280 列，切成 10 个 128 列的输出块）与 `kv = X @ Wkv^T`（输出 D=512 列，切成 4 个输出块）。两个矩阵乘都用 MXFP8 的 `matmul_mx`/`matmul_mx_acc` 沿完整的 K=H=5120 归约（每步 K0=256，共 20 步），FP32 部分和经 FIXPIPE 直接写入 GM 上的中间缓冲 `ws_qa[T,R]` 与 `ws_kv[T,D]` |
-| 全局屏障 1 | 全部 AIC+AIV | `sync_all(MIX)`，保证中间缓冲对 Vector 可见（MTE3 写与 MTE2 读之间的全局顺序） |
-| 阶段 2：归一化与量化（A2） | AIV（64 个行条带） | QR 支路：读 `ws_qa` 的一行（归约维切分场景下先合并两个部分和），沿 R 做 RMSNorm，再做动态 MXFP8 量化，写公开输出 `qr`（E4M3 payload）与 `descale_qr`（成对 E8M0 scale 字节）。KV 支路：读 `ws_kv` 的一行，沿 D 做 RMSNorm，做尾部 RoPE（INTERLEAVE_HALF 约定），饱和到 ±448 后按 scale=1 转 E4M3，最后按 `cache_index` 把整行写入 `kv_cache` 对应 slot |
-| 全局屏障 2 | 全部 AIC+AIV | `sync_all(MIX)`，保证 `qr/descale_qr` 的 GM 写入对 Cube 的回读可见 |
-| 阶段 3：QB 投影（B） | AIC | `q_proj = qr @ Wqb^T`。A 操作数是从 GM 回读的量化结果：`qr` 以 ND→NZ 转换载入 L1，`descale_qr` 以 ZZ 分形载入；B 操作数是 `Wqb` 的 NZ→ZN 同址别名视图加 NN 分形的 `descale_wqb`；K=R=1280（每步 256，共 5 步）。`[128,128]` 的 FP32 累加结果经 `DualModeSplitM` 搬到跨段共享的 UB 缓冲 `cv_ub`，随后 `set_cross_core(FIX)` 通知 Vector |
-| 阶段 4：Q 收尾（B-epi） | AIV（每核 2 个半区，各 64 行） | `wait_cross_core(V)` 等到数据后消费 `cv_ub`：非尾部输出块直接转 BF16；每个 head 的最后一个输出块还要对末尾 Dr=64 列做 INTERLEAVE_HALF RoPE 再转 BF16；结果写 `q[T,N,D]`，然后 `set_cross_core(V)` 归还缓冲槽位 |
+| QA/KV 投影（A1） | AIC | 同一 X 分别乘 Wqa、Wkv 的转置。QA 有 10 个输出列块，KV 有 4 个；每块沿 H=5120，以 K0=256 做 20 步 MXFP8 乘加。首步 `matmul_mx` 初始化 FP32 累加器，后续 `matmul_mx_acc` 累加。结果从 Acc 写入 GM 工作区 `ws_qa/ws_kv`；小 T 的归约维二分路径每分区仅做 10 步，并分别写部分和 |
+| 全局同步 1 | 全部 AIC/AIV | 所有投影块写完后，AIV 才能读取完整 QA/KV 行。Cube 的工作区结果由 Acc 写出，不能将其描述为 Vector 的 MTE3 写回 |
+| 归一化、量化与 cache 写回（A2） | AIV | QR 行沿 1280 个特征做 RMSNorm，再按 32 元素组量化，写公开 `qr/descale_qr`。KV 行沿 512 个特征做 RMSNorm，末尾 64 维做位置变换，再按 scale=1 转 E4M3FN，写入 `cache_index` 指定的 slot。归约维二分时，先对两个 FP32 部分和做一次 `pl.add` |
+| 全局同步 2 | 全部 AIC/AIV | QR payload 与 scale 写完后，AIC 回读作为 QB 的 A 操作数；KV 写回也在 AIV 到达该同步之前发出 |
+| QB 投影（B） | AIC | `qr @ Wqb.T`，每个 head 的 512 列切为 4 块，全 tile 共 `64*4=256` 块。每块沿 R=1280 做 5 步乘加，FP32 Acc 经 `DualModeSplitM` 向两个 AIV 的 `cv_ub` 各交付 64 行 |
+| Q 输出处理（B-epi） | AIV | 等待对应 `cv_ub` 就绪，普通列块转 BF16；每 head 最后一个列块还需对后 64 列做 RoPE，再转 BF16，写入 q，并通知 Cube 可以复用交接槽 |
 
-阶段 3 与阶段 4 之间以「拍」为粒度做跨核事件握手：Cube 每完成一次 L0C→UB 的搬运并发布，称为
-一拍；两个 UB 槽位轮转使用，构成 Cube 与 Vector 之间深度 2 的乒乓缓冲。
+Q 的 RoPE 使用 FP32 QB 结果，随后才舍入成 BF16；KV 则先完成归一化和 RoPE，再饱和量化。所有 head 使用同一 token 的位置表，但各 head 的 Q 数据独立。
 
-两条数值契约贯穿阶段划分（见 `README.md` 功能说明）：QB 投影消费的是**量化后**的 `qr` 而不是
-FP32 归一化值；KV 支路**先归一化和 RoPE、再量化**且 scale 固定为 1。
+`qr_row_vf` 先按 64-lane FP32 向量求平方和，再将行归一化系数广播。每个量化组只激活 32 lane，先计算 `(qa*rstd)*gamma`，取最大绝对值，再提取 FP32 指数字段。最后一组起点为 1248，仍会做 64-lane 加载，因此 `qa_row/gamma_qr` 按 `QR_PAD=1344` 预留；额外 lane 不参与组内归约与输出。
+
+RoPE 的 `INTERLEAVE_HALF` 表示相邻输入 `(z[2*i], z[2*i+1])` 分别产生两个输出半区的第 i 项。代码分别做两次乘法和一次加法，没有额外负号，也不把它们改成融合乘加。`vf.gather` 在寄存器内取偶数/奇数位置，未激活 lane 的索引也钳位在 0–63，避免使用越界的寄存器索引。
 
 ## 核间切分策略
 
-**启动形态**：`attn_prologue_kernel[None, block_dim]`，其中
-`block_dim = min(cube_core_num, vector_core_num//2)`，由运行期平台查询得出（32 Cube / 64 AIV
-的机器上为 32），每个 block 对应 1 个 AIC 和 2 个 AIV。一次公开调用只启动一次。kernel 内用
-`pl.get_block_num()`、`get_block_idx()`、`get_subblock_num()` 推导逻辑核号，AIV 半区号取
-`get_subblock_idx()`。
+**启动网格**：host 正常查询路径取 `block_dim=max(1,min(cube_core_num,vector_core_num//2))`，再调用 `attn_prologue_kernel[None,block_dim]`。平台查询失败或返回异常核数时回退到 32/64 配置。kernel 由 block 与 subblock 索引取得 AIC 核组号及 AIV 子块号；以下具体核数示例按原有 32 核组、64 AIV 环境说明。
 
-**单二进制、运行期选择工作分配方式**：不使用 tiling key。设 `n_tiles = ceil(T/128)`，运行期在
-两种模板中二选一；两个分支都会被 trace，但只有一个执行：
+**阶段 A1 独立选择三种分配方式**：令 `n_tiles=ceil(T/128)`，`NA1=14`，`NA1G=7`。
 
-- **单元分布模板**（`n_tiles < 32`，decode 与中小 prefill；代码注释记作 distributed）：把工作
-  单元跨步铺到所有核上。阶段 1 以 `(tile, 输出块)` 为单元；当单元总数不少于核数时启用组宽 2
-  的列块分组（代码常量 `A1_GRP=2`），让 2 个输出块共享一次 X 的 K 窗口载入。阶段 3 以
-  `(tile, head, 输出块)` 为单元、按核数跨步分配，使相邻核在同一时刻读取相邻的 128 行权重带，
-  单次 L2 访问的有效字节密度最大。
-- **逐 tile 模板**（`n_tiles >= 32`，大 prefill；代码注释记作 split-T）：一个核独占一个 tile 的
-  全部 64 个 head × 4 个输出块，`qr` 每个 tile 只从 GM 载入 L1 一次，跨 256 拍复用。
+| 条件与顺序 | 分配单元 | 每单元工作 | 32 核组上的范围 |
+| :--- | :--- | :--- | :--- |
+| 先判断 `n_tiles*7 >= num_cores` | `(tile, 两个相邻输出列块)` | `_a1_group` 中两个累加器共享每个 X 的 K 窗口，完成 20 步归约 | `n_tiles>=5` |
+| 否则判断 `n_tiles*14*2 <= num_cores` | `(输出列块, 归约分区)` | `_a1_block_sk` 把 H 分为两个 2560 维分区，各算 10 步并写独立行带 | `n_tiles=1`，共 28 个单元 |
+| 其余情况 | `(tile, 单个输出列块)` | `_a1_block` 对完整 H 做 20 步归约 | `n_tiles=2..4` |
 
-**decode 小 T 的归约维切分**：当 `n_tiles*NA1*2 <= num_cores`（32 核网格上即 `n_tiles==1`，
-代码常量 `SK_A=2`）时，阶段 1 把 K=H 沿归约维切成 2 个分区（split-K）：28 个 `(输出块, 分区)`
-单元铺满核，各分区把部分和写入中间缓冲的第 `ks*n_tiles*128` 行带，阶段 2 读取时合并。分区宽
-H/2=2560 恰为 10 个 K0，NZ 分形网格整除。
+这些单元均以 `pl.range(core_id,total_work,num_cores)` 跨步分配。分组减少 X 的重复加载，却把并行工作量从每 tile 14 项变为 7 项；只有工作足够时才启用，以免小 T 下可用核更少。归约维二分分支的寻址固定从 X 第 0 行开始，当前 32 核组下只在一个 tile 时进入；平台查询和实际网格不应脱离本实现已验证的架构配置。
 
-**阶段 2 的行条带**：行按扁平 AIV 号（`core_id*2+sub`，共 64 个）跨步分配。`n_tiles<=2` 时把
-行循环进一步拆成 `2*t_live` 个独立的 QR/KV 任务铺满 64 个 AIV，缩短屏障之间暴露的向量时间；
-prefill 保持逐行循环。归约维切分场景下，两支路各载入两个部分和行带做一次 FP32 `pl.add` 合并
-（只有 2 个部分和时，该合并与 Kahan 补偿求和逐位一致，因为补偿项从 0 开始）。
+归约维二分时，部分和落在 `ks*n_tiles*128 + row`，ks 为 0 或 1。A2 载入两个行带并以一次 FP32 加法合并，再做归一化。这改变了与完整 H 单次归约相比的求和顺序，不能从数学相等推导所有输入逐字节相等；精度测试通过独立 FP64 复核处理量化边界差异。实现没有执行通用的 Kahan 补偿求和。
 
-**host 与 kernel 的门控逐字节一致**：中间缓冲的行数（归约维切分时为 `2*n_tiles*128`，否则为
-物理行数）在 host 侧用与 kernel 内完全相同的表达式派生，杜绝分配与写入错位。
+**阶段 A2 的 AIV 分配**：`worker=core_id*subblock_num+sub`，`n_aiv=num_cores*subblock_num`。
 
-**全局同步**：恰好两次 `sync_all(MIX)`。阶段 1→2 的中间缓冲依赖与阶段 2→3 的 `qr` 回读依赖都
-是 all-to-all 形态（一行 `ws_qa` 由多个核写、`qr` 行被多核读），全局屏障是这类依赖的原生同步；
-两侧 section 以相同条件、相同次数、相同顺序到达屏障。
+- 归约维二分时，将 QR 与 KV 拆成 `2*T` 个任务，以 worker 号跨步执行；task 小于 T 对应 QR 行，否则对应 KV 的 `task-T` 行，每项先合并两个部分和。
+- 非二分且 `n_tiles<=2` 时，仍按同样的 QR/KV 任务集合分配，但将 QR 循环和 KV 循环分开。首批 KV 位置表来自屏障前预载槽，超过预载数量的任务回到 GM 流式读取。
+- `n_tiles>=3` 时按 row 跨步分配，同一个 AIV 依次完成该行 QR 与 KV。源码保留此路径，以避免把大 T 也拆成任务后增加控制和搬运成本。
 
-**跨核事件预算**：事件 id 只有 0..15，其中 11/12/13 由 `sync_all(MIX)` 保留（AIV 侧为
-12/13）。当前分配：`EV_READY 0..1`（Cube FIXPIPE 发布 → Vector 消费）、`EV_FREE 2..3`
-（Vector 归还 → Cube 复用槽位）；导入期 `_check_constant` 校验不与保留 id 冲突。
+任务数少于 64 时不会占满全部 AIV，例如 T=1 只有 QR、KV 两项，不能将“按 64 个 AIV 分配”写成“64 个 AIV 都有工作”。
 
-**mutex id 预算**：Cube 侧 tile group 占用 0..17（NZ/ZN 别名**共享**同一组 id，使 auto_mutex
-能看见别名依赖），Vector 侧占用 0..17 加预载槽 18..25；容量与冲突均在导入期校验。
+**阶段 B 与 B-epi 独立选择两种分配方式**：没有 tiling key，kernel 根据运行时 `n_tiles` 分支，不能把 A1 与 B 的门槛混为一谈。
+
+- `n_tiles<32`：按 `(tile,head,列块)` 展平为 `wu=tile*256+head*4+block`，以核组数跨步分配。相邻核组访问相邻的 Wqb 128 行权重块；每核只有首次或 tile 改变时才回读 `qr/descale_qr`。以 32 核组为例，一个 tile 的 256 块由每核 8 块承担，每核都会读取该 tile 的 QR。
+- `n_tiles>=32`：每核按 tile 跨步分配，独占所分 tile 的全部 64 个 head 和 256 块 QB 输出。QR 与其 scale 每 tile 只从 GM 载入一次，保留在 L1 中跨输出块复用。
+
+准确的 B 分支边界是 T=3969（第 32 个 tile 出现），不是 T=4096；原生产测试矩阵中相邻取值为 2048、4096，因此观测为从 4096 起进入逐 tile 分配。A1 分组在 32 核组上则从 T=513 起启用。
+
+**工作区分配与分支一致**：host 用同一 `n_tiles*14*2 <= grid` 条件决定 `sk_bands`。二分时 `ws_rows=2*n_tiles*128`，否则 `ws_rows=T`；公开 QR/Q 输出始终只分配 T 行。全局同步使 A1 的多核列块生产、A2 的按行消费以及 B 的多核回读可以采用不同的任务划分。
+
+**事件与 mutex**：两次 `sync_all(MIX)` 在 Cube、Vector section 中各有对应调用点，运行时形成两道全局同步。跨核事件 id 为 0–15，当前 `EV_READY` 用 0/1，`EV_FREE` 用 2/3；AIC 侧 11/12/13、AIV 侧 12/13 留给 MIX 同步。
+
+mutex id 是另一套编号空间，不能与跨核事件 id 混用。Cube section 内部 TileGroup 使用 0–13、16–28，共 27 个 id；外部声明、供两段共用的 `cv_ub` 使用 14/15。Vector 加上共享 `cv_ub` 使用 0–17，预载槽再用 18–25。同一物理地址的 `b_nz/b_zn` 视图共享对应 mutex id。导入检查覆盖预载 id 之间及其与已占 Vector id 的冲突，并非逐个自动扫描全部 TileGroup 声明。
 
 ## 核内切分策略：基本块选择、核内 Buffer 划分
 
 ### 基本块选择
 
-| 维度 | 取值 | 依据 |
+| 参数 | 取值 | 与实现的关系 |
 | :--- | :--- | :--- |
-| `BASE_M` | 128 | token tile 高度（GEMM 的 M）；经 `DualModeSplitM` 对半分发后每个 AIV 承担 64 行（`ROWS_VEC`） |
-| `K0` | 256 | L0 的 K 步长。`matmul_mx` 要求 K 是 64 的倍数；取 256 使每次 GM→L1 的权重/X 突发为 32 KB（MTE2 事务少而大——本 kernel 为 MTE2 带宽受限），同时 L0A/L0B 的 `[128,256]` E4M3 槽为 32 KB，深度 2 恰好占满 64 KB，L0_MX 的 2×2 KB 恰好占满 4 KB |
-| `BN_A` / `BN_B` | 128 / 128 | 阶段 1 与阶段 3 的输出列块宽。`[128,128]` FP32 累加器为 64 KB；QB 侧深度 2 乒乓（128 KB）加阶段 1 侧深度 2（128 KB）恰好合占 256 KB L0C。若取 `BN_B=256`，L0B（`[256,256]` E4M3 为 64 KB，深度 2 需 128 KB > 64 KB）与 L0C 预算都会超出 |
-| `NK_A` / `NK_B` | 20 / 5 | K 归约步数，分别为 H/K0 与 R/K0 |
-| `A1_GRP` | 2 | prefill 下阶段 1 的 X 复用组宽：2 个输出块共享一次 X 的 K 窗口载入，X 的 L2→L1 流量减半（每 tile 14 次降为 7 次）；QA 的 10 块与 KV 的 4 块都是偶数，分组无残块 |
-| `SK_A` | 2（门控启用） | decode（`n_tiles==1`）下阶段 1 的归约维分区数：28 个单元铺满 28 个核；分区宽 H/2=2560 为 10 个 K0，NZ 网格整除 |
-| `KV_PRE` | 4 | 全局屏障 1 之前预载的阶段 2 KV 任务 cos/sin 行数。门控域内（`n_tiles<=2`，即 `t_live<=256` 行、64 个 AIV 条带）每个 AIV 至多 4 个 KV 任务，预载恰好全覆盖 |
-| `b_nz` 深度 | 4 | 权重 K 窗口的轮转深度：4 个 32 KB 连续槽，使 MTE2 载入领先 MTE1 搬出与 MAC 消费至多 3 拍；也等于阶段 3 消费型预取的窗口数（`NK_B-1=4`，保持 ZN 视图的同余对齐） |
+| `BASE_M` | 128 | Cube 的 token 行窗口；QB 交接后每 AIV 接收 64 行，逻辑尾部另限制存储 |
+| `K0` | 256 | 每次乘法的归约维宽度，满足 MX 的 64 倍数要求；完整 X/权重窗口 `[128,256]` E4M3FN 为 32768 B，L0A/L0B 双槽各占满 64 KiB |
+| `BN_A/BN_B` | 128/128 | A1 与 QB 的输出列块；每个 `[128,128]` FP32 Acc 为 64 KiB。若直接把 BN_B 改为 256，右操作数双槽和累加器都需重新规划 |
+| `NK_A/NK_B` | 20/5 | H/K0 与 R/K0；归约维二分的每个 A1 分区为 10 步 |
+| `A1_GRP` | 2 | 两输出块共享一次 X GM→L1 载入，分组路径每 tile 的完整 X 读取等效由 14 次降为 7 次 |
+| `KV_PRE` | 4 | 非归约维二分、`n_tiles<=2` 的 A2 路径预载位置表槽数；32 核组时每 AIV 最多 4 个 KV 任务，可全部覆盖 |
+| `b_nz/b_zn` 深度 | 4 | 同址视图各自按相同顺序 `.next()`；同时容纳 4 个权重 K 窗口，供流水及首个 QB 块预取使用 |
+
+三个矩阵乘沿 K 方向分块，每一步 K0 是矩阵乘归约的特征数；它与 cache 页大小、量化组 32、RoPE 宽度 64 是不同概念。
 
 ### 核内 Buffer 划分
 
-L1（Mat 侧，512 KB，高水位 `L1_END=0x76000` 即 472 KB；各区域起点 8 KB 对齐，导入期校验不重叠、
-不越界）：
+以下容量使用 KiB（1024 B），高水位是地址上界，含对齐空隙，不等于各声明的有效元素字节之和。L1 高水位 `0x76000=483328 B=472 KiB`，预算为 512 KiB。
 
-| Buffer | 声明 | 深度 | 字节 | 用途 |
+| 缓冲区 | 逻辑形状、布局与起始地址 | 深度 | 有效数据字节合计 | 用途 |
 | :--- | :--- | :--- | ---: | :--- |
-| `a_l1` | NZ `[128,256]` E4M3 @0x00000 | 2 | 64 KB | X 的 K 窗口（阶段 1 的 A 操作数），GM 的 ND 数据载入时就地转换为 NZ |
-| `sa_l1` | ZZ `[128,160]` E8M0 @0x10000(+0x6E000) | 2 | 40 KB | `descale_x` 整行驻留，逐 K 步切片进 L0A_MX |
-| `b_nz`/`b_zn` | NZ `[128,256]` / ZN `[256,128]` E4M3 @0x16000（槽 2,3 @0x26000） | 4 | 128 KB | 权重的 K 窗口。**同一块字节的 NZ/ZN 双视图别名，共享 mutex id**：`A @ W^T` 的 B 操作数经 ZN 视图 `pl.move` 进 L0B |
-| `sb_l1` | NN `[160,128]` E8M0 @0x36000 | 2 | 40 KB | `descale_wqa/wkv`（阶段 1 的 B 侧 scale，以 `order=[1,0]` 转置载入） |
-| `qr_l1` | NZ `[128,1280]` E4M3 @0x40000 | 1 | 160 KB | 阶段 3 的 A 操作数：公开输出 `qr` 的 GM 回读；逐 tile 模板下每个 tile 只驻留一次 |
-| `sq_k` | ZZ `[128,40]` E8M0 @0x68000(+0x74000) | 2 | 10 KB | `descale_qr` 整行（阶段 3 的 A 侧 scale） |
-| `sw_k` | NN `[40,128]` E8M0 @0x6A000(+0x6C000) | 2 | 10 KB | `descale_wqb`（阶段 3 的 B 侧 scale） |
+| `a_l1` | `[128,256]` E4M3 NZ，0x00000/0x08000 | 2 | 65536 | X 的 K 窗口 |
+| `sa_l1` | `[128,160]` E8M0 ZZ，0x10000/0x6E000 | 2 | 40960 | 一个 A1 单元的完整 X scale，按 K 步切片搬到 ScaleLeft |
+| `b_nz/b_zn` | `[128,256]` NZ / `[256,128]` ZN，0x16000/0x1E000/0x26000/0x2E000 | 4，共享存储 | 131072 | NZ 视图加载 Wqa/Wkv/Wqb，ZN 视图作为转置右操作数搬出 |
+| `sb_l1` | `[160,128]` E8M0 NN，0x36000/0x3B000 | 2 | 40960 | QA/KV 权重 scale；分组时两个槽保留两个输出块的 scale |
+| `qr_l1` | `[128,1280]` E4M3 NZ，0x40000 | 1 | 163840 | QB 的 QR 操作数，跨输出块复用 |
+| `sq_k` | `[128,40]` E8M0 ZZ，0x68000/0x74000 | 2 | 10240 | QR scale |
+| `sw_k` | `[40,128]` E8M0 NN，0x6A000/0x6C000 | 2 | 10240 | QB 权重 scale |
 
-L0A/L0B/L0_MX（每个 core group）：`l0a` 为 NZ `[128,256]`、`l0b` 为 ZN `[256,128]`，各深度 2
-（槽 0x0000/0x8000，各 64 KB 恰好占满）；`scale_a_l0` 为 ZZ `[128,8]`、`scale_b_l0` 为 NN
-`[8,128]`，深度 2（槽 0x0000/0x800）。MX 矩阵乘的硬约束「scale 地址 = 数据地址 >>4」由显式地址
-声明满足（0x8000>>4=0x800）；轮转时数据槽与 scale 槽按同一 `.next()` 序联动。
+L0A 的 `[128,256]` 与 L0B 的 `[256,128]` 均为 E4M3，槽地址 0/0x8000，各双槽占 65536 B。ScaleLeft/ScaleRight 的有效形状分别为 `[128,8]`、`[8,128]`，槽地址 0/0x800；每个 scale 存储空间按 4 KiB 预算检查。数据槽与 scale 槽地址满足 `scale_addr=data_addr>>4`，两者使用配套轮转索引。这是 L0 操作数与 MX scale 的约束，不要求 L1 中独立区域也按同一关系排布。
 
-L0C（累加器，256 KB）：`a1_acc` 为 NZ fractal=1024 的 `[128,128]` FP32、深度 2
-（0x00000/0x10000，阶段 1 的列块分组需要 2 个累加器），`q_acc` 同形、深度 2（0x20000/0x30000，
-供阶段 3/4 乒乓）。`compact=1` 的累加器窗口在首个 matmul 之前一次设满物理窗，matmul 与搬运之间
-不再改窗。
+L0C 共 256 KiB：`a1_acc[0/1]` 位于 0x00000/0x10000，供 A1 两列块分组同时保留部分和；`q_acc[0/1]` 位于 0x20000/0x30000，供 QB 轮转。四槽都是 `[128,128]` FP32。A1 与 QB 分属不同阶段，但当前声明为不同地址；不能因为运行时不重叠就直接缩小高水位而不改代码。
 
-UB（Vec 侧，用户预算 216 KB，高水位 `UB_END=0x27E00` 即 163.5 KB）：
+每个 AIV 的 UB 高水位为 `0x27E00=163328 B=159.5 KiB`，预算为 216 KiB。原文 163.5 KiB 的换算与该十六进制地址不符。
 
-| 槽 | 字节 | 用途 |
+| 缓冲区 | 有效数据字节 | 用途 |
 | :--- | ---: | :--- |
-| `cv_ub` ×2 | 64 KB | 跨段握手槽 `[64,128]` FP32（声明在两个 section 之外，深度 2 乒乓） |
-| `qa_row`/`qa_row2`、`gamma_qr` | 5.25+5.25+5.25 KB | 阶段 2 QR 支路：中间缓冲行（归约维切分时为两个部分和行带）与归一化权重（`QR_PAD=1344` 保证末组 64 lane 载入不越 tile） |
-| `qr_payload`、`exp`、`scale_u8` | 1.25+0.25+0.06 KB | 量化产物与指数字段的暂存 |
-| `kv_row`/`kv_row2`、`gamma_kv`、`kvb`、`cos_row`/`sin_row` | 2+2+2+0.5+0.5 KB | 阶段 2 KV 支路 |
-| `q_bf16` ×2 | 32 KB | 阶段 4 输出缓冲 `[64,128]` BF16（深度 2，与 `cv_ub` 同拍） |
-| `cos_ub`/`sin_ub` | 16+16 KB | 阶段 4 的 RoPE 表 `[64,64]` FP32（按 tile 变化点提升载入） |
-| `cos_pre`/`sin_pre` ×4 | 2+2 KB | 全局屏障 1 之前预载的阶段 2 KV cos/sin 行（512 B 槽距） |
+| `cv_ub` 双槽 | 65536 | 每槽 `[64,128]` FP32，由 FIXPIPE 写入，VF 读取 |
+| `qa_row/qa_row2/gamma_qr` | 各 5376 | QR 行、第二部分和与权重，按 1344 元素预留 |
+| `qr_payload/exp_tile/scale_u8` | 1280/256/64 | 量化 payload、每组指数暂存、压紧后的 scale 字节 |
+| `kv_row/kv_row2/gamma_kv` | 各 2048 | KV 行、第二部分和与权重 |
+| `kvb/cos_row/sin_row` | 512/256/256 | KV 编码与当前行位置表 |
+| `q_bf16` 双槽 | 32768 | 每槽 `[64,128]` BF16，供 Q 写出 |
+| `cos_ub/sin_ub` | 各 16384 | QB 当前 tile 半区的 `[64,64]` FP32 位置表 |
+| `cos_pre/sin_pre` | 各 1024 有效数据 | 各 4 个 256 B 行，槽距 512 B，各预留 2048 B 地址范围 |
+
+GM 工作区按每次调用独立分配：`ws_qa` 为 `[ws_rows,1280]` FP32，`ws_kv` 为 `[ws_rows,512]` FP32。普通路径合计 `T*7168 B`，二分路径按两行带分配；三个公开输出合计 `T*(65536+1280+40) B`。cache 沿用调用方存储，不额外复制。
 
 ## 接口选择
 
-- **Cube 侧显式三段式**：`pl.load`（GM→L1）、`pl.move`（L1→L0、L0C→UB）、
-  `pl.matmul_mx[_acc]`，不使用高层 gemm 封装。原因是需要精确控制 L1/L0 地址以满足 MX scale 的
-  「地址 >>4」耦合、让 NZ/ZN 别名共享 mutex id，并独立管理各缓冲的轮转深度。
-- **`A @ W^T` 与 NZ 权重**：FRACTAL_NZ 权重按 `[N,K]` 存储，不能经 `order` 转置读取。实现用
-  同址双视图：以 NZ `[BN,K0]` 载入，再以 ZN `[K0,BN]` 视图搬出，得到 L0B 需要的转置分形；两个
-  视图共享 mutex id，使 auto_mutex 看见别名依赖。
-- **E8M0 scale 的 GM→L1**：源张量 rank≥3 且末维是长度为 2 的物理 phase 轴（成对存储的公开布
-  局）；phase 轴偏移恒为 0，`order` 不选该轴。A 侧 scale 落 ZZ 分形、B 侧 scale 以
-  `order=[1,0]` 转置落 NN 分形——这是 ZZ/NN 分形唯一可用的生成路径。L1→L0_MX 用 `pl.move`
-  （ZZ→ZZ / NN→NN）。
-- **量化结果经 GM 回读反馈**：阶段 2 把 `qr/descale_qr` 写入公开输出张量（GM），全局屏障 2 之后
-  Cube 回读作为阶段 3 的 A 操作数（payload 走 ND→L1 NZ，scale 走 phase 轴规则）。选择该路径的
-  原因：UB→L1 的 ND→NZ 就地转换对 E8M0 scale 不存在 ZZ/NN 生成通路；且 GM 路径让阶段 2 的行
-  条带与阶段 3 的单元分配完全解耦（生产者与消费者的形状无需匹配），全局屏障同时提供写后读的
-  全局一致性。
-- **累加器到 UB**：`pl.move(..., acc_to_vec_mode=DualModeSplitM)`，valid_M 先向上对齐到 2 再
-  对半分，两个 AIV 各得 64 行。被 `pl.move` 排空的 matmul 不传 `phase=`（没有 STPhase 消费者时
-  传 phase 会挂起 unit_flag）。
-- **Vector 数值全部走 VF**（`@pl.vector_function`）：RMSNorm 用 `vf.reduce_sum` 求行平方和，
-  `vf.full(reg, preg, pos=DuplicatePos.LOWEST)` 把 lane0 广播到全寄存器，再 `vf.sqrt` 与
-  `vf.div(one, root)` 求倒数（VF 没有 rsqrt；`1/R`、`1/D` 是模块级常量，VF 内禁止标量浮点除
-  法）。量化组的共享指数取 `bit_cast` 到 i32 后右移 23 位、减 `127+8`、再 `maxs(-127)` 截断；
-  全零组用 `select` 把 scale 字节置 0。倒数 `2^-e` 由 FP32 指数字段直接构造（取负、加 127、
-  左移 23、`bit_cast` 回浮点），不出现除法。E4M3 转换用
-  `vf.astype(..., CAST_RINT, SaturateMode.ON)` 且先显式饱和到 ±448；payload 密排用
-  `StoreDist.PACK4`（b32 取低字节），BF16 输出用 `bit_cast(u32)` 后 `StoreDist.PACK`。RoPE 的
-  去交错用钳位到 0..63 的寄存器 `gather` 索引（避免 DINTLV 指令末行过读），两次乘法与一次加法
-  分开执行以保持舍入次序。每次 UB 暂存的写后读之间插 `vf.mem_bar(VST_VLD)`。
-- **分页 KV 写回**：`slot = pl.getval(cache_index, row)`（INT64）后
-  `pl.store(kv2d, kvb, [slot, 0])`，其中 `kv_cache` 以 `make_tensor` 展平为 `[P*BS, D]` 视图；
-  整行 512 B 一次落盘（不小于 64 B 的安全粒度）。`cache_index` 的唯一性由接口契约保证。
-- **同步分层**：核内 pipe 顺序交给 `auto_mutex=True` 加 tile group 的 `mutex_ids`（跨 op 依赖
-  一律用 `make_tile_group` 声明，不用裸 `make_tile`）；Cube 与 Vector 的握手用
-  `set/wait_cross_core`（FIX↔V，深度 2 的信用额度，`beat>=2` 守卫，退出前自然配平）；全局相位
-  用两次 `sync_all(MIX)`。
+- **Cube 显式分段操作**：使用 `pl.load`、`pl.move`、`pl.matmul_mx` 和 `pl.matmul_mx_acc`，以控制片上地址、分组 scale、同址视图和不同深度的缓冲轮转。
+- **NZ 权重转置视图**：权重逻辑为 `[输出列,归约维]`。先按 NZ `[128,256]` 加载，再用同地址 ZN `[256,128]` 视图搬到 L0B，实现 `A @ W.T` 的右操作数方向；这不是重新复制一份转置权重。NZ/ZN 的地址、槽顺序和 mutex id 必须一一对应。
+- **E8M0 加载**：公开 scale 的末维长度为 2，作为物理 phase 轴。加载时该轴偏移为 0，`order` 仅排列其余轴，A 侧落 ZZ、B 侧以 `order=[1,0]` 落 NN，之后按 K0 对应的 8 个量化组切片进入 L0 scale 空间。
+- **QR 经 GM 反馈**：A2 直接写公开 `qr/descale_qr`，屏障后 AIC 用 GM→L1 的布局生成能力回读。这样 A2 可按行生产，B 可按输出列块或 tile 消费，无需采用相同的分核方式；当前实现不使用 UB→L1 生成 E8M0 的 ZZ/NN 布局。
+- **Acc→UB 保留 FP32**：`DualModeSplitM` 将 `[128,128]` Acc 按 M 对半交给两个 AIV；此处没有 FP32→BF16 窄化，后续 RoPE 仍需 FP32。BF16 转换在 VF 内完成。
+- **VF 的归一化与编码**：`reduce_sum` 求平方和，`DuplicatePos.LOWEST` 广播归约结果，`sqrt` 和 `div` 求归一化系数。只有量化 scale 的倒数通过指数字段构造，不能称所有 VF 都没有除法。`astype(...,CAST_RINT,SaturateMode.ON)` 转 E4M3，`PACK4` 从 32 位容器压紧成字节；BF16 用 `PACK` 压紧。指数暂存写后再读之前有 `vf.mem_bar(VST_VLD)`。
+- **分页写回**：`cache_index` 为扁平 slot，kernel 将 cache 无复制地视作 `[P*BS,512]`，以 `pl.getval` 读取 int64 索引，再 `pl.store(...,[slot,0])` 写整行。故不用另查 block table；页号和页内偏移已经由扁平索引隐含表达。
+- **同步职责**：TileGroup 的 `mutex_ids` 与 `auto_mutex=True` 管理核内依赖及槽复用；Cube/AIV 交接另用 ready/free 事件，阶段间用 MIX 屏障。自动 mutex 与跨核事件负责不同层次，不能互相替代。
 
 ## 流水设计
 
-**阶段 3 与阶段 4 之间深度 2 的乒乓**（「拍」指本核处理的第几个 `(head, 输出块)` 单元）：
+**QB 与 Q 输出处理的双槽交接**：代码中的 `beat` 是本核处理的 QB 输出列块序号；每块由 `_qb_beat` 完成 5 步矩阵乘，再由 `_q_epi_beat` 输出对应 Q。它不是 K 归约循环的步号。
 
 ```text
-AIC: matmul_mx×5 → acc[beat%2] → move(cv_ub[beat%2], DualModeSplitM) → set(FIX, beat%2)
-AIV: wait(V, beat%2) → RoPE/BF16 → store q → set(V, 2+beat%2)
-AIC: wait(FIX, 2+beat%2)  (beat>=2 时) → 复用 cv_ub 槽
+AIC: 5 步 MX 乘加 → q_acc[beat%2]
+     → 若 beat>=2，等待 EV_FREE+(beat%2)
+     → FIXPIPE 把 FP32 结果分给两个 AIV 的 cv_ub[beat%2]
+     → 发布 EV_READY+(beat%2)
+
+AIV: 等待对应 EV_READY → 读取 cv_ub → RoPE/BF16
+     → 按逻辑行数存储 q → 发布对应 EV_FREE
 ```
 
-Cube 的第 beat+1 个 QB 矩阵乘与 Vector 的第 beat 个收尾重叠。两侧 section 以相同的单元枚举顺序
-（同一个 `pl.range(core_id, n_work, num_cores)` 解码）保证拍号对齐。
+前两个输出块使用尚未占用的槽，无需等待 free；从第三块起，覆盖同一槽前必须等上一消费者读完。AIV 的 free 由 V pipe 发出，表示 VF 已读完 `cv_ub`；独立的 BF16 输出缓冲还受自动 mutex 保护，避免 MTE3 写出前被覆盖。函数尾部没有显式排空最后两个 free 事件的循环，不能将其描述为主动清空全部事件。
 
-**MTE2 预算下的载入调度**。kernel 为 GM→L1 载入带宽受限，流水设计围绕「减少字节、增大突发、
-隐藏延迟」三点展开：
+Cube 和两个 AIV 采用完全对应的任务枚举，保证同一 `beat` 指向相同 tile/head/列块。逐 tile 分支通过 `beat0=(tile//num_cores)*256` 延续每核序号；分布分支通过 `(wu-core_id)//num_cores` 生成本地序号。即使某个 AIV 在尾 tile 的 `store_rows=0`，仍要等待 ready 并发布 free，避免 Cube 因无人响应而停住。
 
-- **权重窗口深度 4 轮转**：`b_nz` 的 4 个槽使 MTE2 载入领先 MTE1 搬出与 MAC 消费至多 3 拍，
-  打断单槽/双槽下「第 k+1 步载入必须等第 k 步读出完成」的写后读冲突（WAR）串行。
-- **小 scale 缓冲深度 2 轮转**（`sw_k/sa_l1/sq_k`）：消除逐拍、逐单元边界上「载入等待上一拍
-  L1→L0_MX 搬出完成」的停顿，机制与权重轮转相同。
-- **单元分配的带局部性**：单元分布模板下阶段 3 以 `(tile, head, 输出块)` 为单元、按核数跨步，
-  相邻核在同一时刻读取相邻的 128 行权重带，单次 L2 访问的有效字节密度最大，41.9 MB 的权重流
-  以聚合流带宽满速运行。
-- **阶段 1 的 X 复用（组宽 2）**：一个 X 的 K 窗口喂 2 个输出块的矩阵乘，X 的 L2→L1 流量减半；
-  decode 退回逐块分配（更多核发 MTE2、墙钟更短），由 `n_tiles*NA1G >= num_cores` 门控自适应。
-- **屏障窗口的载入隐藏**：两个全局屏障各有一段空闲窗口。阶段 1 期间 64 个 AIV 空闲：归一化权重
-  与阶段 2 首批 `KV_PRE=4` 行 cos/sin 在屏障 1 **之前**预载（它们是纯输入，无依赖）。阶段 2 期间
-  32 个 AIC 空闲：阶段 3 首批 4 个权重窗口加首个 `descale_wqb` 在两个屏障之间预取，且首拍
-  **实际消费**预取槽（跳过对应载入；`.next()` 全部无条件推进，两条路径的轮转计数一致；逐 tile
-  分支以 `pre=False` 折叠为与不开预取逐指令相同）。
-- **冗余载入按变化点提升**：单元分布模板下阶段 3 的 `qr_l1/sq_k` 仅在本核首个单元或 tile 变化
-  时装载；阶段 4 的 `cos_ub/sin_ub` 遵循同一规则（RoPE 表只依赖行偏移）。
-- **阶段 2 任务化（decode）**：`n_tiles<=2` 时把 QR/KV 拆成 `2*t_live` 个独立任务铺满 64 个
-  AIV，缩短屏障之间暴露的向量时间；任务到行的映射是确定性条带化，与预载槽一一对应。
-- **尾块处理**：`set_validshape` 在每次观察 extent 的操作前设置（GM 面用逻辑行数 `rows_full`，
-  NZ 分形面用 16 对齐的 `rows_r`，累加器保持全物理窗）。`DualModeSplitM` 的 valid_M 先对齐到 2
-  再对半，Vector 侧按半区重算自己的 `store_rows` 并守卫 `store_rows>0`。物理行数
-  `ceil(T/128)*128` 只服务中间缓冲与 NZ 对齐，公开输出与 KV 写回严格按逻辑 T。
+**围绕加载与计算依赖安排重叠**：
+
+- 权重 L1 四槽、L0A/L0B 双槽和配套 scale 轮转，为后续加载与当前搬运、矩阵乘提供重叠空间；同一槽必须在前一次消费者读取后才能覆盖。是否完全隐藏加载等待需由 profiler 验证，不能仅凭槽深度断言带宽已满。
+- 分组 A1 在每个 K 步只读一次 X 窗口，再喂两个输出块；减少的是 X 的 GM→L1 重复读取，权重仍按各列块分别读取，X 的 L1→L0 搬运也分别执行。
+- AIV 在全局同步 1 之前加载两条 RMSNorm 权重。非二分且 `n_tiles<=2` 时，还预载最多 4 个 KV 任务的 sin/cos；加载行号和实际 KV 任务号对应，并用范围守卫保证不读未加载槽。归约维二分路径不使用该位置表预载。
+- AIC 在两道全局同步之间，为分布式 B 的本核首个输出块预取完整权重 scale 和 K 步 0–3 的四个 Wqb 窗口。首块调用 `_qb_beat(...,pre=True)` 跳过这些 GM 加载，实际使用预取槽；第 4 个 K 步仍正常加载。`sw_k` 提前推进两次恢复奇偶位置，`b_nz` 提前推进 4 次恢复模 4 位置，使后续 `b_zn.next()` 对齐相同物理数据。
+- B 的 QR 和 B-epi 的位置表都只在本核首次或 tile 变化时加载；逐 tile 分支在一整个 tile 内复用，分布分支在本核所分配的同 tile 输出块之间复用。不同核组依然有各自独立的 L1/UB 副本。
+- `rows_full=min(128,T-tile_row)` 限制 X、scale、QR 的 GM 加载及 A1 工作区写出。QB 的 Acc→UB 仍按完整 128 行窗口交接，未执行原文所述的 valid_M 向 2 对齐再分半；两个 AIV 分别按 `min(64,max(T-ro,0))` 计算实际 VF 处理及写出行数。片上矩阵窗口大于逻辑尾部，不表示 host 为普通工作区或公开输出分配了补齐行。
+
+两个全局同步分别保护整行 RMSNorm 所需的多列块结果，以及量化 QR 对 QB 的反馈。在它们之间可以预取纯输入，但 AIC 不能提前消费尚未写完的 QR。源码结构因此提供部分重叠机会，并没有把全部 A2 归一化与 QB 计算放在同一条逐 tile 流水中。

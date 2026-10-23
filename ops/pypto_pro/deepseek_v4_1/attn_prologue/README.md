@@ -1,78 +1,74 @@
 # attn_prologue（PyPTO-Pro）
 
-`attn_prologue` 是用 PyPTO-Pro 实现的 MXFP8 attention 前置处理（attention prologue）融合算子。
-一个 kernel 完成 QA 投影、KV 投影、RMSNorm、QR 动态 MXFP8 量化、第二次 Q 投影、尾部 RoPE 以及
-KV cache 的分页写回；公开输出 `(q, qr, descale_qr)`，`kv_cache` 就地更新。生产维度固定为
-`(H,R,N,D,Dr)=(5120,1280,64,512,64)`，唯一动态轴是 token 数 `T=batch*seq`，支持范围
-`[1, 262144]`，覆盖 decode 与 prefill 两类形态。接口契约、数值语义与支持范围由本目录的实现与
-测试定义。
+`attn_prologue` 是使用 PyPTO-Pro 实现的 Attention 前置处理融合算子。一次设备调用完成两级 Q 投影、KV 投影、RMSNorm、QR 动态 MXFP8 量化、尾部 RoPE 和分页 KV cache 写回，返回 `(q, qr, descale_qr)`，并就地更新 `kv_cache`。
+
+当前 kernel 的特征维度固定为 `(H,R,N,D,Dr)=(5120,1280,64,512,64)`，分别表示输入特征宽度、Q 中间投影宽度、Q head 数、每 head 宽度及 RoPE 处理宽度。唯一动态轴是展平后的 token 数 `T=batch*seq`，host 接受 `1 <= T <= 262144`。它不计算 QK、softmax 或 Attention 加权输出，也不读取已有 cache 做注意力计算。接口与数值行为以本目录的实现和测试为依据。
 
 ## 产品支持情况
 
 | 项 | 取值 |
 | :--- | :--- |
-| 芯片 | Ascend 950PR / 950DT（`NpuArch.DAV_3510`，arch `3510`） |
-| 能力依赖 | `matmul_mx` / `matmul_mx_acc`（MXFP8 矩阵乘：E4M3FN×E4M3FN，FP32 累加，E8M0 分组 scale）、FRACTAL_NZ 权重及 NZ/ZN 同址双视图、`MemorySpace.ScaleLeft/ScaleRight`（scale 地址 = 数据地址 >>4 的硬件耦合）、`AccToVecMode.DualModeSplitM`（L0C→UB 按 M 维对半分发）、VF 寄存器级动态量化（`bit_cast`/位移构造 `2^-e`/`astype` 到 E4M3FN 的 `CAST_RINT` 舍入/`StoreDist.PACK4` 字节密排）、VF 尾部 RoPE（寄存器 `gather` 去交错）、`sync_all(MIX)` 与 `set/wait_cross_core` 的 Cube/Vector 握手、分页 KV 写回（`pl.getval` 取索引 + 运行期偏移 `pl.store`）。以上能力在目标工具链中仅按 950 系列登记支持 |
-| 分核数 | 运行期由 `pypto_pro.runtime.platform.get_platform_info()` 查询，`block_dim = min(cube_core_num, vector_core_num//2)`，代码内不硬编码核数 |
-| 实测环境 | DAV_3510，32 Cube / 64 Vector；CANN 9.3.0、PyPTO-Pro、PyTorch 2.12.0+cpu、torch_npu、Python 3.12 |
-| 测试标注 | `pytestmark = pytest.mark.soc("950")` + `@pytest.mark.npu`；不满足 SoC 标注的用例由仓库 conftest 统一跳过 |
-| 依赖 | pypto_pro、torch、torch_npu、NumPy、pytest |
+| 芯片 | Ascend 950PR / 950DT（目标架构 `NpuArch.DAV_3510`） |
+| 能力依赖 | `matmul_mx/matmul_mx_acc` 联合消费 E4M3FN 数据与 E8M0 分组 scale，FP32 累加；FRACTAL_NZ 权重及 NZ/ZN 同址视图；ScaleLeft/ScaleRight 与操作数地址配对；`DualModeSplitM` 将累加结果分发给两个 AIV；VF 量化与 RoPE；MIX 全局同步和跨核事件 |
+| 启动核数 | 正常查询路径取 `max(1, min(cube_core_num, vector_core_num//2))`；平台查询异常或返回异常核数时，`_fused_grid()` 回退到 32 Cube / 64 Vector 的配置 |
+| 原有实测环境 | DAV_3510，32 Cube / 64 Vector；CANN 9.3.0、PyPTO-Pro、PyTorch 2.12.0+cpu、torch_npu、Python 3.12；本次文档完善未重新采集设备性能 |
+| 测试标注 | 测试模块标注 `pytest.mark.soc("950")`，4 个 NPU 冒烟项另标注 `pytest.mark.npu`；通过 pytest 执行时由仓库 conftest 应用这些标记 |
+| 依赖 | kernel 使用 pypto_pro、torch、torch_npu；CPU 参考与判据模块只依赖 torch，测试入口另使用 pytest |
+
+host 指 CPU 侧接口代码，AIC 是 Cube 矩阵计算单元，AIV 是向量计算单元；MIX kernel 使用两者协作。一次启动中的一个核组对应 1 个 AIC 与 2 个 AIV。VF 指 `@pl.vector_function` 定义的向量函数。GM 是设备全局内存，L1/L0 用于 Cube 操作数与累加结果，UB 是 AIV 的本地缓冲区。
 
 ## 功能说明
 
-一个公开 host 函数加一个模块级 `@pl.jit(auto_mutex=True)` 的 MIX kernel 服务全部输入；每次公开
-调用在设备侧只发射一个 kernel。三个矩阵乘在 Cube 上执行：`matmul_mx` 直接消费 E4M3 payload 与
-E8M0 分组 scale、以 FP32 累加，全程不物化反量化后的 X；归约、归一化、量化、RoPE 与写回在
-Vector 上执行。kernel 编译为单一二进制（不使用 tiling key），运行期按 token tile 数选择工作
-分配方式（见 `DESIGN.md`）。
+公开函数 `attn_prologue` 只检查输入元数据、分配输出及工作区，再调用一次 `attn_prologue_kernel`。三个矩阵乘都由 Cube 使用 MXFP8 数据和分组 scale 直接完成，结果以 FP32 累加；设备上不会先构造完整的反量化 X 和权重。Vector 完成归一化、量化、RoPE 和输出处理。kernel 不使用 tiling key，T 由动态张量形状提供，内部根据 `ceil(T/128)` 选择工作分配，详见 [DESIGN.md](DESIGN.md)。
 
-计算全流程（`Deq` 表示结合 E8M0 scale 的逻辑反量化，`Quant32` 表示沿特征轴每 32 个元素共享
-一个 scale 的动态量化，`@` 表示矩阵乘）：
+以下使用 CPU 参考实现中已有的函数名表示数学过程：`dequantize_mxfp8` 将 FP8 数据乘以对应分组 scale，`quantize_mxfp8` 做每 32 元素一组的动态量化，`rms_norm` 和 `apply_tail_rope` 分别执行整行归一化及尾部位置变换。它们用于说明数值顺序，不表示 kernel 实际调用 CPU 函数。
 
 ```text
-X        = Deq(x, descale_x)                                    # [T,H]
-qa       = X @ Deq(wqa).T                                       # [T,R]  FP32 累加
-kv       = X @ Deq(wkv).T                                       # [T,D]  FP32 累加
+x_deq = dequantize_mxfp8(x, descale_x)                         # [T,5120]
+qa    = x_deq @ dequantize_mxfp8(wqa, descale_wqa).T           # [T,1280]
+kv    = x_deq @ dequantize_mxfp8(wkv, descale_wkv).T           # [T,512]
 
-qr, descale_qr = Quant32(RMSNorm(qa, norm_weight_qr, norm_eps)) # [T,R] e4m3 + [T,R/64,2] int8
-q_proj   = Deq(qr, descale_qr) @ Deq(wqb).T                     # [T,N*D] 消费的是量化后的 qr
-q        = BF16(reshape(q_proj,[T,N,D]) → TailRoPE)             # [T,N,D] bf16
+qr_norm       = rms_norm(qa, norm_weight_qr, norm_eps)
+qr, descale_qr = quantize_mxfp8(qr_norm)                      # 另有参考诊断量，此处省略
+q_proj        = dequantize_mxfp8(qr, descale_qr) @ dequantize_mxfp8(wqb, descale_wqb).T
+q             = BF16(apply_tail_rope(reshape(q_proj, [T,64,512]), rope_sin, rope_cos))
 
-kv_rope  = TailRoPE(RMSNorm(kv, norm_weight_kv, norm_eps))      # 先归一化和 RoPE，再量化
-kv_bytes = ByteView_uint8(E4M3FN(clamp(kv_rope, -448, 448)))    # scale 固定为 1
-kv_cache[cache_index[t]//BS, cache_index[t]%BS, 0, :] = kv_bytes[t, :]   # 就地写回
+kv_norm  = rms_norm(kv, norm_weight_kv, norm_eps)
+kv_rope  = apply_tail_rope(kv_norm, rope_sin, rope_cos)
+kv_bytes = E4M3FN(clamp(kv_rope, -448, 448)).view(uint8)
+kv_cache[cache_index[t]//BS, cache_index[t]%BS, 0, :] = kv_bytes[t, :]
 ```
 
-**RMSNorm 与动态量化**：RMSNorm 对每个 token 的完整特征行独立计算，不减均值：
-`RMSNorm(v, gamma)[j] = v[j] * gamma[j] / sqrt(mean(v^2) + norm_eps)`；QA 支路沿 R 归约，KV 支路
-沿 D 归约。QR 每 32 个元素组成一个量化组，对非零组：
+QA 与 QB 是代码对 Q 第一次、第二次投影的称呼；`qr` 是两次投影之间经过 RMSNorm 和量化的低秩表示。QB 必须消费量化后的 `qr/descale_qr`，不能直接使用 FP32 的 `qr_norm`。KV 支路先 RMSNorm、再 RoPE、最后转 E4M3FN，scale 固定为 1；返回的 QR scale 不用于解释 KV cache。
+
+**RMSNorm**：对每个 token 的整行计算，不减均值。QR 沿 R=1280 归约，KV 沿 D=512 归约。实现先求 `rstd = 1/sqrt(sum(v*v)/width + norm_eps)`，再依次计算 `(v*rstd)*gamma`。QR VF 按 20 段、KV VF 按 8 段的 64 个 FP32 元素累加平方和；Cube 的分块归约和 VF 的求和顺序可能与 CPU torch 不同，精度判据对此单独处理。
+
+**QR 动态量化**：每行含 40 个连续的 32 元素组。对通常的非零有限输入组，计算：
 
 ```text
-amax  = max(abs(group))
-e     = clamp(floor(log2(amax)) - 8, -127, 127)      # floor(log2) 直接取 FP32 指数字段
-scale = 2^e
-payload    = E4M3FN(clamp(group / scale, -448, 448)) # 最近偶数舍入
-scale 字节 = e + 127                                 # E8M0 偏置编码
+amax        = max(abs(group))
+e           = max(floor(log2(amax)) - 8, -127)
+scale       = 2^e
+payload     = E4M3FN(clamp(group / scale, -448, 448))
+scale_byte  = e + 127
 ```
 
-全零组的 payload 与 scale 字节都写 0。相邻两个组的 scale 字节成对存储，因此每行 R 个元素对应
-`[R/64,2]` 的 scale 形状。注意 E8M0 字节 0 表示 `2^-127`，不是数值 0。
+kernel 通过 FP32 指数字段取得共享指数，并构造 `2^-e` 与数据相乘。CPU 参考使用 `frexp` 和 `ldexp`，另对指数上限 127 做钳位；对有限 FP32 正常数，上限不会起作用。E4M3FN 采用最近偶数舍入（`CAST_RINT`），在转换前显式饱和到 ±448。该指数规则不等于用 `amax/448` 生成连续 scale，组内部分值仍可能饱和。
 
-**尾部 RoPE**：Q 的每个 head 与 KV 向量都保留前 `D-Dr` 维逐位透传，只变换末尾 `Dr=64` 维。
-令 z 为尾部向量、`h=Dr/2=32`，对 `i=0..h-1`（INTERLEAVE_HALF 约定，旋转符号由 sin/cos 表自身
-承载，公式内不出现负号）：
+全零组写零 payload 和编码字节 0；E8M0 字节 0 本身表示 `2^-127`，不是数值 0。最后两维 `[R/64,2]` 展平后，40 个 scale 依次对应特征 `0..31`、`32..63`、…、`1248..1279`；末维长度 2 是框架加载 scale 分形时使用的物理 phase 轴。这里的 scale 是乘法因子，名字中的 `descale` 不表示取倒数。
+
+**尾部 RoPE**：沿用 CPU 参考的 `RopeConvention.INTERLEAVE_HALF`。对每个 Q head 和 KV 向量，只变换末尾 64 维；前 448 维不做位置变换，Q 最后仍需转 BF16、KV 仍需转 E4M3FN。设尾部输入为 z，对 `i=0..31`：
 
 ```text
-out_tail[i]     = z[2i] * rope_cos[t,i]   + z[2i+1] * rope_sin[t,i]
-out_tail[h + i] = z[2i] * rope_sin[t,h+i] + z[2i+1] * rope_cos[t,h+i]
+out_tail[i]      = z[2*i] * rope_cos[t,i]    + z[2*i+1] * rope_sin[t,i]
+out_tail[32 + i] = z[2*i] * rope_sin[t,32+i] + z[2*i+1] * rope_cos[t,32+i]
 ```
 
-同一 token 的位置表在全部 N 个 Q head 上广播。
+输入按相邻元素配对，输出分别放入两个连续半区。同一 token 的表在全部 64 个 Q head 上共享。代码没有额外添加负号，不能直接替换为常见的带负号 RoPE 公式；是否构成保范数的旋转取决于调用方提供的系数表。kernel 只实现上述变换，不生成或校验角度表。
 
 ## 函数原型
 
 ```python
-# op_kernel 加入 sys.path 后：
 from attn_prologue import attn_prologue, to_nz
 
 q, qr, descale_qr = attn_prologue(
@@ -84,82 +80,69 @@ q, qr, descale_qr = attn_prologue(
 )
 ```
 
-`to_nz(weight)` 把 NPU 上的权重（`wqa/wqb/wkv`）转换为 FRACTAL_NZ 布局
-（`torch_npu.npu_format_cast(w, 29)`），应在权重加载期一次性调用；公开函数只校验权重已经是
-NZ（`get_npu_format == 29`），自身不做任何转换。全部张量须位于同一 NPU。
+`to_nz(weight)` 要求 NPU 张量，调用 `torch_npu.npu_format_cast(weight.contiguous(), 29)` 转为 FRACTAL_NZ。应在权重加载期一次性执行；公开计算函数只通过 `get_npu_format` 检查三份权重的 format 29，不自动转换。
 
 ### 参数说明
 
-`T=batch*seq` 为展平后的 token 数；`H=5120`、`R=1280`、`N=64`、`D=512`、`Dr=64`；`P` 为
-cache 页数，`BS` 为每页 slot 数，均由调用方给定。下表均为逻辑形状；NZ 只改变物理布局，不改变
-权重的逻辑矩阵方向。
+`T` 是 token 总数，batch 和 seq 不单独传入；`P` 是 cache 页数，`BS` 是每页 slot 数。下表权重形状均为逻辑形状，NZ 改变物理排布，不改变 `[输出宽度,输入宽度]` 的矩阵方向。
 
 | 参数 | dtype | shape / 布局 | 说明 |
 | :--- | :--- | :--- | :--- |
-| `x` | E4M3FN | `[T,H]` / ND | token 输入特征 payload |
-| `wqa` | E4M3FN | `[R,H]` / **NZ** | Q 第一次投影权重 |
-| `wqb` | E4M3FN | `[N*D,R]` / **NZ** | Q 第二次投影权重 |
-| `wkv` | E4M3FN | `[D,H]` / **NZ** | KV 投影权重 |
-| `descale_x` | E8M0 | `[T,H/64,2]` / ND | 输入的分组 scale；成对存储，末维是长度为 2 的物理 phase 轴 |
-| `descale_wqa` | E8M0 | `[R,H/64,2]` / ND | QA 权重的分组 scale |
-| `descale_wqb` | E8M0 | `[N*D,R/64,2]` / ND | QB 权重的分组 scale |
-| `descale_wkv` | E8M0 | `[D,H/64,2]` / ND | KV 权重的分组 scale |
-| `norm_weight_qr` | FP32 | `[R]` / ND | QR 支路的 RMSNorm 权重 |
-| `norm_weight_kv` | FP32 | `[D]` / ND | KV 支路的 RMSNorm 权重 |
-| `rope_sin` / `rope_cos` | FP32 | 各 `[T,Dr]` / ND | 每 token 的位置变换系数；旋转符号约定由表承载 |
-| `cache_index` | INT64 | `[T]` / ND | 要更新的扁平 cache slot，`0 <= idx < P*BS`，一次调用内不重复 |
-| `kv_cache` | UINT8 | `[P,BS,1,D]` / ND | 就地更新的分页缓存 |
-| `norm_eps` | float | 标量 | 有限正数，默认 `1e-6`，两条支路共用；作为运行期 FP32 参数传入，数值变化不触发重编译 |
+| `x` | E4M3FN | `[T,5120]` / ND | 输入的 FP8 编码数据，每字节一个元素 |
+| `wqa` | E4M3FN | `[1280,5120]` / NZ | Q 第一次投影权重 |
+| `wqb` | E4M3FN | `[32768,1280]` / NZ | Q 第二次投影权重，输出列按 head 连续组织 |
+| `wkv` | E4M3FN | `[512,5120]` / NZ | KV 投影权重 |
+| `descale_x` | E8M0 | `[T,80,2]` / ND | 每行 160 个 scale，各覆盖 32 个输入元素 |
+| `descale_wqa` | E8M0 | `[1280,80,2]` / ND | QA 权重沿输入特征维的 scale |
+| `descale_wqb` | E8M0 | `[32768,20,2]` / ND | QB 权重每行 40 个 scale |
+| `descale_wkv` | E8M0 | `[512,80,2]` / ND | KV 权重每行 160 个 scale |
+| `norm_weight_qr` | FP32 | `[1280]` / ND | QR RMSNorm 的逐特征权重，不要求全 1 |
+| `norm_weight_kv` | FP32 | `[512]` / ND | KV RMSNorm 的逐特征权重 |
+| `rope_sin` / `rope_cos` | FP32 | 各 `[T,64]` / ND | 每 token 的位置变换系数，不从 `cache_index` 推导 |
+| `cache_index` | INT64 | `[T]` / ND | 扁平 cache slot，约定 `0 <= idx < P*BS`，一次调用内不重复 |
+| `kv_cache` | UINT8 | `[P,BS,1,512]` / ND | 就地写回的 E4M3FN 编码字节，读取时按 scale=1 解释 |
+| `norm_eps` | float | 默认 `1e-6` | 两支路共用，作为运行期 FP32 参数传入；调用方应提供有限正数 |
 
-E4M3FN / E8M0 分别对应 `torch.float8_e4m3fn` 与 `torch.float8_e8m0fnu`。输入与权重沿最后一维
-每 32 个 payload 元素共享一个 scale；有限 E8M0 编码字节 b 对应 `2^(b-127)`。以 `int8`/`uint8`
-承载的历史 FP8 数据应通过 `.view(...)` 恢复 FP8 dtype，不能用数值类型转换替代字节重解释。
+E4M3FN 和 E8M0 对应 `torch.float8_e4m3fn`、`torch.float8_e8m0fnu`。host 的 dtype 检查也接受 `int8/uint8` 形式的编码字节；测试入口 `_device_input` 会先搬运原始字节，再 `.view` 为 kernel 声明的 FP8 dtype。为保持接口与 JIT 类型一致，建议按上表传入 FP8 视图，不能用 `.to(float8)` 对编码整数做数值转换。
+
+有限 E8M0 编码 b（0–254）表示 `2^(b-127)`。每组 scale 为一个字节，因此 x 的 scale 开销是每 token 160 B，而不是 80 B。测试主要使用非单位 scale 和有限随机输入；NaN、无穷或极端动态范围不属于本目录已完整验证的输入范围。
 
 ### 返回值说明
 
-返回 `(q, qr, descale_qr)` 三元组；`kv_cache` 就地更新，不额外返回。
+返回 `(q, qr, descale_qr)`；`kv_cache` 就地更新，不额外返回。
 
 | 输出 | dtype | shape | 说明 |
 | :--- | :--- | :--- | :--- |
-| `q` | `torch.bfloat16` | `[T,N,D]` | 第二次 Q 投影并完成尾部 RoPE 后的最终 Q |
-| `qr` | `torch.float8_e4m3fn` | `[T,R]` | RMSNorm 后动态量化的中间结果 |
-| `descale_qr` | `torch.int8` | `[T,R/64,2]` | QR 的 E8M0 编码字节；内部按 e8m0 分配，返回 int8 视图 |
-| `kv_cache`（就地） | `torch.uint8` | `[P,BS,1,D]` | E4M3FN 编码字节，仅改写 `cache_index` 命中的 slot |
+| `q` | BF16 | `[T,64,512]` | QB 投影与尾部 RoPE 后的最终 Q |
+| `qr` | E4M3FN | `[T,1280]` | QA 经 RMSNorm、动态量化后的中间表示，同时作为 QB 输入 |
+| `descale_qr` | INT8 | `[T,20,2]` | E8M0 编码字节；内部按 E8M0 分配，返回 int8 视图 |
+| `kv_cache`（就地） | UINT8 | `[P,BS,1,512]` | 仅覆盖 `cache_index` 命中的整行，每 slot 512 B |
 
-三个输出都由 host 用 `torch.empty` 分配、不做任何设备侧预置；kernel 在每次调用内先写后读其
-使用的全部输出与中间缓冲区域。KV 支路不返回独立 scale，也不返回独立的 K、V 张量。
+解释 `descale_qr` 时应先 `.view(torch.uint8)` 或 `.view(torch.float8_e8m0fnu)`，不能直接把 int8 的负数当作有符号指数。三个返回张量和两个 FP32 工作区均由 host 用 `torch.empty` 分配；`kv_cache` 使用调用方提供的存储，未命中 slot 保留原始字节。
+
+最终 Q 每 token 为 65536 B；T=262144 时单个 q 输出为 16 GiB。测试通过分块回传与比较来限制 CPU 参考内存，设备上的公开输出仍按完整 T 分配。
 
 ## 约束说明
 
 **输入与布局**
 
-1. 全部张量须逻辑连续、位于同一 NPU，dtype 与 shape 如上表；`wqa/wqb/wkv` 必须已是
-   FRACTAL_NZ（format 29）。公开函数显式校验 NZ 标记，未转换时直接报错，避免 kernel 按 ND
-   静默读出错乱布局。
-2. `H`、`R`、`D` 须为 64 的倍数；`Dr` 为正且是 16 的倍数，满足 `Dr <= 64`、`Dr <= D/2`。
-   完整验收范围为上述固定生产维度下的 T 泛化（`1 <= T <= 262144`）。
-3. `x[t]`、位置表第 t 行与 `cache_index[t]` 须对应同一个 token；算子不从 T 推断位置或所属序列。
-4. 调用方须保证 `0 <= cache_index[t] < P*BS` 且一次调用内没有重复 slot（重复值的语义未定义）；
-   未命中的 slot 保持原始字节不变。host 侧只校验元数据，不把设备索引值读回 CPU。
+1. 当前只支持固定的 H/R/N/D/Dr，上述维度不是可调接口参数。CPU 参考支持小几何自检，不代表设备 kernel 同时支持这些形状。T 必须在 `[1,262144]`。
+2. 调用方应提供同一 NPU 上的张量，ND 输入按连续布局准备，三份权重预先转 NZ。`_validate_metadata` 显式检查 shape、dtype 集合和权重 NZ 标记，但没有统一检查所有输入的设备一致性或连续性，也不自动修正布局。
+3. `x[t]`、位置表第 t 行与 `cache_index[t]` 必须对应同一个 token。算子不根据 T、batch 或 cache 页号推断位置。
+4. cache 页数和页大小应为正，索引须在 `[0,P*BS)` 且唯一。kernel 对负索引有跳过写入的分支，但 CPU golden 拒绝负索引，当前公开约定不将其作为有效输入；kernel 不检查索引上界或重复项，host 也不把设备索引读回 CPU。
 
 **数值与执行**
 
-5. 第二次 Q 投影的 A 操作数是量化后的 `qr`（不是 FP32 归一化值）；KV 支路先 RMSNorm 和 RoPE
-   再量化、且 scale 固定为 1。这两条顺序都是数值契约的组成部分，见「功能说明」的公式。
-6. E4M3FN 转换采用最近偶数舍入（`CAST_RINT`），量化前显式饱和到 ±448；全零量化组的 payload
-   与 scale 字节均为 0。
-7. `norm_eps` 是运行期 FP32 标量参数，改变其数值不触发重编译。
-8. host 侧公开函数只做元数据校验、派生整数量、`torch.empty` 分配输出与中间缓冲、单次 launch；
-   不包含任何设备侧计算或数据搬运（`to_nz` 属于权重加载期，不在公开函数内）。
-9. kernel 的模块级不变量（L1/L0A/L0B/L0_MX/L0C/UB 地址图容量、MX scale 的 >>4 地址耦合、
-   跨核事件 id 预留、mutex id 预算、几何整除性）在导入期由 `_check_constant` 校验，违反时抛
-   `RuntimeError`；`python -O` 下也不会被静默跳过。
-10. 尾块（T 不是 128 的整数倍）全部在 kernel 内处理：逻辑 T 决定输出行数、`cache_index` 读取
-    与公开形状，物理行 `ceil(T/128)*128` 只服务中间缓冲与 NZ 分形对齐；调用者无需补齐。
+5. QB 消费量化后的 QR，KV 先归一化和位置变换再量化。不能交换这些步骤，也不能将 QR 的动态 scale 用在 KV 上。
+6. E4M3FN 转换为最近偶数舍入，并先显式饱和到 ±448；QR 全零组的编码为零 payload 与 scale 字节 0。Q 的 BF16 转换在尾部 RoPE 之后执行。
+7. host 只对 `norm_eps` 做 `float(...)` 转换，没有有限性和正数检查；调用方应保证其有效。它以运行期 FP32 标量传入，不作为 tiling key。
+8. 一次公开调用只启动一个 kernel；CPU 侧的输入构造、NZ 权重转换、参考计算和输出比较均不在 kernel 内，也不包含于设备 task duration。
+9. `_check_constants()` 在导入期检查列块整除、归约步数、若干地址区域的容量及相邻区域关系、MX 地址配对、跨核事件编号和预载 mutex 编号。检查通过不表示运行期输入内容已被逐项验证；这些检查通过 `RuntimeError` 保持在 `python -O` 下有效。
+10. 调用方不需把 T 补为 128 的倍数。普通路径的 `ws_rows=T`；启用归约维二分时工作区为两个 `ceil(T/128)*128` 行带。Cube 在片上使用固定矩阵窗口，GM 读取、工作区写入、Q 存储与 cache 索引访问分别按逻辑行数限制；Q 的无效 AIV 半区仍参与必要事件握手。
 
 ## 调用示例
 
-权重一次性转 NZ 后直接调用（测试目录的 CPU fixture 可用于构造输入）：
+以下假设全部输入已按参数表准备并位于同一 NPU，FP8 字节已恢复为相应 dtype：
 
 ```python
 import sys
@@ -167,35 +150,36 @@ import sys
 sys.path.insert(0, "ops/pypto_pro/deepseek_v4_1/attn_prologue/op_kernel")
 from attn_prologue import attn_prologue, to_nz
 
-wqa, wqb, wkv = to_nz(wqa), to_nz(wqb), to_nz(wkv)   # 权重加载期一次性转换
+# 权重加载期执行一次，后续调用复用 NZ 权重。
+wqa, wqb, wkv = to_nz(wqa), to_nz(wqb), to_nz(wkv)
 q, qr, descale_qr = attn_prologue(
     x, wqa, wqb, wkv,
     descale_x, descale_wqa, descale_wqb, descale_wkv,
     norm_weight_qr, norm_weight_kv,
-    rope_sin, rope_cos, cache_index, kv_cache,       # kv_cache 就地更新
+    rope_sin, rope_cos, cache_index, kv_cache,
     norm_eps=1e-6,
 )
 ```
 
-运行测试（均在仓库根目录执行，需先加载 CANN 与 PyPTO 环境；设备由 `TILE_FWK_DEVICE_ID` 选择，
-未设置时为逻辑设备 0）：
+运行测试时在仓库根目录加载 CANN 与 PyPTO 环境。CLI 的 `--device` 优先于 `TILE_FWK_DEVICE_ID`，环境变量未设置时使用逻辑设备 0：
 
 ```bash
 D=ops/pypto_pro/deepseek_v4_1/attn_prologue
 
-# CPU golden 自检（形状/dtype/有限性，不碰 NPU）
+# 两种几何的 CPU 参考实现自检，不使用 NPU。
 python $D/tests/assets/attn_prologue_golden_cpu.py
-# 精度判据自检（CPU）
+# 两组 CPU 比较器自检，内部共 12 个检查场景。
 python $D/tests/assets/attn_prologue_precision.py
 
-# 全量精度矩阵（32 case）；或子集
+# 完整的 32 个设备场景，或按 T 选取子集；--t 可重复，不能传逗号列表。
 TILE_FWK_DEVICE_ID=1 python $D/tests/test_attn_prologue.py
-TILE_FWK_DEVICE_ID=1 python $D/tests/test_attn_prologue.py --t 1 --t 72 --t 1024
-python $D/tests/test_attn_prologue.py --list          # 列出 case（不需 NPU）
-pytest $D/tests -q                                    # 冒烟 case + 判据自检
+python $D/tests/test_attn_prologue.py --device 1 --t 1 --t 72 --t 1024
+python $D/tests/test_attn_prologue.py --list
+
+# pytest 收集 4 个设备冒烟项和 2 个 CPU 判据项，并非完整的 32 场景。
+pytest $D/tests -q
 ```
 
-直接运行测试文件时，逐 case 打印一行判定，并把结果写入 `--out` 指定的 JSON（默认
-`tests/reports/pro_pypto/validation.json`，目录自动创建）；`--list` 向 stdout 输出与用例矩阵
-一致的 JSON。精度判据、用例清单与绝对性能结果见同级目录的 [`RESULTS.md`](RESULTS.md)，实现
-结构与流水设计见 [`DESIGN.md`](DESIGN.md)。
+`--list` 在加载 NPU wrapper 前输出所选场景 JSON；也可使用 `--phase`、`--case-id` 和 `--unique-t` 筛选。`expected_template` 是参考用例记录的历史标签，不是 kernel 的实际分支判定，实际调度需看 T 和平台核数。
+
+精度入口每完成一个 case 就更新 `--out` 指定的 JSON，默认 `tests/reports/pro_pypto/validation.json`；`--row-chunk` 控制 CPU 分块比较，默认 256，`--norm-eps` 同时用于设备调用与参考计算。当前入口没有性能采样选项，历史 msprof 口径与结果见 [RESULTS.md](RESULTS.md)。
