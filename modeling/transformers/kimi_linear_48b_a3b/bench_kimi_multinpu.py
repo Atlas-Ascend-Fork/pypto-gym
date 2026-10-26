@@ -75,6 +75,7 @@ _P = _HERE
 while _P != "/" and not os.path.isdir(os.path.join(_P, "src", "pypto_gym")):
     _P = os.path.dirname(_P)
 _REPO_ROOT = _P
+sys.path.insert(0, _REPO_ROOT)  # top-level ops package (kernels) lives at the repo root
 sys.path.insert(0, os.path.join(_REPO_ROOT, "src"))
 sys.path.insert(0, os.path.join(_REPO_ROOT, "src", "pypto_gym", "transformers", "kimi_linear_48b_a3b"))
 
@@ -84,7 +85,7 @@ _REPO_CONFIG = os.path.join(
 MODEL_PATH = os.environ.get("MODEL_PATH", "/data/models/Kimi-Linear-48B-A3B-Instruct")
 
 # per-process KDA coverage counter (incremented by the wrapped kernel wrappers)
-_COVER = {"pypto_chunk": 0, "fallback": 0, "pypto_graph_chunk": 0}
+_COVER = {"pypto_fused_prefill": 0, "fallback": 0}
 
 
 @dataclass
@@ -231,25 +232,26 @@ def _build_model(ctx, args):
 
 
 def _wire_pypto(local_rank):
-    """Register the committed kernels package under the name modeling_kimi expects,
-    enable USE_PTO_KDA, and wrap the chunk wrapper to count pypto-vs-fallback. Binds
+    """Register the committed kernels package under the name modeling_kimi expects, enable
+    USE_PTO_KDA, and wrap the fused prefill operator to count pypto-vs-fallback. Binds
     PyPTO to THIS rank's NPU (TILE_FWK_DEVICE_ID was set to local_rank before import)."""
     import ops.pypto_tensor.kimi_linear_48b_a3b as pto
     sys.modules["kimi_linear_48b_a3b_pto_kernels"] = pto
-    _orig = pto.kda_chunk_wrapper
+    _orig = pto.kda_fused_prefill
 
-    def counting_chunk(*a, **kw):
+    def counting_fused(*a, **kw):
         try:
             r = _orig(*a, **kw)
-            _COVER["pypto_chunk"] += 1
+            _COVER["pypto_fused_prefill"] += 1
             return r
         except NotImplementedError:
             _COVER["fallback"] += 1
             raise
 
-    pto.kda_chunk_wrapper = counting_chunk
+    pto.kda_fused_prefill = counting_fused
     pto.USE_PTO_KDA = True
-    log("PyPTO wired: USE_PTO_KDA=True, kernel bound to this rank's NPU")
+    log("PyPTO wired: USE_PTO_KDA=True (fused prefill + fused decode), "
+        "kernel bound to this rank's NPU")
 
 
 def _mla_mask(t_step, kv_len, dev):
@@ -439,30 +441,9 @@ def _make_graph_stage_run(ctx, args):
     captured graph. HCCL recv/send stay OUTSIDE this (in _prefill_once)."""
     _install_static_route(ctx, args, tag="graph")
 
-    # PyPTO + graph: switch the captured KDA chunk branch to the DIRECT registered-op
-    # call (kda_chunk_pypto), bypassing _dispatch_kda's non-capturable try/except. Off
-    # for eager-KDA graphs. The flag stays on through warmup + capture (the captured
-    # graph then bakes in the registered op); replay just plays the recorded graph.
-    if args.pypto:
-        pto = sys.modules.get("kimi_linear_48b_a3b_pto_kernels")
-        if pto is None:
-            raise RuntimeError("[graph] --pypto set but kernels module not wired")
-        pto.USE_PTO_KDA_GRAPH = True
-        # Executed-proof probe: the graph branch calls kda_chunk_pypto DIRECTLY (not the
-        # counted kda_chunk_wrapper), so wrap that exact symbol to count invocations during
-        # the warmup AND capture forwards (replay bypasses python, so it counts warmup+capture
-        # invocations, not replays). The capture pass is one of those invocations, so a non-zero
-        # count proves the PyPTO KDA op was exercised during capture and recorded into the graph.
-        if not getattr(pto, "kda_pypto_counted", False):
-            _orig_pypto = pto.kda_chunk_pypto
-
-            def _counting_pypto(*a, __orig=_orig_pypto, **kw):
-                _COVER["pypto_graph_chunk"] += 1
-                return __orig(*a, **kw)
-
-            pto.kda_chunk_pypto = _counting_pypto
-            pto.kda_pypto_counted = True
-        log("[graph] USE_PTO_KDA_GRAPH=True — captured KDA chunk -> kda_chunk_pypto (direct op)")
+    # PyPTO + graph: the fused prefill path is capture-clean (stream-ordered,
+    # no separate graph entrypoint), so nothing to flip here — the counting
+    # wrapper from _wire_pypto also covers the warmup/capture invocations.
 
     stage_forward = _make_stage_forward(ctx, args.seq)
     hin = torch.zeros(1, args.seq, ctx.cfg.hidden_size, dtype=torch.bfloat16, device=ctx.dev)
@@ -666,9 +647,8 @@ def _emit_report(ctx, args, result):
     if ctx.rank != 0:
         return
     rows = [json.loads(g) for g in gathered]
-    total_chunk = sum(r["coverage"]["pypto_chunk"] for r in rows)
+    total_fused = sum(r["coverage"].get("pypto_fused_prefill", 0) for r in rows)
     total_fb = sum(r["coverage"]["fallback"] for r in rows)
-    total_graph_chunk = sum(r["coverage"].get("pypto_graph_chunk", 0) for r in rows)
     slowest = max(r["wall_ms"] for r in rows)
     # best-of-N pipeline wall = slowest stage's best iteration (pipeline gated by the
     # slowest stage); report the max over ranks of each rank's best-of-N.
@@ -688,9 +668,7 @@ def _emit_report(ctx, args, result):
         "prefill_wall_ms_pipeline": slowest,
         "prefill_wall_ms_pipeline_best": slowest_best,
         "npu_compute_us_total": total_compute_us,
-        "kda_pypto_chunk_total": total_chunk, "kda_fallback_total": total_fb,
-        # executed-proof: warmup+capture PyPTO KDA invocations (non-zero => op recorded into the graph)
-        "kda_pypto_graph_chunk_total": total_graph_chunk,
+        "kda_pypto_fused_prefill_total": total_fused, "kda_fallback_total": total_fb,
         "per_rank": rows,
     }
     if static:  # any fixed/uniform fake route (graph OR eager-static) is value-infidel

@@ -8,19 +8,18 @@
 # -----------------------------------------------------------------------------------------------------------
 """KDA (Kimi Delta Attention) PyPTO kernel package.
 
-    prefill : ``kda_chunk_wrapper`` replaces ``fla.ops.kda.chunk_kda`` in
-              ``KimiDeltaAttention.forward``; ``kda_chunk_pypto`` is the
-              torch.library-registered capturable entry.
+    prefill : ``kda_fused_prefill`` implements the fused PyPTO prefill path.
+              Unsupported inputs fall back to the reference torch path in the
+              modeling layer.
     decode  : ``kda_fused_decode`` (eager, guarded) and
               ``kda_fused_decode_step`` (capture-safe, no guards) run the whole
               per-token KDA path in one operator.
 
-See ``README.md`` for the algorithm, the subchunk=16 stability rationale and the
-dispatch toggles.
+See ``README.md`` for algorithm and dispatch details.
 """
 __all__ = [
     # prefill
-    "kda_chunk_wrapper", "kda_chunk_pypto",
+    "kda_fused_prefill",
     # decode
     "kda_fused_decode", "kda_fused_decode_step",
     "prepare_kda_fused_weights", "KdaFusedWeights",
@@ -28,7 +27,7 @@ __all__ = [
     "seed_fused_buffers",
 ]
 
-from .kda_chunk_impl import kda_chunk_wrapper, kda_chunk_pypto
+from .kda_fused_prefill_impl import kda_fused_prefill
 from .kda_fused_decode_impl import (
     kda_fused_decode,
     kda_fused_decode_step,
