@@ -11,14 +11,14 @@
 """mixed_quant_sparse_flash_mla CPU golden（独立数学 oracle，纯 torch）。
 
 三部分：
-* host 侧 metadata 规划器（``plan_metadata`` / ``build_metadata``，与参考实现的独立
-  host 规划器同构；测试用它生成 kernel 消费的 ``int32[1024]``）；
+* host 侧 metadata 规划器（``plan_metadata`` / ``build_metadata``：本机 28 核下按 uniform
+  整行规划，FD 字段为 0；测试用它生成 kernel 消费的 ``int32[1024]``）；
 * 独立 CPU 参考 ``mixed_quant_sparse_flash_mla_golden_cpu``：直接从合同字节池
   解码 FP8 E4M3FN group32 / FP4 E2M1 group16 反量化，做 128-token 分块在线
   softmax（含 sinks、BF16 概率舍入、FP32 累加、FP64 LSE via logsumexp）；
-* 输入构造适配层 ``build_inputs`` / ``reference``：按 ``SPEC.md`` 机器合同造输入。
+* 输入构造适配层 ``build_inputs`` / ``reference``：按下述 P0 参数表造输入。
 
-case 参数来自本算子目录下的 ``SPEC.md`` 机器合同块（``p0_cases``）。
+case 参数以 ``_DEFAULT_PARAMS`` + ``_CASE_OVERRIDES`` 的形式内联在本文件（见 ``load_case_params``）。
 """
 
 import logging
@@ -290,15 +290,46 @@ TILE_N = 128
 FP4_LUT = torch.tensor([0, 0.5, 1, 1.5, 2, 3, 4, 6, 0, -0.5, -1, -1.5, -2, -3, -4, -6])
 
 
-def load_case_params():
-    import json
-    import re
-    from pathlib import Path as _Path
+#: Contract defaults shared by every P0 case (see the contract notes in README.md).
+_DEFAULT_PARAMS = {
+    "s_ori": 257,
+    "s_cmp": 193,
+    "k_ori": 128,
+    "k_cmp": 129,
+    "bs_ori": 128,
+    "bs_cmp": 128,
+    "has_cmp": True,
+    "vary_lengths": False,
+    "zero_ori": False,
+    "full_lengths": False,
+    "kv_axis0_noncontiguous": False,
+    "softmax_scale": 0.04419417382415922,
+}
 
-    text = (_Path(__file__).resolve().parents[2] / "SPEC.md").read_text()
-    block = re.findall(r"(?ms)^```json machine-contract\s*\n(.*?)^```\s*$", text)[0]
-    contract = json.loads(block)
-    return {case["name"]: case for case in contract["p0_cases"]}
+#: Per-case overrides of ``_DEFAULT_PARAMS``, keyed by P0 case name (contract order).
+_CASE_OVERRIDES = {
+    "mixed_decode": {},
+    "ori_only": {"has_cmp": False},
+    "empty_and_tail": {"vary_lengths": True},
+    "padded_pages": {"bs_ori": 64, "bs_cmp": 32, "kv_axis0_noncontiguous": True},
+    "single_token_k": {"k_ori": 1, "k_cmp": 1, "vary_lengths": True},
+    "narrow_k_tail": {"k_ori": 17, "k_cmp": 65, "vary_lengths": True},
+    "cmp_only_rows": {"vary_lengths": True, "zero_ori": True},
+    "multirow_42": {"vary_lengths": True},
+    "selective_fd_72": {"s_cmp": 769, "k_cmp": 512},
+    "omit_lengths": {"full_lengths": True},
+    "decode_1": {"s_ori": 32768, "s_cmp": 16384, "k_cmp": 512},
+    "decode_6": {"s_ori": 32768, "s_cmp": 16384, "k_cmp": 512},
+    "decode_6_long_s2": {"s_ori": 131072, "s_cmp": 65536, "k_cmp": 512},
+}
+
+
+def load_case_params():
+    """Return ``{case_name: {"params": ...}}`` for every P0 case, in contract order."""
+    return {
+        name: {"params": {**_DEFAULT_PARAMS, **override}}
+        for name, override in _CASE_OVERRIDES.items()
+    }
 
 
 _CASE_LAYOUTS = {
@@ -383,7 +414,7 @@ def mixed_quant_sparse_flash_mla_golden_cpu(
     cu_seqlens_q,
     **params,
 ):
-    """Implement the SPEC formula on CPU; return SPEC output dtypes."""
+    """Implement the contract formula on CPU; return the contract output dtypes."""
     scale = float(params["softmax_scale"])
     has_cmp = bool(params.get("has_cmp", True))
     rows = q.shape[0]
@@ -513,7 +544,7 @@ def _build_case_tensors(case, device=torch.device("cpu")):
 
 
 def _make_inputs(device=torch.device("cpu")):
-    """Return every SPEC P0 as (case_name, positional_tensor_args, scalar_kwargs)."""
+    """Return every P0 as (case_name, positional_tensor_args, scalar_kwargs)."""
     spec_cases = load_case_params()
     cases = []
     for name in _CASE_ORDER:

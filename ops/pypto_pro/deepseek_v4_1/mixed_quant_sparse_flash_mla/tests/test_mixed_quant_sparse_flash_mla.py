@@ -10,7 +10,7 @@
 # -----------------------------------------------------------------------------------------------------------
 """mixed_quant_sparse_flash_mla 的独立测试入口（精度矩阵 + 可选性能）。
 
-针对 SPEC machine-contract 的全部 P0 case（13 条）：
+针对合约的全部 P0 case（13 条）：
 
 * 用 `tests/assets/mixed_quant_sparse_flash_mla_golden_cpu.py` 的 ``build_inputs``
   造输入（并按 host 规划器生成 kernel 消费的 ``metadata``），在设备上调用公开入口
@@ -55,10 +55,10 @@ import mixed_quant_sparse_flash_mla_golden_cpu as golden  # noqa: E402
 import mixed_quant_sparse_flash_mla_precision as verify  # noqa: E402
 from mixed_quant_sparse_flash_mla import mixed_quant_sparse_flash_mla  # noqa: E402
 
-#: P0 case 名（SPEC machine-contract 的 ``p0_cases``，按合同顺序）。
+#: P0 case 名（合约定义的 13 条，按合同顺序）。
 P0_CASES = list(golden.load_case_params().keys())
 
-#: 该 case 的空行/尾块附加准出要求严格 LSE（SPEC §3）：LSE 用 FP32 直接比较。
+#: 该 case 的空行/尾块附加准出要求严格 LSE：LSE 用 FP32 直接比较。
 _LSE_RTOL = 1e-5
 _LSE_ATOL = 1e-5
 
