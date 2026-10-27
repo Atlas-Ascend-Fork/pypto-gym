@@ -10,26 +10,26 @@
 Kimi-Linear-48B-A3B PyPTO 融合算子库
 
 实际集成的算子：
-- KDA (Kimi Delta Attention) fused prefill: uses `kda_fused_prefill` for the
-  PyPTO prefill path.
+- KDA (Kimi Delta Attention) chunk 融合版: 融合 chunk/subchunk 级别的 KDA kernel，
+  用于 prefill 阶段替代 FLA/torch 原始实现。
 
 融合范围：
-- kda_fused_prefill covers the whole per-layer KDA prefill attention subgraph;
-  see kda/README.md for details.
+- chunk_kda 内部的 l2norm + cumulative-gate + pairwise decay + triangular-inverse
+  + recurrent state carry 等子算子的融合（subchunk=16 数值稳定）。
 
 应用场景：
 - Kimi-Linear-48B-A3B-Instruct 模型的 prefill 推理加速，通过 sys.modules 注入
   kimi_linear_48b_a3b_pto_kernels 模块。
 
 注入方式：
-- sys.modules["kimi_linear_48b_a3b_pto_kernels"] 提供 USE_PTO_KDA 开关和 kda_fused_prefill 函数。
+- sys.modules["kimi_linear_48b_a3b_pto_kernels"] 提供 USE_PTO_KDA 开关和 kda_chunk_wrapper 函数。
 
 ACLGraph / torch.compile：
-- Graph capture uses the same `kda_fused_prefill` path; there is no separate
-  graph-only operator.
+- kda_chunk_pypto 经 torch.library 注册为 pypto::kda_chunk_kimi
+  （Meta + NPU），可被 torchair/aclgraph 图捕获；eager 默认路径仍走 *_wrapper，互不影响。
 """
 
-from .kda.kda_fused_prefill_impl import kda_fused_prefill
+from .kda.kda_chunk_impl import kda_chunk_wrapper, kda_chunk_pypto
 
 # NOTE(multi-NPU coverage): PyPTO binds a JIT kernel to ONE NPU per process. With
 # the wrappers enabled on a model sharded across NPUs (single-process device_map),
@@ -39,7 +39,18 @@ from .kda.kda_fused_prefill_impl import kda_fused_prefill
 # NPU (pipeline / tensor parallel). See kda/README.md.
 USE_PTO_KDA = False
 
+# NPU-graph capture flag (off by default — preserves existing behavior). When True,
+# KimiDeltaAttention.forward's chunk branch calls ``kda_chunk_pypto`` (the registered
+# torch.ops.pypto.kda_chunk_kimi custom op) DIRECTLY, bypassing the _dispatch_kda
+# try/except NotImplementedError fallback. The try/except is NOT capturable by an NPU
+# graph (control flow on a host-raised exception), so the graph path must call the
+# registered op with no host-side branch. Only meaningful under graph capture, where
+# the bench guarantees cache_params=None -> initial_state=None, cu_seqlens=None.
+USE_PTO_KDA_GRAPH = False
+
 __all__ = [
     'USE_PTO_KDA',
-    'kda_fused_prefill',
+    'USE_PTO_KDA_GRAPH',
+    'kda_chunk_wrapper',
+    'kda_chunk_pypto',
 ]

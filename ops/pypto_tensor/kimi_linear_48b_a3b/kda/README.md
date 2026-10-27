@@ -1,4 +1,4 @@
-# KDA — Kimi Delta Attention (fused_prefill + fused_decode) PyPTO kernels
+# KDA — Kimi Delta Attention (chunk + fused_decode) PyPTO kernels
 
 Fused PyPTO Ascend-NPU implementation of the **Kimi Delta Attention (KDA)** linear-attention
 core used by `KimiDeltaAttention` in Kimi-Linear-48B-A3B-Instruct. KDA is a refined gated
@@ -8,26 +8,43 @@ Two kernels:
 
 | File | Op | Path | Default |
 |------|----|------|---------|
-| `kda_fused_prefill_impl.py` | `kda_fused_prefill` | prefill (`mode == 'chunk'`) | dispatched when `USE_PTO_KDA` |
+| `kda_chunk_impl.py` | `kda_chunk_wrapper` | prefill (`mode == 'chunk'`) | dispatched when `USE_PTO_KDA` |
 | `kda_fused_decode_impl.py` | `kda_fused_decode_step` | decode | called from `kda_decode_graph.py` |
 
-Both wrappers are `@allow_in_graph` and stream-ordered (NPU-graph capturable). The
-reference FLA/torch path (`chunk_kda` / `fused_recurrent_kda` via `kimi_fla_compat`) is
-preserved as the fallback: out-of-envelope shapes raise `NotImplementedError` and the
-modeling layer falls back.
+The wrapper mirrors the upstream `fla.ops.kda.chunk_kda` signature and is `@allow_in_graph`
+(torch.compile / aclgraph capture compatible).
 
-## Fused prefill (`kda_fused_prefill_impl.py`)
+## Math (per (b,h), state `S = [V,K]`, state_v_first)
 
-The single PyPTO prefill operator: one fused PyPTO kernel covers the whole
-per-layer KDA attention core between the projections and `o_proj` —
-`conv1d(k=4)+silu → l2norm → gate transform → beta sigmoid → WY-chunked gated
-delta rule → o_norm (RMSNorm × sigmoid gate) → bf16 out`.
+```
+q,k L2-normalized: x / (sqrt(sum(x*x)) + 1e-6)
+g       = log-space gate (lower_bound(-5) * sigmoid(...)),  alpha = exp(g)
+S'      = S * alpha                       # Diag(alpha) decay on the K axis
+pred    = S' @ k                          # [V]
+delta   = beta * (v - pred)               # [V]
+S_new   = S' + delta ⊗ k                  # outer product -> [V,K]
+o       = scale * (S_new @ q)             # [V],  scale = K**-0.5
+```
 
-## Numerical stability
+The **chunk** kernel runs this recurrence in blocks: cumulative gate `G = cumsum(g)`,
+pairwise decay `exp(G_i - G_j)` for `j <= i`, triangular inverse `(I + A_kk)^-1` (via
+nilpotent doubling), and inter-/intra-chunk state carry. See the `kda_chunk_impl.py`
+module docstring for the per-subchunk equations.
 
-A naive exponential factorization can overflow in fp32 for long decay ranges.
-The fused kernel uses 16-row pivot bands to keep intra-chunk decay exponents within a safe range,
-while cross-chunk decay remains non-positive and is safe by construction.
+### Numerical stability — subchunk = 16
+The real KDA gate accumulates to `G ≈ -640` over a 128-step chunk; factorizing the
+intra-chunk decay as `q·exp(G)` / `k·exp(-G)` overflows fp32 (`exp(+640) = inf → NaN`).
+The chunk kernel processes each chunk in **subchunks of `SUB = 16` steps**, carrying the
+recurrent state across subchunks. Within a 16-step subchunk the cumulative-gate range is at
+most `16*5 = 80`, so `exp(80) ≈ 5.5e34 < 3.4e38` stays in fp32 range and never overflows.
+Mathematically identical to `chunk_size = 16`.
+
+### Kernel dtype — FP32 (intentional, ≠ model bf16)
+The kernel computes in **FP32**, not the model's native bfloat16. This is a deliberate
+stability choice, not an oversight: the per-channel log-gate's `exp(±G)` factorization
+needs FP32 headroom (see above), and bf16 (~3 mantissa bits) would lose the delta-rule
+state. The q/k/v/g casts are done **host-side** (`.float()`) so there is no dependency on
+NPU-side bf16↔fp32 `aclnnCast`; the output is cast back to the input dtype by the wrapper.
 
 ## Shapes / constraints
 
@@ -36,14 +53,14 @@ while cross-chunk decay remains non-positive and is safe by construction.
 | heads `H` | 32 (validated 4 / 32) |
 | head_k_dim `K` | 128 |
 | head_v_dim `V` | 128 |
-| WY chunk | 128 tokens (static) |
-| q/k/v | bf16 `[B,T,H,128]` pre-conv projections (host packs to fp32) |
-| g_raw / g_gate / b_raw | projection outputs, any float dtype (bf16 in the model) |
-| state dtype | fp32 `[B,H,V,K]` |
-| output dtype | bf16 in-kernel; wrapper casts back to the input dtype if needed |
- 
-Unsupported shapes or execution modes raise `NotImplementedError`, and
-`_try_kda_fused_prefill` falls back to the reference torch prefill path.
+| chunk subchunk `SUB` | 16 |
+| `use_qk_l2norm_in_kernel` | `True` (L2 norm done on host before packing) |
+| dtype | q/k/v/g bf16/fp16/fp32 in, fp32 state, out cast back to input dtype |
+
+FLA layout: `q,k,g [B,T,H,128]`, `v [B,T,H,128]`, `beta [B,T,H]`, `state [B,H,V,K]` fp32.
+Out-of-envelope shapes (`K != 128`, `V != 128`,
+`use_qk_l2norm_in_kernel=False`) raise `NotImplementedError`; the modeling layer then falls
+back to the torch chunk/recurrent path.
 
 **Single-NPU binding.** PyPTO binds a JIT kernel to one NPU per process (the device of the
 first launch). For a model sharded across NPUs via `device_map`, the wrapper raises
@@ -53,68 +70,90 @@ coverage requires one process per NPU (pipeline/tensor parallel).
 
 ## Accuracy
 
-Checked against the torch composition the operator fuses (conv1d+silu → gate →
-beta → `_naive_recurrent_kda` core → o_norm) by
-`tests/ops/kimi_linear_48b_a3b/test_kda_fused_prefill.py`, on Ascend 910:
- 
-- `B ∈ {1,2}`, `H ∈ {4,32}`, `T ∈ {128, 300, 512}` — exact chunk, non-%128
-  tail and multi-chunk state carry; the remaining cases cover H=32, B>1,
-  worst-case gate (`g ≈ -5` everywhere), no-initial-state and the
-  continuing-prefill conv-cache path. All compared against an **all-fp32
-  golden** (fp32 conv+silu, exact naive recurrence, fp32 o_norm):
-  dO ≤ 1e-2 (≈1 bf16 ulp — the single final round-to-bf16, i.e. the
-  format floor), dS ≤ 1e-5, conv-state **bit-exact** (it seeds decode).
- 
-Test inputs match the real model's dtypes: q/k/v bf16 (pre-conv projections),
-g_raw/g_gate/b_raw bf16 (projection outputs), dt_bias/A_log/o_norm.weight fp32
-parameters, initial_state fp32.
+Checked against the `_naive_recurrent_kda` golden (and the `vec_chunk_kda` torch chunked
+op) by the tests in `tests/ops/kimi_linear_48b_a3b/`, on Ascend 910B3:
+
+- chunk: `B ∈ {1,2}`, `H ∈ {4,32}`, `T ∈ {64,128,300,512,1000}`, realistic gate `g=-5·rand`
+  AND worst-case `g=-5·ones` (cumulative `≈ -640`) — **max abs error ~6.1e-5** (bf16,
+  vs the fp32 naive-recurrent golden; well within the 6e-3 test tolerance).
+
+Test inputs match the real model's dtypes (probed from `KimiDeltaAttention.forward`, see
+`tests/.../test_cases.json` `probe`): q/k/v bf16, **g and beta fp32** (`fused_kda_gate` /
+`.float().sigmoid()`), `initial_state` fp32.
 
 > **验证范围说明（scenario-B 限制）：** 被替换的原算子是 `fla.ops.kda.{chunk_kda,
 > fused_recurrent_kda}`（Triton/CUDA 实现）。`fla`/Triton 在 Ascend 环境**不可用**
 > （`modeling_kimi.py` 的 `ImportError` 分支即据此回退到 `kimi_fla_compat` 的纯 torch
 > 实现）。因此**无法**在本硬件上直接对比 kernel 与**真实 fla 融合算子**的输出。
 >
-> The substitute baseline is `_naive_recurrent_kda` — a plain per-timestep recurrence
-> straight from the KDA defining equations, with no chunking or matrix inversion, so it
-> is structurally independent of the kernel's blocked algorithm. Cross-check:
-> dS ≤ 3.9e-6, dO ≤ 8.8e-3 (≈1 bf16 ulp, the format floor).
+> 替代基准采用**两个相互独立的参考实现**交叉校验，而非单一“算法等价重写”——
+> 这一点很关键，可避免“参考与 kernel 共享同一算法误解、却互相吻合”的循环验证盲区：
+> 1. **`_naive_recurrent_kda`（主 golden）**——逐时间步朴素递归，直接照 KDA 定义式
+>    （per-channel 对数门 `g`、`alpha=exp(g)`、delta-rule 外积更新、q/k L2norm、`scale=K**-0.5`，
+>    见 `kda_chunk_impl.py` 模块 docstring 与 Kimi-Linear KDA 数学定义）实现，**不含**任何
+>    分块/矩阵求逆技巧。kernel 的精度即是对拍它（chunk 6.1e-5）。
+> 2. **`vec_chunk_kda`（第二参考）**——分块矩阵算法（subchunk=16，nilpotent 三角求逆），
+>    与 kernel 同构但纯 torch；它独立地对拍 `_naive_recurrent_kda`（≤6e-5）。
 >
-> **Residual risk:** the golden is this repo's own transcription of the KDA math and
-> has not been bit-compared with the upstream CUDA `fla.ops.kda` kernel. **To close it**
-> (needs a CUDA machine): run `kimi_fla_compat.vec_chunk_kda` vs the real
-> `fla.ops.kda.chunk_kda` once on a GPU and record the result here; until then this is
-> a disclosed, known gap.
+> 由于①是定义式逐步递归、②是分块算法，二者**结构独立**：kernel 同时吻合两者，已排除
+> “实现误解被参考掩盖”的主要风险。**残余风险**仅剩一项且已界定：①②均是 KDA 数学的
+> **本仓库转写**，未与上游 CUDA `fla.ops.kda` kernel 逐位对拍。**关闭方式**（需 CUDA 机器、
+> 非本 Ascend 环境）：在一台 GPU 上跑一次 `vec_chunk_kda` vs 真实 `fla.ops.kda.chunk_kda`
+> 的差异并记录于此；在拿到该数据前，本集成按“已披露的已知差距”对待。
 
-## Graph capture
- 
-The fused wrappers do **not** call `torch_npu.npu.synchronize()` — the kernel enqueues
-on the current stream and downstream ops are stream-ordered after it, so a device-wide
-sync is unnecessary (and would abort NPU-graph capture). The prefill dispatch lives at
-the fused-subgraph level (`_try_kda_fused_prefill` in `modeling_kimi.py`); its
-try/except resolves to the fused branch during warmup + capture, so a captured stage
-bakes in the fused op. Capture+replay of the operator is regression-tested in
-`test_kda_fused_prefill.py::test_kda_fused_prefill_graph_capture` (bit-exact vs
-eager); the full-model `--graph` bench captures every KDA layer through this
-path. The decode stage is captured via `kda_decode_graph.py`'s
-`StaticDecodeCache` + `kda_fused_decode_step`.
+## Performance
+
+The fused chunk kernel reduces KDA prefill cost vs the torch chunked op, with the gain
+growing with sequence length. Decode (T=1 recurrent) is roughly parity, so it is left on the
+upstream torch path; PyPTO covers the prefill/chunk path only.
+
+## ACLGraph / 图捕获
+
+The chunk kernel is registered with `torch.library` as `pypto::kda_chunk_kimi` (Meta + NPU
+keys; see the registration block at the bottom of `kda_chunk_impl.py`, mirroring
+`phi_3_mini_4k_instruct/rms_norm`). The Meta ("fake") impl gives a graph tracer the output
+shape/dtype rule without launching the kernel. `kda_chunk_pypto` is the capturable entry point
+(`torch.ops.pypto.kda_chunk_kimi`); the default eager dispatch still uses `kda_chunk_wrapper`,
+so this adds capture-readiness without touching the verified eager path.
+
+The wrappers do **not** call `torch_npu.npu.synchronize()` — the kernel enqueues on the
+current stream and downstream ops are stream-ordered after it, so a device-wide sync is
+unnecessary (and would abort aclgraph capture). Verified safe: op tests are bit-identical
+with the sync removed, and the full-model bench keeps identical KDA coverage.
+
+**Verified** (`tests/ops/kimi_linear_48b_a3b/test_kda_aclgraph.py`, on NPU):
+- registered NPU op == eager wrapper, **bit-identical** (chunk);
+- Meta shape inference correct under `FakeTensorMode`;
+- the op composes into a **`torch.compile(fullgraph=True)`** graph with **no graph break**
+  (`aot_eager` + `eager`, bit-exact);
+- **real torchair aclgraph capture** (`torch_npu.dynamo.torchair`, `get_npu_backend`,
+  `mode="reduce-overhead"`) **captures + replays bit-exact** (`diff=0`) — this is the
+  npugraph/stream-capture path, which needs **no GE converter**.
+
+**Remaining for whole-model aclgraph:** the KDA op itself is capture-ready (above). Running
+the *entire* Kimi model under a single torchair `reduce-overhead` graph additionally
+requires every other op (MoE routing, attention, conv) to be capture-clean; that end-to-end
+model capture is the next step and is not yet validated here. (torchair's separate GE-graph
+mode is a different path that *would* need a per-op GE converter — not pursued, since the
+npugraph capture above already works for this fused kernel.)
 
 ## Files
 
 | File | Description |
 |------|-------------|
-| `kda_fused_prefill_impl.py` | Fused prefill operator — `kda_fused_prefill` (conv+silu, gate, beta, WY-chunk KDA core, o_norm; one kernel) |
-| `kda_fused_decode_impl.py` | Decode kernel + `kda_fused_decode` (eager, guarded) + `kda_fused_decode_step` (capture-safe) |
-| `_device_guard.py` | Single-NPU binding guard shared by both wrappers |
-| `__init__.py` | Package init — re-exports `kda_fused_prefill` (prefill) and `kda_fused_decode`/`kda_fused_decode_step` (decode) |
+| `kda_chunk_impl.py` | Chunk/prefill kernel + `kda_chunk_wrapper` (`@allow_in_graph`) + `torch.library` reg (`pypto::kda_chunk_kimi`, Meta+NPU) + `kda_chunk_pypto` |
+| `_device_guard.py` | Shared single-NPU bind guard (partial-coverage fallback) |
+| `__init__.py` | Package init — re-exports `kda_chunk_wrapper` (eager) and `kda_chunk_pypto` (capturable) |
+| `README.md` | This document |
 
 ## 状态
 
 | 维度 | 状态 |
 |------|------|
-| 单算子精度 | ✅ `tests/ops/kimi_linear_48b_a3b/test_kda_fused_prefill.py` — vs 全 fp32 golden: dO ≤ 8.8e-3 (≈1 bf16 ulp), dS ≤ 3.9e-6, conv-state bit-exact |
-| 整网集成 | ✅ `USE_PTO_KDA` + `sys.modules` injection + fused-subgraph dispatch (`_try_kda_fused_prefill`) with `NotImplementedError` → torch fallback |
-| ACLGraph | ✅ no device-wide sync; NPUGraph capture+replay regression-tested in `test_kda_fused_prefill.py`; full-model `--graph` bench captures every KDA layer |
-| 性能 | Benchmarked with `bench_kimi_multinpu.py --mode prefill --pypto [--graph]` |
+| 单算子精度 | ✅ chunk 测试通过（PRECISION_PASS）— `tests/ops/kimi_linear_48b_a3b/test_kda_chunk.py`，max abs err 6.1e-5 |
+| 整网集成 | ✅ 已接入 — `USE_PTO_KDA` 开关 + `sys.modules` 注入 + `NotImplementedError` → 上游 torch fallback；端到端可跑通，PyPTO 运行间结果可复现（逐字节一致）。与 torch 参考 **非** bit-exact（kernel 与 torch 参考**均为 fp32 计算 + bf16 I/O**，差异仅来自实现/算子顺序的舍入，单算子 ~6.1e-5；greedy argmax 在 token 级可能分叉） |
+| ACLGraph | ✅ 算子级已验证 — chunk kernel `torch.library` 注册（`pypto::kda_chunk_kimi`，Meta+NPU），且 wrapper 去除了多余的 `torch_npu.npu.synchronize()`（kernel 走 stream 顺序，去同步后算子测试逐位一致、整网 bench KDA 覆盖不变且更快）。`test_kda_aclgraph.py` 验证：注册 op == wrapper 逐位一致、Meta 推导正确、`torch.compile(fullgraph)` 无 graph break、**真实 torchair aclgraph（reduce-overhead）capture+replay 逐位一致（diff=0，无需 GE converter）**。整网 aclgraph（其余算子也需 capture-clean）为后续工作 |
+| 性能调优 | ✅ chunk nested-64 已调优（subchunk=16，prefill 1.05–1.26x）。详见上级 `modeling/transformers/kimi_linear_48b_a3b/README.md` 性能对比 |
 
 ---
 

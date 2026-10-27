@@ -9,8 +9,10 @@ describing the contract.
 
 | Operator | Subdirectory | Status |
 |----------|--------------|--------|
-| `kda_fused_prefill` (Kimi Delta Attention, prefill) | [`kda/`](kda/) | Available |
-| `kda_fused_decode` (Kimi Delta Attention, decode) | [`kda/`](kda/) | Available |
+| `kda_chunk` (Kimi Delta Attention, prefill/chunk) | [`kda/`](kda/) | Available |
+
+PyPTO covers the prefill (`mode == 'chunk'`) path only; decode runs the upstream
+torch recurrent path.
 
 ## Common shape constraints
 
@@ -21,15 +23,18 @@ Kimi-Linear-48B-A3B's KDA (`linear_attn_config`) has:
 | `D` | Per-head dimension (`head_k_dim == head_v_dim`) | 128 |
 | `H` | KDA head count (`num_heads == num_k_heads`)     | 32  |
 
-The kernels keep the per-channel log-gate (`g in [-5, 0]`) numerically stable
-in fp32. The wrappers raise `NotImplementedError` outside the supported
-envelope (e.g. tensors off the bound NPU) and the modeling layer falls back to
-the reference torch path.
+The chunk kernel processes each chunk in subchunks of 16 steps for fp32 numerical
+stability of the per-channel log-gate (`g in [-5, 0]`). Wrappers mirror the upstream
+`fla.ops.kda.chunk_kda` signature and raise `NotImplementedError` outside the
+supported envelope (e.g. tensors off the bound NPU).
 
 ## Integration
 
-The kernel is wired into the model through the 
-[modeling_kimi.py](../../../transformers/kimi_linear_48b_a3b/modeling_kimi.py).
-The ops package is injected as sys.modules["kimi_linear_48b_a3b_pto_kernels"],
-exposing USE_PTO_KDA (opt-in switch, default off) together with the PyPTO prefill
-and decode entry points.
+The kernel is wired into the model through the
+[modeling_kimi.py](../../../transformers/kimi_linear_48b_a3b/modeling_kimi.py)
+dispatch hook: the ops package is injected as
+`sys.modules["kimi_linear_48b_a3b_pto_kernels"]`, exposing `USE_PTO_KDA` (opt-in
+switch, default off) and `kda_chunk_wrapper`; decode uses the unchanged upstream
+`fused_recurrent_kda`. For torch.compile / torchair ACLGraph capture,
+`kda_chunk_pypto` is registered as `pypto::kda_chunk_kimi` (Meta + NPU) and is
+selected under `USE_PTO_KDA_GRAPH`.

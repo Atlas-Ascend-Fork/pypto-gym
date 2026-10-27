@@ -18,8 +18,8 @@ Kimi Linear 是混合线性注意力架构：3:1 的 **KDA**（Kimi Delta Attent
 
 | Operation | PyPTO Integrated | Toggle flag | Fallback | Notes |
 |-----------|:---:|-------------|----------|-------|
-| KDA prefill | Yes | `USE_PTO_KDA` | `chunk_kda` (torch `vec_chunk_kda`) | Uses `kda_fused_prefill` (fused conv+gate+beta+KDA core+o_norm kernel) |
-| KDA decode (T=1) | Yes | `USE_PTO_KDA` | `fused_recurrent_kda` (torch `_naive_recurrent_kda`) | Uses `kda_fused_decode` (full layer fusion incl. projections); requires prefill-seeded conv/recurrent states; graph mode via `kda_decode_graph.py` |
+| KDA chunk (prefill) | Yes | `USE_PTO_KDA` | `chunk_kda` (torch `vec_chunk_kda`) | 融合 subchunk=16 KDA chunk kernel |
+| KDA decode (T=1) | No | — | `fused_recurrent_kda` (torch `_naive_recurrent_kda`) | 仅 pto 化 chunk/prefill 路径；decode 走上游 torch recurrent |
 | FusedRMSNormGated | No | — | torch `FusedRMSNormGated` | 后注意力门控归一化 |
 | ShortConvolution | No | — | torch causal depthwise conv1d | KDA 前处理因果卷积 |
 | 全注意力 (MLA) | No | — | eager / sdpa | 标准 HuggingFace 注意力 |
@@ -64,8 +64,8 @@ kernel 模块通过 `sys.modules["kimi_linear_48b_a3b_pto_kernels"]` 暴露：
 
 | Variable | Type | Default | 说明 |
 |----------|------|---------|------|
-| `USE_PTO_KDA` | `bool` | `False` | Enables the PyPTO fused prefill kernel |
-| `kda_fused_prefill` | callable | — | Fused prefill wrapper (`@allow_in_graph`) |
+| `USE_PTO_KDA` | `bool` | `False` | 启用 PyPTO 融合 KDA chunk kernel (prefill) |
+| `kda_chunk_wrapper` | callable | — | FLA-layout chunk wrapper（`@allow_in_graph`） |
 
 ask 脚本在 `from transformers import` 之前 `sys.path.insert(0, ...)` 并
 `import kimi_linear_48b_a3b_pto_kernels`，`--use_pypto` 时置 `USE_PTO_KDA = True`。
@@ -87,7 +87,6 @@ ask 脚本在 `from transformers import` 之前 `sys.path.insert(0, ...)` 并
 | `configuration_kimi.py` | `KimiLinearConfig`（原样拷贝，未改） |
 | `kimi_fla_compat.py` | `fla` 的纯 torch 替代（非 KDA helpers + torch 基线 KDA op） |
 | `modeling_kimi.py` | 模型图：`KimiDeltaAttention` 等；KDA chunk/decode 的 sys.modules 注入分发 |
-| `kda_decode_graph.py` | `StaticDecodeCache` — graph-capturable decode cache，接线 fused decode op |
 
 ## 相关目录
 

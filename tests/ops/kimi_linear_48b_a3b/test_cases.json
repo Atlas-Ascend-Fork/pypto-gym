@@ -1,0 +1,3833 @@
+{
+  "op_name": "kda",
+  "source": "Kimi-Linear-48B-A3B-Instruct",
+  "description": "Real KDA (Kimi Delta Attention) op cases for kimi_linear_48b_a3b. DESCRIPTIVE FILE: the test .py files (test_kda_chunk.py / test_kda_e2e.py) drive this grid DIRECTLY via make_kda_inputs (KdaCase) and do NOT load this JSON; it documents the shape/dtype envelope and is kept in sync by test_cases_sync.py (which asserts this file matches _kda_test_common.chunk_grid() exactly). Shapes/dtypes are PROBED from a real KimiDeltaAttention.forward (see 'probe' below): FLA layout q,k,g [B,T,H,K]; v [B,T,H,V]; beta [B,T,H]; initial_state [B,H,V,K] fp32. K=V=128 (head_dim), H=32 in the real model (4 also tested), use_qk_l2norm_in_kernel=True, scale=K**-0.5. q/k/v bf16; g and beta fp32 (matching the model). gate 'rand' = realistic log-gate g=-5*rand in [-5,0]; gate 'ones' = worst-case g=-5 everywhere (cumulative ~-640, the subchunk=16 NaN-overflow case). seed=0 for all cases. Grid (B,T) extends beyond the probed real call to stress-test the envelope.",
+  "wrappers": {
+    "chunk": "kda_chunk_wrapper"
+  },
+  "observed_max_abs_err": {
+    "chunk": 6.1e-05
+  },
+  "probe": {
+    "source": "KimiDeltaAttention.forward (one KDA layer, real config, bf16 model)",
+    "note": "q/k/v bf16; g and beta are fp32 (fused_kda_gate / .float().sigmoid()); initial_state fp32 [B,H,V,K], None on first prefill chunk.",
+    "prefill_chunk": {
+      "q_len": 100,
+      "mode": "chunk",
+      "q": "[1,100,32,128] bfloat16",
+      "k": "[1,100,32,128] bfloat16",
+      "v": "[1,100,32,128] bfloat16",
+      "g": "[1,100,32,128] float32",
+      "beta": "[1,100,32] float32",
+      "initial_state": null
+    }
+  },
+  "test_cases": [
+    {
+      "id": "chunk_001",
+      "description": "prefill chunk, B=1 H=4 T=64 gate=rand with_state=True",
+      "seed": 0,
+      "input": {
+        "q": {
+          "shape": [
+            1,
+            64,
+            4,
+            128
+          ],
+          "dtype": "bfloat16"
+        },
+        "k": {
+          "shape": [
+            1,
+            64,
+            4,
+            128
+          ],
+          "dtype": "bfloat16"
+        },
+        "v": {
+          "shape": [
+            1,
+            64,
+            4,
+            128
+          ],
+          "dtype": "bfloat16"
+        },
+        "g": {
+          "shape": [
+            1,
+            64,
+            4,
+            128
+          ],
+          "dtype": "float32",
+          "note": "log-gate (real model: fp32)"
+        },
+        "beta": {
+          "shape": [
+            1,
+            64,
+            4
+          ],
+          "dtype": "float32",
+          "note": "real model: fp32"
+        },
+        "initial_state": {
+          "shape": [
+            1,
+            4,
+            128,
+            128
+          ],
+          "dtype": "float32"
+        },
+        "scale": {
+          "value": 0.08838834764831845
+        },
+        "use_qk_l2norm_in_kernel": {
+          "value": true
+        }
+      },
+      "output": {
+        "out": {
+          "shape": [
+            1,
+            64,
+            4,
+            128
+          ],
+          "dtype": "bfloat16"
+        },
+        "final_state": {
+          "shape": [
+            1,
+            4,
+            128,
+            128
+          ],
+          "dtype": "float32"
+        }
+      },
+      "rtol": 0.006,
+      "atol": 0.006,
+      "gate": "rand"
+    },
+    {
+      "id": "chunk_002",
+      "description": "prefill chunk, B=1 H=32 T=64 gate=rand with_state=True",
+      "seed": 0,
+      "input": {
+        "q": {
+          "shape": [
+            1,
+            64,
+            32,
+            128
+          ],
+          "dtype": "bfloat16"
+        },
+        "k": {
+          "shape": [
+            1,
+            64,
+            32,
+            128
+          ],
+          "dtype": "bfloat16"
+        },
+        "v": {
+          "shape": [
+            1,
+            64,
+            32,
+            128
+          ],
+          "dtype": "bfloat16"
+        },
+        "g": {
+          "shape": [
+            1,
+            64,
+            32,
+            128
+          ],
+          "dtype": "float32",
+          "note": "log-gate (real model: fp32)"
+        },
+        "beta": {
+          "shape": [
+            1,
+            64,
+            32
+          ],
+          "dtype": "float32",
+          "note": "real model: fp32"
+        },
+        "initial_state": {
+          "shape": [
+            1,
+            32,
+            128,
+            128
+          ],
+          "dtype": "float32"
+        },
+        "scale": {
+          "value": 0.08838834764831845
+        },
+        "use_qk_l2norm_in_kernel": {
+          "value": true
+        }
+      },
+      "output": {
+        "out": {
+          "shape": [
+            1,
+            64,
+            32,
+            128
+          ],
+          "dtype": "bfloat16"
+        },
+        "final_state": {
+          "shape": [
+            1,
+            32,
+            128,
+            128
+          ],
+          "dtype": "float32"
+        }
+      },
+      "rtol": 0.006,
+      "atol": 0.006,
+      "gate": "rand"
+    },
+    {
+      "id": "chunk_003",
+      "description": "prefill chunk, B=2 H=4 T=64 gate=rand with_state=True",
+      "seed": 0,
+      "input": {
+        "q": {
+          "shape": [
+            2,
+            64,
+            4,
+            128
+          ],
+          "dtype": "bfloat16"
+        },
+        "k": {
+          "shape": [
+            2,
+            64,
+            4,
+            128
+          ],
+          "dtype": "bfloat16"
+        },
+        "v": {
+          "shape": [
+            2,
+            64,
+            4,
+            128
+          ],
+          "dtype": "bfloat16"
+        },
+        "g": {
+          "shape": [
+            2,
+            64,
+            4,
+            128
+          ],
+          "dtype": "float32",
+          "note": "log-gate (real model: fp32)"
+        },
+        "beta": {
+          "shape": [
+            2,
+            64,
+            4
+          ],
+          "dtype": "float32",
+          "note": "real model: fp32"
+        },
+        "initial_state": {
+          "shape": [
+            2,
+            4,
+            128,
+            128
+          ],
+          "dtype": "float32"
+        },
+        "scale": {
+          "value": 0.08838834764831845
+        },
+        "use_qk_l2norm_in_kernel": {
+          "value": true
+        }
+      },
+      "output": {
+        "out": {
+          "shape": [
+            2,
+            64,
+            4,
+            128
+          ],
+          "dtype": "bfloat16"
+        },
+        "final_state": {
+          "shape": [
+            2,
+            4,
+            128,
+            128
+          ],
+          "dtype": "float32"
+        }
+      },
+      "rtol": 0.006,
+      "atol": 0.006,
+      "gate": "rand"
+    },
+    {
+      "id": "chunk_004",
+      "description": "prefill chunk, B=2 H=32 T=64 gate=rand with_state=True",
+      "seed": 0,
+      "input": {
+        "q": {
+          "shape": [
+            2,
+            64,
+            32,
+            128
+          ],
+          "dtype": "bfloat16"
+        },
+        "k": {
+          "shape": [
+            2,
+            64,
+            32,
+            128
+          ],
+          "dtype": "bfloat16"
+        },
+        "v": {
+          "shape": [
+            2,
+            64,
+            32,
+            128
+          ],
+          "dtype": "bfloat16"
+        },
+        "g": {
+          "shape": [
+            2,
+            64,
+            32,
+            128
+          ],
+          "dtype": "float32",
+          "note": "log-gate (real model: fp32)"
+        },
+        "beta": {
+          "shape": [
+            2,
+            64,
+            32
+          ],
+          "dtype": "float32",
+          "note": "real model: fp32"
+        },
+        "initial_state": {
+          "shape": [
+            2,
+            32,
+            128,
+            128
+          ],
+          "dtype": "float32"
+        },
+        "scale": {
+          "value": 0.08838834764831845
+        },
+        "use_qk_l2norm_in_kernel": {
+          "value": true
+        }
+      },
+      "output": {
+        "out": {
+          "shape": [
+            2,
+            64,
+            32,
+            128
+          ],
+          "dtype": "bfloat16"
+        },
+        "final_state": {
+          "shape": [
+            2,
+            32,
+            128,
+            128
+          ],
+          "dtype": "float32"
+        }
+      },
+      "rtol": 0.006,
+      "atol": 0.006,
+      "gate": "rand"
+    },
+    {
+      "id": "chunk_005",
+      "description": "prefill chunk, B=1 H=4 T=128 gate=rand with_state=True",
+      "seed": 0,
+      "input": {
+        "q": {
+          "shape": [
+            1,
+            128,
+            4,
+            128
+          ],
+          "dtype": "bfloat16"
+        },
+        "k": {
+          "shape": [
+            1,
+            128,
+            4,
+            128
+          ],
+          "dtype": "bfloat16"
+        },
+        "v": {
+          "shape": [
+            1,
+            128,
+            4,
+            128
+          ],
+          "dtype": "bfloat16"
+        },
+        "g": {
+          "shape": [
+            1,
+            128,
+            4,
+            128
+          ],
+          "dtype": "float32",
+          "note": "log-gate (real model: fp32)"
+        },
+        "beta": {
+          "shape": [
+            1,
+            128,
+            4
+          ],
+          "dtype": "float32",
+          "note": "real model: fp32"
+        },
+        "initial_state": {
+          "shape": [
+            1,
+            4,
+            128,
+            128
+          ],
+          "dtype": "float32"
+        },
+        "scale": {
+          "value": 0.08838834764831845
+        },
+        "use_qk_l2norm_in_kernel": {
+          "value": true
+        }
+      },
+      "output": {
+        "out": {
+          "shape": [
+            1,
+            128,
+            4,
+            128
+          ],
+          "dtype": "bfloat16"
+        },
+        "final_state": {
+          "shape": [
+            1,
+            4,
+            128,
+            128
+          ],
+          "dtype": "float32"
+        }
+      },
+      "rtol": 0.006,
+      "atol": 0.006,
+      "gate": "rand"
+    },
+    {
+      "id": "chunk_006",
+      "description": "prefill chunk, B=1 H=32 T=128 gate=rand with_state=True",
+      "seed": 0,
+      "input": {
+        "q": {
+          "shape": [
+            1,
+            128,
+            32,
+            128
+          ],
+          "dtype": "bfloat16"
+        },
+        "k": {
+          "shape": [
+            1,
+            128,
+            32,
+            128
+          ],
+          "dtype": "bfloat16"
+        },
+        "v": {
+          "shape": [
+            1,
+            128,
+            32,
+            128
+          ],
+          "dtype": "bfloat16"
+        },
+        "g": {
+          "shape": [
+            1,
+            128,
+            32,
+            128
+          ],
+          "dtype": "float32",
+          "note": "log-gate (real model: fp32)"
+        },
+        "beta": {
+          "shape": [
+            1,
+            128,
+            32
+          ],
+          "dtype": "float32",
+          "note": "real model: fp32"
+        },
+        "initial_state": {
+          "shape": [
+            1,
+            32,
+            128,
+            128
+          ],
+          "dtype": "float32"
+        },
+        "scale": {
+          "value": 0.08838834764831845
+        },
+        "use_qk_l2norm_in_kernel": {
+          "value": true
+        }
+      },
+      "output": {
+        "out": {
+          "shape": [
+            1,
+            128,
+            32,
+            128
+          ],
+          "dtype": "bfloat16"
+        },
+        "final_state": {
+          "shape": [
+            1,
+            32,
+            128,
+            128
+          ],
+          "dtype": "float32"
+        }
+      },
+      "rtol": 0.006,
+      "atol": 0.006,
+      "gate": "rand"
+    },
+    {
+      "id": "chunk_007",
+      "description": "prefill chunk, B=2 H=4 T=128 gate=rand with_state=True",
+      "seed": 0,
+      "input": {
+        "q": {
+          "shape": [
+            2,
+            128,
+            4,
+            128
+          ],
+          "dtype": "bfloat16"
+        },
+        "k": {
+          "shape": [
+            2,
+            128,
+            4,
+            128
+          ],
+          "dtype": "bfloat16"
+        },
+        "v": {
+          "shape": [
+            2,
+            128,
+            4,
+            128
+          ],
+          "dtype": "bfloat16"
+        },
+        "g": {
+          "shape": [
+            2,
+            128,
+            4,
+            128
+          ],
+          "dtype": "float32",
+          "note": "log-gate (real model: fp32)"
+        },
+        "beta": {
+          "shape": [
+            2,
+            128,
+            4
+          ],
+          "dtype": "float32",
+          "note": "real model: fp32"
+        },
+        "initial_state": {
+          "shape": [
+            2,
+            4,
+            128,
+            128
+          ],
+          "dtype": "float32"
+        },
+        "scale": {
+          "value": 0.08838834764831845
+        },
+        "use_qk_l2norm_in_kernel": {
+          "value": true
+        }
+      },
+      "output": {
+        "out": {
+          "shape": [
+            2,
+            128,
+            4,
+            128
+          ],
+          "dtype": "bfloat16"
+        },
+        "final_state": {
+          "shape": [
+            2,
+            4,
+            128,
+            128
+          ],
+          "dtype": "float32"
+        }
+      },
+      "rtol": 0.006,
+      "atol": 0.006,
+      "gate": "rand"
+    },
+    {
+      "id": "chunk_008",
+      "description": "prefill chunk, B=2 H=32 T=128 gate=rand with_state=True",
+      "seed": 0,
+      "input": {
+        "q": {
+          "shape": [
+            2,
+            128,
+            32,
+            128
+          ],
+          "dtype": "bfloat16"
+        },
+        "k": {
+          "shape": [
+            2,
+            128,
+            32,
+            128
+          ],
+          "dtype": "bfloat16"
+        },
+        "v": {
+          "shape": [
+            2,
+            128,
+            32,
+            128
+          ],
+          "dtype": "bfloat16"
+        },
+        "g": {
+          "shape": [
+            2,
+            128,
+            32,
+            128
+          ],
+          "dtype": "float32",
+          "note": "log-gate (real model: fp32)"
+        },
+        "beta": {
+          "shape": [
+            2,
+            128,
+            32
+          ],
+          "dtype": "float32",
+          "note": "real model: fp32"
+        },
+        "initial_state": {
+          "shape": [
+            2,
+            32,
+            128,
+            128
+          ],
+          "dtype": "float32"
+        },
+        "scale": {
+          "value": 0.08838834764831845
+        },
+        "use_qk_l2norm_in_kernel": {
+          "value": true
+        }
+      },
+      "output": {
+        "out": {
+          "shape": [
+            2,
+            128,
+            32,
+            128
+          ],
+          "dtype": "bfloat16"
+        },
+        "final_state": {
+          "shape": [
+            2,
+            32,
+            128,
+            128
+          ],
+          "dtype": "float32"
+        }
+      },
+      "rtol": 0.006,
+      "atol": 0.006,
+      "gate": "rand"
+    },
+    {
+      "id": "chunk_009",
+      "description": "prefill chunk, B=1 H=4 T=300 gate=rand with_state=True",
+      "seed": 0,
+      "input": {
+        "q": {
+          "shape": [
+            1,
+            300,
+            4,
+            128
+          ],
+          "dtype": "bfloat16"
+        },
+        "k": {
+          "shape": [
+            1,
+            300,
+            4,
+            128
+          ],
+          "dtype": "bfloat16"
+        },
+        "v": {
+          "shape": [
+            1,
+            300,
+            4,
+            128
+          ],
+          "dtype": "bfloat16"
+        },
+        "g": {
+          "shape": [
+            1,
+            300,
+            4,
+            128
+          ],
+          "dtype": "float32",
+          "note": "log-gate (real model: fp32)"
+        },
+        "beta": {
+          "shape": [
+            1,
+            300,
+            4
+          ],
+          "dtype": "float32",
+          "note": "real model: fp32"
+        },
+        "initial_state": {
+          "shape": [
+            1,
+            4,
+            128,
+            128
+          ],
+          "dtype": "float32"
+        },
+        "scale": {
+          "value": 0.08838834764831845
+        },
+        "use_qk_l2norm_in_kernel": {
+          "value": true
+        }
+      },
+      "output": {
+        "out": {
+          "shape": [
+            1,
+            300,
+            4,
+            128
+          ],
+          "dtype": "bfloat16"
+        },
+        "final_state": {
+          "shape": [
+            1,
+            4,
+            128,
+            128
+          ],
+          "dtype": "float32"
+        }
+      },
+      "rtol": 0.006,
+      "atol": 0.006,
+      "gate": "rand"
+    },
+    {
+      "id": "chunk_010",
+      "description": "prefill chunk, B=1 H=32 T=300 gate=rand with_state=True",
+      "seed": 0,
+      "input": {
+        "q": {
+          "shape": [
+            1,
+            300,
+            32,
+            128
+          ],
+          "dtype": "bfloat16"
+        },
+        "k": {
+          "shape": [
+            1,
+            300,
+            32,
+            128
+          ],
+          "dtype": "bfloat16"
+        },
+        "v": {
+          "shape": [
+            1,
+            300,
+            32,
+            128
+          ],
+          "dtype": "bfloat16"
+        },
+        "g": {
+          "shape": [
+            1,
+            300,
+            32,
+            128
+          ],
+          "dtype": "float32",
+          "note": "log-gate (real model: fp32)"
+        },
+        "beta": {
+          "shape": [
+            1,
+            300,
+            32
+          ],
+          "dtype": "float32",
+          "note": "real model: fp32"
+        },
+        "initial_state": {
+          "shape": [
+            1,
+            32,
+            128,
+            128
+          ],
+          "dtype": "float32"
+        },
+        "scale": {
+          "value": 0.08838834764831845
+        },
+        "use_qk_l2norm_in_kernel": {
+          "value": true
+        }
+      },
+      "output": {
+        "out": {
+          "shape": [
+            1,
+            300,
+            32,
+            128
+          ],
+          "dtype": "bfloat16"
+        },
+        "final_state": {
+          "shape": [
+            1,
+            32,
+            128,
+            128
+          ],
+          "dtype": "float32"
+        }
+      },
+      "rtol": 0.006,
+      "atol": 0.006,
+      "gate": "rand"
+    },
+    {
+      "id": "chunk_011",
+      "description": "prefill chunk, B=2 H=4 T=300 gate=rand with_state=True",
+      "seed": 0,
+      "input": {
+        "q": {
+          "shape": [
+            2,
+            300,
+            4,
+            128
+          ],
+          "dtype": "bfloat16"
+        },
+        "k": {
+          "shape": [
+            2,
+            300,
+            4,
+            128
+          ],
+          "dtype": "bfloat16"
+        },
+        "v": {
+          "shape": [
+            2,
+            300,
+            4,
+            128
+          ],
+          "dtype": "bfloat16"
+        },
+        "g": {
+          "shape": [
+            2,
+            300,
+            4,
+            128
+          ],
+          "dtype": "float32",
+          "note": "log-gate (real model: fp32)"
+        },
+        "beta": {
+          "shape": [
+            2,
+            300,
+            4
+          ],
+          "dtype": "float32",
+          "note": "real model: fp32"
+        },
+        "initial_state": {
+          "shape": [
+            2,
+            4,
+            128,
+            128
+          ],
+          "dtype": "float32"
+        },
+        "scale": {
+          "value": 0.08838834764831845
+        },
+        "use_qk_l2norm_in_kernel": {
+          "value": true
+        }
+      },
+      "output": {
+        "out": {
+          "shape": [
+            2,
+            300,
+            4,
+            128
+          ],
+          "dtype": "bfloat16"
+        },
+        "final_state": {
+          "shape": [
+            2,
+            4,
+            128,
+            128
+          ],
+          "dtype": "float32"
+        }
+      },
+      "rtol": 0.006,
+      "atol": 0.006,
+      "gate": "rand"
+    },
+    {
+      "id": "chunk_012",
+      "description": "prefill chunk, B=2 H=32 T=300 gate=rand with_state=True",
+      "seed": 0,
+      "input": {
+        "q": {
+          "shape": [
+            2,
+            300,
+            32,
+            128
+          ],
+          "dtype": "bfloat16"
+        },
+        "k": {
+          "shape": [
+            2,
+            300,
+            32,
+            128
+          ],
+          "dtype": "bfloat16"
+        },
+        "v": {
+          "shape": [
+            2,
+            300,
+            32,
+            128
+          ],
+          "dtype": "bfloat16"
+        },
+        "g": {
+          "shape": [
+            2,
+            300,
+            32,
+            128
+          ],
+          "dtype": "float32",
+          "note": "log-gate (real model: fp32)"
+        },
+        "beta": {
+          "shape": [
+            2,
+            300,
+            32
+          ],
+          "dtype": "float32",
+          "note": "real model: fp32"
+        },
+        "initial_state": {
+          "shape": [
+            2,
+            32,
+            128,
+            128
+          ],
+          "dtype": "float32"
+        },
+        "scale": {
+          "value": 0.08838834764831845
+        },
+        "use_qk_l2norm_in_kernel": {
+          "value": true
+        }
+      },
+      "output": {
+        "out": {
+          "shape": [
+            2,
+            300,
+            32,
+            128
+          ],
+          "dtype": "bfloat16"
+        },
+        "final_state": {
+          "shape": [
+            2,
+            32,
+            128,
+            128
+          ],
+          "dtype": "float32"
+        }
+      },
+      "rtol": 0.006,
+      "atol": 0.006,
+      "gate": "rand"
+    },
+    {
+      "id": "chunk_013",
+      "description": "prefill chunk, B=1 H=4 T=512 gate=rand with_state=True",
+      "seed": 0,
+      "input": {
+        "q": {
+          "shape": [
+            1,
+            512,
+            4,
+            128
+          ],
+          "dtype": "bfloat16"
+        },
+        "k": {
+          "shape": [
+            1,
+            512,
+            4,
+            128
+          ],
+          "dtype": "bfloat16"
+        },
+        "v": {
+          "shape": [
+            1,
+            512,
+            4,
+            128
+          ],
+          "dtype": "bfloat16"
+        },
+        "g": {
+          "shape": [
+            1,
+            512,
+            4,
+            128
+          ],
+          "dtype": "float32",
+          "note": "log-gate (real model: fp32)"
+        },
+        "beta": {
+          "shape": [
+            1,
+            512,
+            4
+          ],
+          "dtype": "float32",
+          "note": "real model: fp32"
+        },
+        "initial_state": {
+          "shape": [
+            1,
+            4,
+            128,
+            128
+          ],
+          "dtype": "float32"
+        },
+        "scale": {
+          "value": 0.08838834764831845
+        },
+        "use_qk_l2norm_in_kernel": {
+          "value": true
+        }
+      },
+      "output": {
+        "out": {
+          "shape": [
+            1,
+            512,
+            4,
+            128
+          ],
+          "dtype": "bfloat16"
+        },
+        "final_state": {
+          "shape": [
+            1,
+            4,
+            128,
+            128
+          ],
+          "dtype": "float32"
+        }
+      },
+      "rtol": 0.006,
+      "atol": 0.006,
+      "gate": "rand"
+    },
+    {
+      "id": "chunk_014",
+      "description": "prefill chunk, B=1 H=32 T=512 gate=rand with_state=True",
+      "seed": 0,
+      "input": {
+        "q": {
+          "shape": [
+            1,
+            512,
+            32,
+            128
+          ],
+          "dtype": "bfloat16"
+        },
+        "k": {
+          "shape": [
+            1,
+            512,
+            32,
+            128
+          ],
+          "dtype": "bfloat16"
+        },
+        "v": {
+          "shape": [
+            1,
+            512,
+            32,
+            128
+          ],
+          "dtype": "bfloat16"
+        },
+        "g": {
+          "shape": [
+            1,
+            512,
+            32,
+            128
+          ],
+          "dtype": "float32",
+          "note": "log-gate (real model: fp32)"
+        },
+        "beta": {
+          "shape": [
+            1,
+            512,
+            32
+          ],
+          "dtype": "float32",
+          "note": "real model: fp32"
+        },
+        "initial_state": {
+          "shape": [
+            1,
+            32,
+            128,
+            128
+          ],
+          "dtype": "float32"
+        },
+        "scale": {
+          "value": 0.08838834764831845
+        },
+        "use_qk_l2norm_in_kernel": {
+          "value": true
+        }
+      },
+      "output": {
+        "out": {
+          "shape": [
+            1,
+            512,
+            32,
+            128
+          ],
+          "dtype": "bfloat16"
+        },
+        "final_state": {
+          "shape": [
+            1,
+            32,
+            128,
+            128
+          ],
+          "dtype": "float32"
+        }
+      },
+      "rtol": 0.006,
+      "atol": 0.006,
+      "gate": "rand"
+    },
+    {
+      "id": "chunk_015",
+      "description": "prefill chunk, B=2 H=4 T=512 gate=rand with_state=True",
+      "seed": 0,
+      "input": {
+        "q": {
+          "shape": [
+            2,
+            512,
+            4,
+            128
+          ],
+          "dtype": "bfloat16"
+        },
+        "k": {
+          "shape": [
+            2,
+            512,
+            4,
+            128
+          ],
+          "dtype": "bfloat16"
+        },
+        "v": {
+          "shape": [
+            2,
+            512,
+            4,
+            128
+          ],
+          "dtype": "bfloat16"
+        },
+        "g": {
+          "shape": [
+            2,
+            512,
+            4,
+            128
+          ],
+          "dtype": "float32",
+          "note": "log-gate (real model: fp32)"
+        },
+        "beta": {
+          "shape": [
+            2,
+            512,
+            4
+          ],
+          "dtype": "float32",
+          "note": "real model: fp32"
+        },
+        "initial_state": {
+          "shape": [
+            2,
+            4,
+            128,
+            128
+          ],
+          "dtype": "float32"
+        },
+        "scale": {
+          "value": 0.08838834764831845
+        },
+        "use_qk_l2norm_in_kernel": {
+          "value": true
+        }
+      },
+      "output": {
+        "out": {
+          "shape": [
+            2,
+            512,
+            4,
+            128
+          ],
+          "dtype": "bfloat16"
+        },
+        "final_state": {
+          "shape": [
+            2,
+            4,
+            128,
+            128
+          ],
+          "dtype": "float32"
+        }
+      },
+      "rtol": 0.006,
+      "atol": 0.006,
+      "gate": "rand"
+    },
+    {
+      "id": "chunk_016",
+      "description": "prefill chunk, B=2 H=32 T=512 gate=rand with_state=True",
+      "seed": 0,
+      "input": {
+        "q": {
+          "shape": [
+            2,
+            512,
+            32,
+            128
+          ],
+          "dtype": "bfloat16"
+        },
+        "k": {
+          "shape": [
+            2,
+            512,
+            32,
+            128
+          ],
+          "dtype": "bfloat16"
+        },
+        "v": {
+          "shape": [
+            2,
+            512,
+            32,
+            128
+          ],
+          "dtype": "bfloat16"
+        },
+        "g": {
+          "shape": [
+            2,
+            512,
+            32,
+            128
+          ],
+          "dtype": "float32",
+          "note": "log-gate (real model: fp32)"
+        },
+        "beta": {
+          "shape": [
+            2,
+            512,
+            32
+          ],
+          "dtype": "float32",
+          "note": "real model: fp32"
+        },
+        "initial_state": {
+          "shape": [
+            2,
+            32,
+            128,
+            128
+          ],
+          "dtype": "float32"
+        },
+        "scale": {
+          "value": 0.08838834764831845
+        },
+        "use_qk_l2norm_in_kernel": {
+          "value": true
+        }
+      },
+      "output": {
+        "out": {
+          "shape": [
+            2,
+            512,
+            32,
+            128
+          ],
+          "dtype": "bfloat16"
+        },
+        "final_state": {
+          "shape": [
+            2,
+            32,
+            128,
+            128
+          ],
+          "dtype": "float32"
+        }
+      },
+      "rtol": 0.006,
+      "atol": 0.006,
+      "gate": "rand"
+    },
+    {
+      "id": "chunk_017",
+      "description": "prefill chunk, B=1 H=4 T=1000 gate=rand with_state=True",
+      "seed": 0,
+      "input": {
+        "q": {
+          "shape": [
+            1,
+            1000,
+            4,
+            128
+          ],
+          "dtype": "bfloat16"
+        },
+        "k": {
+          "shape": [
+            1,
+            1000,
+            4,
+            128
+          ],
+          "dtype": "bfloat16"
+        },
+        "v": {
+          "shape": [
+            1,
+            1000,
+            4,
+            128
+          ],
+          "dtype": "bfloat16"
+        },
+        "g": {
+          "shape": [
+            1,
+            1000,
+            4,
+            128
+          ],
+          "dtype": "float32",
+          "note": "log-gate (real model: fp32)"
+        },
+        "beta": {
+          "shape": [
+            1,
+            1000,
+            4
+          ],
+          "dtype": "float32",
+          "note": "real model: fp32"
+        },
+        "initial_state": {
+          "shape": [
+            1,
+            4,
+            128,
+            128
+          ],
+          "dtype": "float32"
+        },
+        "scale": {
+          "value": 0.08838834764831845
+        },
+        "use_qk_l2norm_in_kernel": {
+          "value": true
+        }
+      },
+      "output": {
+        "out": {
+          "shape": [
+            1,
+            1000,
+            4,
+            128
+          ],
+          "dtype": "bfloat16"
+        },
+        "final_state": {
+          "shape": [
+            1,
+            4,
+            128,
+            128
+          ],
+          "dtype": "float32"
+        }
+      },
+      "rtol": 0.006,
+      "atol": 0.006,
+      "gate": "rand"
+    },
+    {
+      "id": "chunk_018",
+      "description": "prefill chunk, B=1 H=32 T=1000 gate=rand with_state=True",
+      "seed": 0,
+      "input": {
+        "q": {
+          "shape": [
+            1,
+            1000,
+            32,
+            128
+          ],
+          "dtype": "bfloat16"
+        },
+        "k": {
+          "shape": [
+            1,
+            1000,
+            32,
+            128
+          ],
+          "dtype": "bfloat16"
+        },
+        "v": {
+          "shape": [
+            1,
+            1000,
+            32,
+            128
+          ],
+          "dtype": "bfloat16"
+        },
+        "g": {
+          "shape": [
+            1,
+            1000,
+            32,
+            128
+          ],
+          "dtype": "float32",
+          "note": "log-gate (real model: fp32)"
+        },
+        "beta": {
+          "shape": [
+            1,
+            1000,
+            32
+          ],
+          "dtype": "float32",
+          "note": "real model: fp32"
+        },
+        "initial_state": {
+          "shape": [
+            1,
+            32,
+            128,
+            128
+          ],
+          "dtype": "float32"
+        },
+        "scale": {
+          "value": 0.08838834764831845
+        },
+        "use_qk_l2norm_in_kernel": {
+          "value": true
+        }
+      },
+      "output": {
+        "out": {
+          "shape": [
+            1,
+            1000,
+            32,
+            128
+          ],
+          "dtype": "bfloat16"
+        },
+        "final_state": {
+          "shape": [
+            1,
+            32,
+            128,
+            128
+          ],
+          "dtype": "float32"
+        }
+      },
+      "rtol": 0.006,
+      "atol": 0.006,
+      "gate": "rand"
+    },
+    {
+      "id": "chunk_019",
+      "description": "prefill chunk, B=2 H=4 T=1000 gate=rand with_state=True",
+      "seed": 0,
+      "input": {
+        "q": {
+          "shape": [
+            2,
+            1000,
+            4,
+            128
+          ],
+          "dtype": "bfloat16"
+        },
+        "k": {
+          "shape": [
+            2,
+            1000,
+            4,
+            128
+          ],
+          "dtype": "bfloat16"
+        },
+        "v": {
+          "shape": [
+            2,
+            1000,
+            4,
+            128
+          ],
+          "dtype": "bfloat16"
+        },
+        "g": {
+          "shape": [
+            2,
+            1000,
+            4,
+            128
+          ],
+          "dtype": "float32",
+          "note": "log-gate (real model: fp32)"
+        },
+        "beta": {
+          "shape": [
+            2,
+            1000,
+            4
+          ],
+          "dtype": "float32",
+          "note": "real model: fp32"
+        },
+        "initial_state": {
+          "shape": [
+            2,
+            4,
+            128,
+            128
+          ],
+          "dtype": "float32"
+        },
+        "scale": {
+          "value": 0.08838834764831845
+        },
+        "use_qk_l2norm_in_kernel": {
+          "value": true
+        }
+      },
+      "output": {
+        "out": {
+          "shape": [
+            2,
+            1000,
+            4,
+            128
+          ],
+          "dtype": "bfloat16"
+        },
+        "final_state": {
+          "shape": [
+            2,
+            4,
+            128,
+            128
+          ],
+          "dtype": "float32"
+        }
+      },
+      "rtol": 0.006,
+      "atol": 0.006,
+      "gate": "rand"
+    },
+    {
+      "id": "chunk_020",
+      "description": "prefill chunk, B=2 H=32 T=1000 gate=rand with_state=True",
+      "seed": 0,
+      "input": {
+        "q": {
+          "shape": [
+            2,
+            1000,
+            32,
+            128
+          ],
+          "dtype": "bfloat16"
+        },
+        "k": {
+          "shape": [
+            2,
+            1000,
+            32,
+            128
+          ],
+          "dtype": "bfloat16"
+        },
+        "v": {
+          "shape": [
+            2,
+            1000,
+            32,
+            128
+          ],
+          "dtype": "bfloat16"
+        },
+        "g": {
+          "shape": [
+            2,
+            1000,
+            32,
+            128
+          ],
+          "dtype": "float32",
+          "note": "log-gate (real model: fp32)"
+        },
+        "beta": {
+          "shape": [
+            2,
+            1000,
+            32
+          ],
+          "dtype": "float32",
+          "note": "real model: fp32"
+        },
+        "initial_state": {
+          "shape": [
+            2,
+            32,
+            128,
+            128
+          ],
+          "dtype": "float32"
+        },
+        "scale": {
+          "value": 0.08838834764831845
+        },
+        "use_qk_l2norm_in_kernel": {
+          "value": true
+        }
+      },
+      "output": {
+        "out": {
+          "shape": [
+            2,
+            1000,
+            32,
+            128
+          ],
+          "dtype": "bfloat16"
+        },
+        "final_state": {
+          "shape": [
+            2,
+            32,
+            128,
+            128
+          ],
+          "dtype": "float32"
+        }
+      },
+      "rtol": 0.006,
+      "atol": 0.006,
+      "gate": "rand"
+    },
+    {
+      "id": "chunk_021",
+      "description": "prefill chunk, B=1 H=4 T=64 gate=ones with_state=True",
+      "seed": 0,
+      "input": {
+        "q": {
+          "shape": [
+            1,
+            64,
+            4,
+            128
+          ],
+          "dtype": "bfloat16"
+        },
+        "k": {
+          "shape": [
+            1,
+            64,
+            4,
+            128
+          ],
+          "dtype": "bfloat16"
+        },
+        "v": {
+          "shape": [
+            1,
+            64,
+            4,
+            128
+          ],
+          "dtype": "bfloat16"
+        },
+        "g": {
+          "shape": [
+            1,
+            64,
+            4,
+            128
+          ],
+          "dtype": "float32",
+          "note": "log-gate (real model: fp32)"
+        },
+        "beta": {
+          "shape": [
+            1,
+            64,
+            4
+          ],
+          "dtype": "float32",
+          "note": "real model: fp32"
+        },
+        "initial_state": {
+          "shape": [
+            1,
+            4,
+            128,
+            128
+          ],
+          "dtype": "float32"
+        },
+        "scale": {
+          "value": 0.08838834764831845
+        },
+        "use_qk_l2norm_in_kernel": {
+          "value": true
+        }
+      },
+      "output": {
+        "out": {
+          "shape": [
+            1,
+            64,
+            4,
+            128
+          ],
+          "dtype": "bfloat16"
+        },
+        "final_state": {
+          "shape": [
+            1,
+            4,
+            128,
+            128
+          ],
+          "dtype": "float32"
+        }
+      },
+      "rtol": 0.006,
+      "atol": 0.006,
+      "gate": "ones"
+    },
+    {
+      "id": "chunk_022",
+      "description": "prefill chunk, B=1 H=32 T=64 gate=ones with_state=True",
+      "seed": 0,
+      "input": {
+        "q": {
+          "shape": [
+            1,
+            64,
+            32,
+            128
+          ],
+          "dtype": "bfloat16"
+        },
+        "k": {
+          "shape": [
+            1,
+            64,
+            32,
+            128
+          ],
+          "dtype": "bfloat16"
+        },
+        "v": {
+          "shape": [
+            1,
+            64,
+            32,
+            128
+          ],
+          "dtype": "bfloat16"
+        },
+        "g": {
+          "shape": [
+            1,
+            64,
+            32,
+            128
+          ],
+          "dtype": "float32",
+          "note": "log-gate (real model: fp32)"
+        },
+        "beta": {
+          "shape": [
+            1,
+            64,
+            32
+          ],
+          "dtype": "float32",
+          "note": "real model: fp32"
+        },
+        "initial_state": {
+          "shape": [
+            1,
+            32,
+            128,
+            128
+          ],
+          "dtype": "float32"
+        },
+        "scale": {
+          "value": 0.08838834764831845
+        },
+        "use_qk_l2norm_in_kernel": {
+          "value": true
+        }
+      },
+      "output": {
+        "out": {
+          "shape": [
+            1,
+            64,
+            32,
+            128
+          ],
+          "dtype": "bfloat16"
+        },
+        "final_state": {
+          "shape": [
+            1,
+            32,
+            128,
+            128
+          ],
+          "dtype": "float32"
+        }
+      },
+      "rtol": 0.006,
+      "atol": 0.006,
+      "gate": "ones"
+    },
+    {
+      "id": "chunk_023",
+      "description": "prefill chunk, B=2 H=4 T=64 gate=ones with_state=True",
+      "seed": 0,
+      "input": {
+        "q": {
+          "shape": [
+            2,
+            64,
+            4,
+            128
+          ],
+          "dtype": "bfloat16"
+        },
+        "k": {
+          "shape": [
+            2,
+            64,
+            4,
+            128
+          ],
+          "dtype": "bfloat16"
+        },
+        "v": {
+          "shape": [
+            2,
+            64,
+            4,
+            128
+          ],
+          "dtype": "bfloat16"
+        },
+        "g": {
+          "shape": [
+            2,
+            64,
+            4,
+            128
+          ],
+          "dtype": "float32",
+          "note": "log-gate (real model: fp32)"
+        },
+        "beta": {
+          "shape": [
+            2,
+            64,
+            4
+          ],
+          "dtype": "float32",
+          "note": "real model: fp32"
+        },
+        "initial_state": {
+          "shape": [
+            2,
+            4,
+            128,
+            128
+          ],
+          "dtype": "float32"
+        },
+        "scale": {
+          "value": 0.08838834764831845
+        },
+        "use_qk_l2norm_in_kernel": {
+          "value": true
+        }
+      },
+      "output": {
+        "out": {
+          "shape": [
+            2,
+            64,
+            4,
+            128
+          ],
+          "dtype": "bfloat16"
+        },
+        "final_state": {
+          "shape": [
+            2,
+            4,
+            128,
+            128
+          ],
+          "dtype": "float32"
+        }
+      },
+      "rtol": 0.006,
+      "atol": 0.006,
+      "gate": "ones"
+    },
+    {
+      "id": "chunk_024",
+      "description": "prefill chunk, B=2 H=32 T=64 gate=ones with_state=True",
+      "seed": 0,
+      "input": {
+        "q": {
+          "shape": [
+            2,
+            64,
+            32,
+            128
+          ],
+          "dtype": "bfloat16"
+        },
+        "k": {
+          "shape": [
+            2,
+            64,
+            32,
+            128
+          ],
+          "dtype": "bfloat16"
+        },
+        "v": {
+          "shape": [
+            2,
+            64,
+            32,
+            128
+          ],
+          "dtype": "bfloat16"
+        },
+        "g": {
+          "shape": [
+            2,
+            64,
+            32,
+            128
+          ],
+          "dtype": "float32",
+          "note": "log-gate (real model: fp32)"
+        },
+        "beta": {
+          "shape": [
+            2,
+            64,
+            32
+          ],
+          "dtype": "float32",
+          "note": "real model: fp32"
+        },
+        "initial_state": {
+          "shape": [
+            2,
+            32,
+            128,
+            128
+          ],
+          "dtype": "float32"
+        },
+        "scale": {
+          "value": 0.08838834764831845
+        },
+        "use_qk_l2norm_in_kernel": {
+          "value": true
+        }
+      },
+      "output": {
+        "out": {
+          "shape": [
+            2,
+            64,
+            32,
+            128
+          ],
+          "dtype": "bfloat16"
+        },
+        "final_state": {
+          "shape": [
+            2,
+            32,
+            128,
+            128
+          ],
+          "dtype": "float32"
+        }
+      },
+      "rtol": 0.006,
+      "atol": 0.006,
+      "gate": "ones"
+    },
+    {
+      "id": "chunk_025",
+      "description": "prefill chunk, B=1 H=4 T=128 gate=ones with_state=True",
+      "seed": 0,
+      "input": {
+        "q": {
+          "shape": [
+            1,
+            128,
+            4,
+            128
+          ],
+          "dtype": "bfloat16"
+        },
+        "k": {
+          "shape": [
+            1,
+            128,
+            4,
+            128
+          ],
+          "dtype": "bfloat16"
+        },
+        "v": {
+          "shape": [
+            1,
+            128,
+            4,
+            128
+          ],
+          "dtype": "bfloat16"
+        },
+        "g": {
+          "shape": [
+            1,
+            128,
+            4,
+            128
+          ],
+          "dtype": "float32",
+          "note": "log-gate (real model: fp32)"
+        },
+        "beta": {
+          "shape": [
+            1,
+            128,
+            4
+          ],
+          "dtype": "float32",
+          "note": "real model: fp32"
+        },
+        "initial_state": {
+          "shape": [
+            1,
+            4,
+            128,
+            128
+          ],
+          "dtype": "float32"
+        },
+        "scale": {
+          "value": 0.08838834764831845
+        },
+        "use_qk_l2norm_in_kernel": {
+          "value": true
+        }
+      },
+      "output": {
+        "out": {
+          "shape": [
+            1,
+            128,
+            4,
+            128
+          ],
+          "dtype": "bfloat16"
+        },
+        "final_state": {
+          "shape": [
+            1,
+            4,
+            128,
+            128
+          ],
+          "dtype": "float32"
+        }
+      },
+      "rtol": 0.006,
+      "atol": 0.006,
+      "gate": "ones"
+    },
+    {
+      "id": "chunk_026",
+      "description": "prefill chunk, B=1 H=32 T=128 gate=ones with_state=True",
+      "seed": 0,
+      "input": {
+        "q": {
+          "shape": [
+            1,
+            128,
+            32,
+            128
+          ],
+          "dtype": "bfloat16"
+        },
+        "k": {
+          "shape": [
+            1,
+            128,
+            32,
+            128
+          ],
+          "dtype": "bfloat16"
+        },
+        "v": {
+          "shape": [
+            1,
+            128,
+            32,
+            128
+          ],
+          "dtype": "bfloat16"
+        },
+        "g": {
+          "shape": [
+            1,
+            128,
+            32,
+            128
+          ],
+          "dtype": "float32",
+          "note": "log-gate (real model: fp32)"
+        },
+        "beta": {
+          "shape": [
+            1,
+            128,
+            32
+          ],
+          "dtype": "float32",
+          "note": "real model: fp32"
+        },
+        "initial_state": {
+          "shape": [
+            1,
+            32,
+            128,
+            128
+          ],
+          "dtype": "float32"
+        },
+        "scale": {
+          "value": 0.08838834764831845
+        },
+        "use_qk_l2norm_in_kernel": {
+          "value": true
+        }
+      },
+      "output": {
+        "out": {
+          "shape": [
+            1,
+            128,
+            32,
+            128
+          ],
+          "dtype": "bfloat16"
+        },
+        "final_state": {
+          "shape": [
+            1,
+            32,
+            128,
+            128
+          ],
+          "dtype": "float32"
+        }
+      },
+      "rtol": 0.006,
+      "atol": 0.006,
+      "gate": "ones"
+    },
+    {
+      "id": "chunk_027",
+      "description": "prefill chunk, B=2 H=4 T=128 gate=ones with_state=True",
+      "seed": 0,
+      "input": {
+        "q": {
+          "shape": [
+            2,
+            128,
+            4,
+            128
+          ],
+          "dtype": "bfloat16"
+        },
+        "k": {
+          "shape": [
+            2,
+            128,
+            4,
+            128
+          ],
+          "dtype": "bfloat16"
+        },
+        "v": {
+          "shape": [
+            2,
+            128,
+            4,
+            128
+          ],
+          "dtype": "bfloat16"
+        },
+        "g": {
+          "shape": [
+            2,
+            128,
+            4,
+            128
+          ],
+          "dtype": "float32",
+          "note": "log-gate (real model: fp32)"
+        },
+        "beta": {
+          "shape": [
+            2,
+            128,
+            4
+          ],
+          "dtype": "float32",
+          "note": "real model: fp32"
+        },
+        "initial_state": {
+          "shape": [
+            2,
+            4,
+            128,
+            128
+          ],
+          "dtype": "float32"
+        },
+        "scale": {
+          "value": 0.08838834764831845
+        },
+        "use_qk_l2norm_in_kernel": {
+          "value": true
+        }
+      },
+      "output": {
+        "out": {
+          "shape": [
+            2,
+            128,
+            4,
+            128
+          ],
+          "dtype": "bfloat16"
+        },
+        "final_state": {
+          "shape": [
+            2,
+            4,
+            128,
+            128
+          ],
+          "dtype": "float32"
+        }
+      },
+      "rtol": 0.006,
+      "atol": 0.006,
+      "gate": "ones"
+    },
+    {
+      "id": "chunk_028",
+      "description": "prefill chunk, B=2 H=32 T=128 gate=ones with_state=True",
+      "seed": 0,
+      "input": {
+        "q": {
+          "shape": [
+            2,
+            128,
+            32,
+            128
+          ],
+          "dtype": "bfloat16"
+        },
+        "k": {
+          "shape": [
+            2,
+            128,
+            32,
+            128
+          ],
+          "dtype": "bfloat16"
+        },
+        "v": {
+          "shape": [
+            2,
+            128,
+            32,
+            128
+          ],
+          "dtype": "bfloat16"
+        },
+        "g": {
+          "shape": [
+            2,
+            128,
+            32,
+            128
+          ],
+          "dtype": "float32",
+          "note": "log-gate (real model: fp32)"
+        },
+        "beta": {
+          "shape": [
+            2,
+            128,
+            32
+          ],
+          "dtype": "float32",
+          "note": "real model: fp32"
+        },
+        "initial_state": {
+          "shape": [
+            2,
+            32,
+            128,
+            128
+          ],
+          "dtype": "float32"
+        },
+        "scale": {
+          "value": 0.08838834764831845
+        },
+        "use_qk_l2norm_in_kernel": {
+          "value": true
+        }
+      },
+      "output": {
+        "out": {
+          "shape": [
+            2,
+            128,
+            32,
+            128
+          ],
+          "dtype": "bfloat16"
+        },
+        "final_state": {
+          "shape": [
+            2,
+            32,
+            128,
+            128
+          ],
+          "dtype": "float32"
+        }
+      },
+      "rtol": 0.006,
+      "atol": 0.006,
+      "gate": "ones"
+    },
+    {
+      "id": "chunk_029",
+      "description": "prefill chunk, B=1 H=4 T=300 gate=ones with_state=True",
+      "seed": 0,
+      "input": {
+        "q": {
+          "shape": [
+            1,
+            300,
+            4,
+            128
+          ],
+          "dtype": "bfloat16"
+        },
+        "k": {
+          "shape": [
+            1,
+            300,
+            4,
+            128
+          ],
+          "dtype": "bfloat16"
+        },
+        "v": {
+          "shape": [
+            1,
+            300,
+            4,
+            128
+          ],
+          "dtype": "bfloat16"
+        },
+        "g": {
+          "shape": [
+            1,
+            300,
+            4,
+            128
+          ],
+          "dtype": "float32",
+          "note": "log-gate (real model: fp32)"
+        },
+        "beta": {
+          "shape": [
+            1,
+            300,
+            4
+          ],
+          "dtype": "float32",
+          "note": "real model: fp32"
+        },
+        "initial_state": {
+          "shape": [
+            1,
+            4,
+            128,
+            128
+          ],
+          "dtype": "float32"
+        },
+        "scale": {
+          "value": 0.08838834764831845
+        },
+        "use_qk_l2norm_in_kernel": {
+          "value": true
+        }
+      },
+      "output": {
+        "out": {
+          "shape": [
+            1,
+            300,
+            4,
+            128
+          ],
+          "dtype": "bfloat16"
+        },
+        "final_state": {
+          "shape": [
+            1,
+            4,
+            128,
+            128
+          ],
+          "dtype": "float32"
+        }
+      },
+      "rtol": 0.006,
+      "atol": 0.006,
+      "gate": "ones"
+    },
+    {
+      "id": "chunk_030",
+      "description": "prefill chunk, B=1 H=32 T=300 gate=ones with_state=True",
+      "seed": 0,
+      "input": {
+        "q": {
+          "shape": [
+            1,
+            300,
+            32,
+            128
+          ],
+          "dtype": "bfloat16"
+        },
+        "k": {
+          "shape": [
+            1,
+            300,
+            32,
+            128
+          ],
+          "dtype": "bfloat16"
+        },
+        "v": {
+          "shape": [
+            1,
+            300,
+            32,
+            128
+          ],
+          "dtype": "bfloat16"
+        },
+        "g": {
+          "shape": [
+            1,
+            300,
+            32,
+            128
+          ],
+          "dtype": "float32",
+          "note": "log-gate (real model: fp32)"
+        },
+        "beta": {
+          "shape": [
+            1,
+            300,
+            32
+          ],
+          "dtype": "float32",
+          "note": "real model: fp32"
+        },
+        "initial_state": {
+          "shape": [
+            1,
+            32,
+            128,
+            128
+          ],
+          "dtype": "float32"
+        },
+        "scale": {
+          "value": 0.08838834764831845
+        },
+        "use_qk_l2norm_in_kernel": {
+          "value": true
+        }
+      },
+      "output": {
+        "out": {
+          "shape": [
+            1,
+            300,
+            32,
+            128
+          ],
+          "dtype": "bfloat16"
+        },
+        "final_state": {
+          "shape": [
+            1,
+            32,
+            128,
+            128
+          ],
+          "dtype": "float32"
+        }
+      },
+      "rtol": 0.006,
+      "atol": 0.006,
+      "gate": "ones"
+    },
+    {
+      "id": "chunk_031",
+      "description": "prefill chunk, B=2 H=4 T=300 gate=ones with_state=True",
+      "seed": 0,
+      "input": {
+        "q": {
+          "shape": [
+            2,
+            300,
+            4,
+            128
+          ],
+          "dtype": "bfloat16"
+        },
+        "k": {
+          "shape": [
+            2,
+            300,
+            4,
+            128
+          ],
+          "dtype": "bfloat16"
+        },
+        "v": {
+          "shape": [
+            2,
+            300,
+            4,
+            128
+          ],
+          "dtype": "bfloat16"
+        },
+        "g": {
+          "shape": [
+            2,
+            300,
+            4,
+            128
+          ],
+          "dtype": "float32",
+          "note": "log-gate (real model: fp32)"
+        },
+        "beta": {
+          "shape": [
+            2,
+            300,
+            4
+          ],
+          "dtype": "float32",
+          "note": "real model: fp32"
+        },
+        "initial_state": {
+          "shape": [
+            2,
+            4,
+            128,
+            128
+          ],
+          "dtype": "float32"
+        },
+        "scale": {
+          "value": 0.08838834764831845
+        },
+        "use_qk_l2norm_in_kernel": {
+          "value": true
+        }
+      },
+      "output": {
+        "out": {
+          "shape": [
+            2,
+            300,
+            4,
+            128
+          ],
+          "dtype": "bfloat16"
+        },
+        "final_state": {
+          "shape": [
+            2,
+            4,
+            128,
+            128
+          ],
+          "dtype": "float32"
+        }
+      },
+      "rtol": 0.006,
+      "atol": 0.006,
+      "gate": "ones"
+    },
+    {
+      "id": "chunk_032",
+      "description": "prefill chunk, B=2 H=32 T=300 gate=ones with_state=True",
+      "seed": 0,
+      "input": {
+        "q": {
+          "shape": [
+            2,
+            300,
+            32,
+            128
+          ],
+          "dtype": "bfloat16"
+        },
+        "k": {
+          "shape": [
+            2,
+            300,
+            32,
+            128
+          ],
+          "dtype": "bfloat16"
+        },
+        "v": {
+          "shape": [
+            2,
+            300,
+            32,
+            128
+          ],
+          "dtype": "bfloat16"
+        },
+        "g": {
+          "shape": [
+            2,
+            300,
+            32,
+            128
+          ],
+          "dtype": "float32",
+          "note": "log-gate (real model: fp32)"
+        },
+        "beta": {
+          "shape": [
+            2,
+            300,
+            32
+          ],
+          "dtype": "float32",
+          "note": "real model: fp32"
+        },
+        "initial_state": {
+          "shape": [
+            2,
+            32,
+            128,
+            128
+          ],
+          "dtype": "float32"
+        },
+        "scale": {
+          "value": 0.08838834764831845
+        },
+        "use_qk_l2norm_in_kernel": {
+          "value": true
+        }
+      },
+      "output": {
+        "out": {
+          "shape": [
+            2,
+            300,
+            32,
+            128
+          ],
+          "dtype": "bfloat16"
+        },
+        "final_state": {
+          "shape": [
+            2,
+            32,
+            128,
+            128
+          ],
+          "dtype": "float32"
+        }
+      },
+      "rtol": 0.006,
+      "atol": 0.006,
+      "gate": "ones"
+    },
+    {
+      "id": "chunk_033",
+      "description": "prefill chunk, B=1 H=4 T=512 gate=ones with_state=True",
+      "seed": 0,
+      "input": {
+        "q": {
+          "shape": [
+            1,
+            512,
+            4,
+            128
+          ],
+          "dtype": "bfloat16"
+        },
+        "k": {
+          "shape": [
+            1,
+            512,
+            4,
+            128
+          ],
+          "dtype": "bfloat16"
+        },
+        "v": {
+          "shape": [
+            1,
+            512,
+            4,
+            128
+          ],
+          "dtype": "bfloat16"
+        },
+        "g": {
+          "shape": [
+            1,
+            512,
+            4,
+            128
+          ],
+          "dtype": "float32",
+          "note": "log-gate (real model: fp32)"
+        },
+        "beta": {
+          "shape": [
+            1,
+            512,
+            4
+          ],
+          "dtype": "float32",
+          "note": "real model: fp32"
+        },
+        "initial_state": {
+          "shape": [
+            1,
+            4,
+            128,
+            128
+          ],
+          "dtype": "float32"
+        },
+        "scale": {
+          "value": 0.08838834764831845
+        },
+        "use_qk_l2norm_in_kernel": {
+          "value": true
+        }
+      },
+      "output": {
+        "out": {
+          "shape": [
+            1,
+            512,
+            4,
+            128
+          ],
+          "dtype": "bfloat16"
+        },
+        "final_state": {
+          "shape": [
+            1,
+            4,
+            128,
+            128
+          ],
+          "dtype": "float32"
+        }
+      },
+      "rtol": 0.006,
+      "atol": 0.006,
+      "gate": "ones"
+    },
+    {
+      "id": "chunk_034",
+      "description": "prefill chunk, B=1 H=32 T=512 gate=ones with_state=True",
+      "seed": 0,
+      "input": {
+        "q": {
+          "shape": [
+            1,
+            512,
+            32,
+            128
+          ],
+          "dtype": "bfloat16"
+        },
+        "k": {
+          "shape": [
+            1,
+            512,
+            32,
+            128
+          ],
+          "dtype": "bfloat16"
+        },
+        "v": {
+          "shape": [
+            1,
+            512,
+            32,
+            128
+          ],
+          "dtype": "bfloat16"
+        },
+        "g": {
+          "shape": [
+            1,
+            512,
+            32,
+            128
+          ],
+          "dtype": "float32",
+          "note": "log-gate (real model: fp32)"
+        },
+        "beta": {
+          "shape": [
+            1,
+            512,
+            32
+          ],
+          "dtype": "float32",
+          "note": "real model: fp32"
+        },
+        "initial_state": {
+          "shape": [
+            1,
+            32,
+            128,
+            128
+          ],
+          "dtype": "float32"
+        },
+        "scale": {
+          "value": 0.08838834764831845
+        },
+        "use_qk_l2norm_in_kernel": {
+          "value": true
+        }
+      },
+      "output": {
+        "out": {
+          "shape": [
+            1,
+            512,
+            32,
+            128
+          ],
+          "dtype": "bfloat16"
+        },
+        "final_state": {
+          "shape": [
+            1,
+            32,
+            128,
+            128
+          ],
+          "dtype": "float32"
+        }
+      },
+      "rtol": 0.006,
+      "atol": 0.006,
+      "gate": "ones"
+    },
+    {
+      "id": "chunk_035",
+      "description": "prefill chunk, B=2 H=4 T=512 gate=ones with_state=True",
+      "seed": 0,
+      "input": {
+        "q": {
+          "shape": [
+            2,
+            512,
+            4,
+            128
+          ],
+          "dtype": "bfloat16"
+        },
+        "k": {
+          "shape": [
+            2,
+            512,
+            4,
+            128
+          ],
+          "dtype": "bfloat16"
+        },
+        "v": {
+          "shape": [
+            2,
+            512,
+            4,
+            128
+          ],
+          "dtype": "bfloat16"
+        },
+        "g": {
+          "shape": [
+            2,
+            512,
+            4,
+            128
+          ],
+          "dtype": "float32",
+          "note": "log-gate (real model: fp32)"
+        },
+        "beta": {
+          "shape": [
+            2,
+            512,
+            4
+          ],
+          "dtype": "float32",
+          "note": "real model: fp32"
+        },
+        "initial_state": {
+          "shape": [
+            2,
+            4,
+            128,
+            128
+          ],
+          "dtype": "float32"
+        },
+        "scale": {
+          "value": 0.08838834764831845
+        },
+        "use_qk_l2norm_in_kernel": {
+          "value": true
+        }
+      },
+      "output": {
+        "out": {
+          "shape": [
+            2,
+            512,
+            4,
+            128
+          ],
+          "dtype": "bfloat16"
+        },
+        "final_state": {
+          "shape": [
+            2,
+            4,
+            128,
+            128
+          ],
+          "dtype": "float32"
+        }
+      },
+      "rtol": 0.006,
+      "atol": 0.006,
+      "gate": "ones"
+    },
+    {
+      "id": "chunk_036",
+      "description": "prefill chunk, B=2 H=32 T=512 gate=ones with_state=True",
+      "seed": 0,
+      "input": {
+        "q": {
+          "shape": [
+            2,
+            512,
+            32,
+            128
+          ],
+          "dtype": "bfloat16"
+        },
+        "k": {
+          "shape": [
+            2,
+            512,
+            32,
+            128
+          ],
+          "dtype": "bfloat16"
+        },
+        "v": {
+          "shape": [
+            2,
+            512,
+            32,
+            128
+          ],
+          "dtype": "bfloat16"
+        },
+        "g": {
+          "shape": [
+            2,
+            512,
+            32,
+            128
+          ],
+          "dtype": "float32",
+          "note": "log-gate (real model: fp32)"
+        },
+        "beta": {
+          "shape": [
+            2,
+            512,
+            32
+          ],
+          "dtype": "float32",
+          "note": "real model: fp32"
+        },
+        "initial_state": {
+          "shape": [
+            2,
+            32,
+            128,
+            128
+          ],
+          "dtype": "float32"
+        },
+        "scale": {
+          "value": 0.08838834764831845
+        },
+        "use_qk_l2norm_in_kernel": {
+          "value": true
+        }
+      },
+      "output": {
+        "out": {
+          "shape": [
+            2,
+            512,
+            32,
+            128
+          ],
+          "dtype": "bfloat16"
+        },
+        "final_state": {
+          "shape": [
+            2,
+            32,
+            128,
+            128
+          ],
+          "dtype": "float32"
+        }
+      },
+      "rtol": 0.006,
+      "atol": 0.006,
+      "gate": "ones"
+    },
+    {
+      "id": "chunk_037",
+      "description": "prefill chunk, B=1 H=4 T=1000 gate=ones with_state=True",
+      "seed": 0,
+      "input": {
+        "q": {
+          "shape": [
+            1,
+            1000,
+            4,
+            128
+          ],
+          "dtype": "bfloat16"
+        },
+        "k": {
+          "shape": [
+            1,
+            1000,
+            4,
+            128
+          ],
+          "dtype": "bfloat16"
+        },
+        "v": {
+          "shape": [
+            1,
+            1000,
+            4,
+            128
+          ],
+          "dtype": "bfloat16"
+        },
+        "g": {
+          "shape": [
+            1,
+            1000,
+            4,
+            128
+          ],
+          "dtype": "float32",
+          "note": "log-gate (real model: fp32)"
+        },
+        "beta": {
+          "shape": [
+            1,
+            1000,
+            4
+          ],
+          "dtype": "float32",
+          "note": "real model: fp32"
+        },
+        "initial_state": {
+          "shape": [
+            1,
+            4,
+            128,
+            128
+          ],
+          "dtype": "float32"
+        },
+        "scale": {
+          "value": 0.08838834764831845
+        },
+        "use_qk_l2norm_in_kernel": {
+          "value": true
+        }
+      },
+      "output": {
+        "out": {
+          "shape": [
+            1,
+            1000,
+            4,
+            128
+          ],
+          "dtype": "bfloat16"
+        },
+        "final_state": {
+          "shape": [
+            1,
+            4,
+            128,
+            128
+          ],
+          "dtype": "float32"
+        }
+      },
+      "rtol": 0.006,
+      "atol": 0.006,
+      "gate": "ones"
+    },
+    {
+      "id": "chunk_038",
+      "description": "prefill chunk, B=1 H=32 T=1000 gate=ones with_state=True",
+      "seed": 0,
+      "input": {
+        "q": {
+          "shape": [
+            1,
+            1000,
+            32,
+            128
+          ],
+          "dtype": "bfloat16"
+        },
+        "k": {
+          "shape": [
+            1,
+            1000,
+            32,
+            128
+          ],
+          "dtype": "bfloat16"
+        },
+        "v": {
+          "shape": [
+            1,
+            1000,
+            32,
+            128
+          ],
+          "dtype": "bfloat16"
+        },
+        "g": {
+          "shape": [
+            1,
+            1000,
+            32,
+            128
+          ],
+          "dtype": "float32",
+          "note": "log-gate (real model: fp32)"
+        },
+        "beta": {
+          "shape": [
+            1,
+            1000,
+            32
+          ],
+          "dtype": "float32",
+          "note": "real model: fp32"
+        },
+        "initial_state": {
+          "shape": [
+            1,
+            32,
+            128,
+            128
+          ],
+          "dtype": "float32"
+        },
+        "scale": {
+          "value": 0.08838834764831845
+        },
+        "use_qk_l2norm_in_kernel": {
+          "value": true
+        }
+      },
+      "output": {
+        "out": {
+          "shape": [
+            1,
+            1000,
+            32,
+            128
+          ],
+          "dtype": "bfloat16"
+        },
+        "final_state": {
+          "shape": [
+            1,
+            32,
+            128,
+            128
+          ],
+          "dtype": "float32"
+        }
+      },
+      "rtol": 0.006,
+      "atol": 0.006,
+      "gate": "ones"
+    },
+    {
+      "id": "chunk_039",
+      "description": "prefill chunk, B=2 H=4 T=1000 gate=ones with_state=True",
+      "seed": 0,
+      "input": {
+        "q": {
+          "shape": [
+            2,
+            1000,
+            4,
+            128
+          ],
+          "dtype": "bfloat16"
+        },
+        "k": {
+          "shape": [
+            2,
+            1000,
+            4,
+            128
+          ],
+          "dtype": "bfloat16"
+        },
+        "v": {
+          "shape": [
+            2,
+            1000,
+            4,
+            128
+          ],
+          "dtype": "bfloat16"
+        },
+        "g": {
+          "shape": [
+            2,
+            1000,
+            4,
+            128
+          ],
+          "dtype": "float32",
+          "note": "log-gate (real model: fp32)"
+        },
+        "beta": {
+          "shape": [
+            2,
+            1000,
+            4
+          ],
+          "dtype": "float32",
+          "note": "real model: fp32"
+        },
+        "initial_state": {
+          "shape": [
+            2,
+            4,
+            128,
+            128
+          ],
+          "dtype": "float32"
+        },
+        "scale": {
+          "value": 0.08838834764831845
+        },
+        "use_qk_l2norm_in_kernel": {
+          "value": true
+        }
+      },
+      "output": {
+        "out": {
+          "shape": [
+            2,
+            1000,
+            4,
+            128
+          ],
+          "dtype": "bfloat16"
+        },
+        "final_state": {
+          "shape": [
+            2,
+            4,
+            128,
+            128
+          ],
+          "dtype": "float32"
+        }
+      },
+      "rtol": 0.006,
+      "atol": 0.006,
+      "gate": "ones"
+    },
+    {
+      "id": "chunk_040",
+      "description": "prefill chunk, B=2 H=32 T=1000 gate=ones with_state=True",
+      "seed": 0,
+      "input": {
+        "q": {
+          "shape": [
+            2,
+            1000,
+            32,
+            128
+          ],
+          "dtype": "bfloat16"
+        },
+        "k": {
+          "shape": [
+            2,
+            1000,
+            32,
+            128
+          ],
+          "dtype": "bfloat16"
+        },
+        "v": {
+          "shape": [
+            2,
+            1000,
+            32,
+            128
+          ],
+          "dtype": "bfloat16"
+        },
+        "g": {
+          "shape": [
+            2,
+            1000,
+            32,
+            128
+          ],
+          "dtype": "float32",
+          "note": "log-gate (real model: fp32)"
+        },
+        "beta": {
+          "shape": [
+            2,
+            1000,
+            32
+          ],
+          "dtype": "float32",
+          "note": "real model: fp32"
+        },
+        "initial_state": {
+          "shape": [
+            2,
+            32,
+            128,
+            128
+          ],
+          "dtype": "float32"
+        },
+        "scale": {
+          "value": 0.08838834764831845
+        },
+        "use_qk_l2norm_in_kernel": {
+          "value": true
+        }
+      },
+      "output": {
+        "out": {
+          "shape": [
+            2,
+            1000,
+            32,
+            128
+          ],
+          "dtype": "bfloat16"
+        },
+        "final_state": {
+          "shape": [
+            2,
+            32,
+            128,
+            128
+          ],
+          "dtype": "float32"
+        }
+      },
+      "rtol": 0.006,
+      "atol": 0.006,
+      "gate": "ones"
+    },
+    {
+      "id": "chunk_041",
+      "description": "prefill chunk, B=1 H=4 T=128 gate=rand with_state=False",
+      "seed": 0,
+      "input": {
+        "q": {
+          "shape": [
+            1,
+            128,
+            4,
+            128
+          ],
+          "dtype": "bfloat16"
+        },
+        "k": {
+          "shape": [
+            1,
+            128,
+            4,
+            128
+          ],
+          "dtype": "bfloat16"
+        },
+        "v": {
+          "shape": [
+            1,
+            128,
+            4,
+            128
+          ],
+          "dtype": "bfloat16"
+        },
+        "g": {
+          "shape": [
+            1,
+            128,
+            4,
+            128
+          ],
+          "dtype": "float32",
+          "note": "log-gate (real model: fp32)"
+        },
+        "beta": {
+          "shape": [
+            1,
+            128,
+            4
+          ],
+          "dtype": "float32",
+          "note": "real model: fp32"
+        },
+        "initial_state": null,
+        "scale": {
+          "value": 0.08838834764831845
+        },
+        "use_qk_l2norm_in_kernel": {
+          "value": true
+        }
+      },
+      "output": {
+        "out": {
+          "shape": [
+            1,
+            128,
+            4,
+            128
+          ],
+          "dtype": "bfloat16"
+        },
+        "final_state": {
+          "shape": [
+            1,
+            4,
+            128,
+            128
+          ],
+          "dtype": "float32"
+        }
+      },
+      "rtol": 0.006,
+      "atol": 0.006,
+      "gate": "rand"
+    },
+    {
+      "id": "chunk_042",
+      "description": "prefill chunk, B=1 H=32 T=300 gate=rand with_state=False",
+      "seed": 0,
+      "input": {
+        "q": {
+          "shape": [
+            1,
+            300,
+            32,
+            128
+          ],
+          "dtype": "bfloat16"
+        },
+        "k": {
+          "shape": [
+            1,
+            300,
+            32,
+            128
+          ],
+          "dtype": "bfloat16"
+        },
+        "v": {
+          "shape": [
+            1,
+            300,
+            32,
+            128
+          ],
+          "dtype": "bfloat16"
+        },
+        "g": {
+          "shape": [
+            1,
+            300,
+            32,
+            128
+          ],
+          "dtype": "float32",
+          "note": "log-gate (real model: fp32)"
+        },
+        "beta": {
+          "shape": [
+            1,
+            300,
+            32
+          ],
+          "dtype": "float32",
+          "note": "real model: fp32"
+        },
+        "initial_state": null,
+        "scale": {
+          "value": 0.08838834764831845
+        },
+        "use_qk_l2norm_in_kernel": {
+          "value": true
+        }
+      },
+      "output": {
+        "out": {
+          "shape": [
+            1,
+            300,
+            32,
+            128
+          ],
+          "dtype": "bfloat16"
+        },
+        "final_state": {
+          "shape": [
+            1,
+            32,
+            128,
+            128
+          ],
+          "dtype": "float32"
+        }
+      },
+      "rtol": 0.006,
+      "atol": 0.006,
+      "gate": "rand"
+    }
+  ]
+}

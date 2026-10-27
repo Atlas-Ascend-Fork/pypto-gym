@@ -519,71 +519,40 @@ class KimiMLAAttention(nn.Module):
         )
 
 
-def _run_kda(mode, kda_kwargs):
-    """Run the REFERENCE KDA op for this forward -> (o, recurrent_state).
+def _dispatch_kda(primary_fn, fallback_fn, kda_kwargs):
+    """Run the KDA op, falling back to the torch implementation if the PyPTO
+    wrapper raises NotImplementedError (off-bound-device or unsupported shape)."""
+    try:
+        return primary_fn(**kda_kwargs)
+    except NotImplementedError:
+        return fallback_fn(**kda_kwargs)
 
-    Upstream FLA/torch only: ``fused_recurrent_kda`` for the T<=64 decode
-    branch, ``chunk_kda`` for prefill. The PyPTO dispatch happens one level up,
-    at the fused-subgraph level (_try_kda_fused_prefill), which replaces the
-    whole conv -> gate -> beta -> chunk -> o_norm block; this function only
-    runs when that fused path is ineligible (varlen/masked batch, training,
-    K != 128, USE_PTO_KDA off).
+
+def _run_kda(mode, kda_kwargs):
+    """Select the KDA backend for this forward and run it -> (o, recurrent_state).
+
+    Factored out of KimiDeltaAttention.forward so our PyPTO dispatch guard
+    (USE_PTO_KDA / USE_PTO_KDA_GRAPH) lives here rather than adding branches to
+    the vendored forward. KDA PyPTO covers prefill (chunk) only; decode (T<=64,
+    'fused_recurrent') always takes the upstream torch path.
     """
     if mode != 'chunk':
-        return fused_recurrent_kda(**kda_kwargs)
-    return chunk_kda(**kda_kwargs)
-
-
-def _try_kda_fused_prefill(layer, hidden_states, cache_params, attention_mask,
-                           cu_seqlens):
-    """Try the fused PyPTO KDA prefill path.
-
-    Returns the final projected output, or None when the fused path is
-    disabled/ineligible/unsupported (the wrapper raises NotImplementedError
-    for out-of-envelope shapes; caught here)."""
-    batch_size, q_len = hidden_states.shape[0], hidden_states.shape[1]
-    if q_len <= 64 or attention_mask is not None or cu_seqlens is not None:
-        return None
-    if layer.training:
-        return None
+        return _dispatch_kda(fused_recurrent_kda, fused_recurrent_kda, kda_kwargs)
     pto = sys.modules.get("kimi_linear_48b_a3b_pto_kernels")
-    if pto is None or not getattr(pto, "USE_PTO_KDA", False):
-        return None
-    if not hasattr(pto, "kda_fused_prefill"):
-        return None
-    from ops.pypto_tensor.kimi_linear_48b_a3b.kda.kda_fused_prefill_impl import (
-        KdaPrefillInputs, KdaPrefillWeights)
-    inputs = KdaPrefillInputs(
-        q=layer.q_proj(hidden_states).view(batch_size, q_len, layer.num_heads, layer.head_dim),
-        k=layer.k_proj(hidden_states).view(batch_size, q_len, layer.num_heads, layer.head_dim),
-        v=layer.v_proj(hidden_states).view(batch_size, q_len, layer.num_heads, layer.head_dim),
-        g_raw=layer.f_b_proj(layer.f_a_proj(hidden_states)),
-        g_gate=layer.g_b_proj(layer.g_a_proj(hidden_states)),
-        b_raw=layer.b_proj(hidden_states))
-    weights = KdaPrefillWeights(
-        dt_bias=layer.dt_bias, a_log=layer.A_log, o_norm_w=layer.o_norm.weight,
-        conv_wq=layer.q_conv1d.weight.reshape(-1, layer.conv_size),
-        conv_wk=layer.k_conv1d.weight.reshape(-1, layer.conv_size),
-        conv_wv=layer.v_conv1d.weight.reshape(-1, layer.conv_size),
-        lower_bound=getattr(layer.config, "gate_lower_bound", -5.0),
-        rms_eps=layer.o_norm.eps)
-    conv_cache = None
-    recurrent_state = None
-    if cache_params is not None:
-        if cache_params.conv_states[layer.layer_idx] is not None:
-            conv_cache = cache_params.conv_states[layer.layer_idx]
-        recurrent_state = cache_params.recurrent_states[layer.layer_idx]
-    try:
-        o, st, cs = pto.kda_fused_prefill(
-            inputs, weights,
-            initial_state=recurrent_state, output_final_state=True,
-            conv_cache=conv_cache)
-    except NotImplementedError:
-        return None
-    if cache_params is not None:
-        cache_params.recurrent_states[layer.layer_idx] = st
-        cache_params.conv_states[layer.layer_idx] = cs
-    return layer.o_proj(o.reshape(batch_size, q_len, -1))
+    # NPU-graph capture path: call the registered PyPTO op DIRECTLY (no
+    # _dispatch_kda try/except — a host-raised exception is not capturable).
+    # Guarded by USE_PTO_KDA_GRAPH (off by default). The bench only sets this
+    # for the captured region where cache_params is None, so initial_state and
+    # cu_seqlens are None and kda_chunk_pypto's reduced signature applies.
+    if pto is not None and getattr(pto, "USE_PTO_KDA_GRAPH", False):
+        return pto.kda_chunk_pypto(
+            q=kda_kwargs["q"], k=kda_kwargs["k"], v=kda_kwargs["v"],
+            g=kda_kwargs["g"], beta=kda_kwargs["beta"],
+            initial_state=kda_kwargs["initial_state"], use_qk_l2norm_in_kernel=True)
+    primary_fn = chunk_kda
+    if pto is not None and getattr(pto, "USE_PTO_KDA", False):
+        primary_fn = pto.kda_chunk_wrapper
+    return _dispatch_kda(primary_fn, chunk_kda, kda_kwargs)
 
 
 class Conv1dResult(NamedTuple):
@@ -760,14 +729,6 @@ class KimiDeltaAttention(nn.Module):
                 raise ValueError("Only chunk mode is supported in training.")
 
         cu_seqlens = kwargs.get('cu_seqlens')
-
-        # Fused PyPTO prefill (conv+gate+beta+chunk+o_norm in one kernel).
-        # Returns None (ineligible / NotImplementedError) -> standard path.
-        fused = _try_kda_fused_prefill(self, hidden_states, cache_params,
-                                        attention_mask, cu_seqlens)
-        if fused is not None:
-            return fused
-
         indices = None
         if attention_mask is not None:
             indices, cu_seqlens, _ = get_unpad_data(attention_mask[:, -q_len:])
@@ -783,6 +744,17 @@ class KimiDeltaAttention(nn.Module):
             x, '... (h d) -> ... h d', d=self.head_k_dim), (r.q, r.k))
         v = rearrange(r.v, '... (h d) -> ... h d', d=self.head_dim)
 
+        # PyPTO injection (via sys.modules): swap in the fused KDA kernel when
+        # enabled and shape constraints are met; otherwise fall back to the
+        # torch chunk / recurrent function.
+        #
+        # NOTE(multi-NPU coverage): the wrapper raises NotImplementedError (caught
+        # below) for any KDA layer whose tensors are NOT on the single NPU PyPTO is
+        # bound to. So under a single-process device_map shard, only the bound NPU's
+        # KDA layers run on PyPTO (e.g. ~6 of 20 with 4-way sharding) and the rest
+        # take this torch fallback. The wrapper emits a one-time RuntimeWarning so
+        # this is not silent. Note (future work): for full 20/20 PyPTO coverage run
+        # one process per NPU (pipeline / tensor parallel); see kda/README.md.
         kda_kwargs = dict(
             q=q, k=k, v=v, g=g, beta=beta, initial_state=r.recurrent_state,
             output_final_state=True, use_qk_l2norm_in_kernel=True, cu_seqlens=cu_seqlens)
