@@ -1,6 +1,8 @@
 # PyPTO-Gym
 
 ## 🔥最新动态
+
+- 2026/10：PyPTO-Gym 仓的路径结构近期将做一定范围内的重构，重构后的目标旨在将 PyPTO-Gym 构建成 “PyPTO 算子的 Agent 语料基地及算子最佳实践查找基地”，当前任务仍在进行中，更多信息参见 [重构内容](/docs/build-guide.md)。
 - 2026/06：PyPTO-Gym 项目首次上线，本仓原为 [PyPTO](https://gitcode.com/cann/pypto) 仓的 `models` 目录，现已拆分为独立仓，与主仓解耦演进。
 
 ## 🚀概述

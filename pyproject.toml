@@ -9,7 +9,7 @@
 
 [build-system]
 requires = [
-    "setuptools>=77.0.3",
+    "setuptools>=70.0.3",
 ]
 build-backend = "setuptools.build_meta"
 
@@ -21,14 +21,17 @@ authors = [
 ]
 description = "A kernel library of fused operators and model implementations built on top of PyPTO"
 readme = { file = "README.md", content-type = "text/markdown" }
-license = "LicenseRef-CANN-Open-Software-License-Agreement-Version-2.0"
-license-files = ["LICENSE"]
+
+# 兼容 setuptools 70.3.0 写法，由 setup.py 填充 license/license-files, 此处不静态写 license/license-files
+dynamic = ["license"]
+
 requires-python = ">=3.9"
 dependencies = [
-    "pypto>=0.2.0",
+    "pypto>=0.2.1",
 ]
 keywords = ["python", "pto", "tile", "tile-centric", "ascend", "kernel", "operator"]
-classifiers = [
+
+classifiers = [  # 分类器，PyPI 用于分类筛选 (必填多个合理分类)
     "Development Status :: 4 - Beta",
     "Intended Audience :: Developers",
     "Topic :: Software Development :: Libraries",
@@ -37,6 +40,8 @@ classifiers = [
     "Programming Language :: Python :: 3.10",
     "Programming Language :: Python :: 3.11",
     "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Programming Language :: Python :: 3.14",
 ]
 
 [project.urls]
@@ -46,6 +51,7 @@ Repository = "https://gitcode.com/cann/pypto-gym"
 
 [project.optional-dependencies]
 dev = [
+    "setuptools>=70.3.0",
     "pip",
     "build",
     "packaging",
@@ -60,17 +66,11 @@ tests = [
     "numpy",
 ]
 
-[tool.setuptools.packages.find]
-where = ["src", "."]
-include = ["pypto_gym*", "ops*", "benchmark*"]
+# 包发现与目录映射(ops/ -> pypto_gym.ops)
+# 由 setup.py 动态生成, 此处不再声明 packages/package-data;
+# whl 仅包含算子运行所需 .py 文件;
 
-[tool.setuptools.package-data]
-"pypto_gym" = ["**/*.md", "**/*.yaml"]
-"ops" = ["**/*.md", "**/*.yaml"]
-"benchmark" = ["**/*.md", "**/*.yaml", "**/*.sh"]
-
-[tool.pytest.ini_options]
-junit_family = "xunit1"
+# pytest 配置统一位于 pytest.ini (优先级高于本文件, 避免双处配置);
 
 [tool.pylint.variables]
 variable-rgx = "(([a-z_][a-z0-9_]{0,30})|([A-Z][a-zA-Z0-9]+))$"

@@ -43,6 +43,8 @@ htmlcov/
 *_inputs.txt
 
 # Build outputs
+build/
+build_out/
 output/
 output_fwd/
 output_bwd/
@@ -50,6 +52,9 @@ PROF_*/
 *.o
 *.bin
 *.s
+
+# makeself runtime dependencies downloaded during packaging (cann-cmake makeself-fetch)
+third_party/
 *.a
 kernel_aicore
 kernel_aicpu

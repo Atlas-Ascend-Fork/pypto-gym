@@ -99,7 +99,7 @@ run_pypto_build() {
         return 1
     fi
     if [ ! -f "$gym_repo/build_ci.py" ]; then
-        LOG_ERROR "pypto-gym build proxy '$gym_repo/build_ci.py' not found!"
+        LOG_ERROR "Build entry '$gym_repo/build_ci.py' not found!"
         return 1
     fi
 
@@ -453,7 +453,9 @@ LOG_DO "npu-smi" "info"
 
 # 使用 PyPTO 仓库自身的构建入口生成 run 包。不要传 --just_build_whl，
 # 也不要传 --models/-u/-s，避免在 PyPTO 仓库内提前执行其自身测试。
-if run_pypto_build "$PYTHON3_EXE" "$SRC_DIR" \
+# $target_repo 是本脚本前面克隆的 pypto 仓(与 gym 同级), gym 的 build_ci.py 职责已修正为
+# 构建 gym 自身产物(whl/custom run), 不再代理 pypto 构建.
+if run_pypto_build "$PYTHON3_EXE" "$target_repo" \
     --clean \
     --verbose \
     "--cann_3rd_lib_path=$PYPTO_3RD_LIB_PATH" \

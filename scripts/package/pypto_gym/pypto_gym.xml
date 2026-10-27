@@ -1,0 +1,39 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- Copyright (c) 2026 Huawei Technologies Co., Ltd.
+     This program is free software, you can redistribute it and/or modify it under the terms and conditions of
+     the CANN Open Software License Agreement Version 2.0 (the "License").
+     Please refer to the License for details. You may not use this file except in compliance with the License.
+     THIS SOFTWARE IS PROVIDED ON AN "AS IS" BASIS, WITHOUT WARRANTIES OF ANY KIND, EITHER EXPRESS OR IMPLIED,
+     INCLUDING BUT NOT LIMITED TO NON-INFRINGEMENT, MERCHANTABILITY OR FITNESS FOR A PARTICULAR PURPOSE.
+     See the LICENSE file at the root of the software repository for the full text of the License.
+-->
+<config name="pypto_gym" copy_type="delivery" src_path="" dst_path="" install_type="all" install_mod="550" install_own="$username:$usergroup">
+    <package_info>
+        <product_name>cann</product_name>
+        <func_name>pypto_gym</func_name>
+        <share_info_name>pypto_gym</share_info_name>
+        <suffix>run</suffix>
+        <install_script>share/info/pypto_gym/script/install.sh</install_script>
+        <help>share/info/pypto_gym/script/help.info</help>
+        <cleanup>share/info/pypto_gym/script/cleanup.sh</cleanup>
+        <parallel>true</parallel>
+    </package_info>
+    <file_info value="pypto_gym_script" copy_type="source" src_path="" dst_path="share/info/pypto_gym" install_path="share/info/pypto_gym">
+        <file value="script" entity="true"/>
+        <file value="version.info"/>
+    </file_info>
+    <file_info value="pypto_gym_vendors" copy_type="delivery" src_path="" dst_path="packages/vendors/pypto_gym" install_path="packages/vendors/pypto_gym" install_mod="550">
+        <file value="op_api" entity="true"/>
+        <file value="op_proto" entity="true"/>
+        <file value="op_impl" entity="true"/>
+    </file_info>
+    <dir_info value="pypto_gym" install_path="" install_type="all">
+        <path value="share" install_mod="750"/>
+        <path value="share/info" install_mod="750"/>
+        <path value="share/info/pypto_gym" install_mod="550"/>
+        <path value="share/info/pypto_gym/script" install_mod="550"/>
+        <path value="packages" install_mod="750"/>
+        <path value="packages/vendors" install_mod="750"/>
+        <path value="packages/vendors/pypto_gym" install_mod="550"/>
+    </dir_info>
+</config>

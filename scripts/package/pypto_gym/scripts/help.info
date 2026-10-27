@@ -1,0 +1,7 @@
+  --version                         Query the package version
+  --install | --full | --run        Install vendor package (default)
+    --install-path=<path>           Install to specific opp dir (default: $ASCEND_HOME_PATH/opp)
+    --install-for-all               Install with world-readable permissions (multi-user scenario)
+  --uninstall                       Uninstall vendor package
+    --install-path=<path>           Uninstall from specific opp dir (default: $ASCEND_HOME_PATH/opp)
+  --quiet                           Quiet mode
