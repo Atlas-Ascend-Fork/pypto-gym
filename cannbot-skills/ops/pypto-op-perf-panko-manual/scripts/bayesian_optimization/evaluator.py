@@ -36,11 +36,56 @@ import os
 import re
 import shlex
 import shutil
+import signal
 import subprocess
 import sys
 import time
 
 from . import apply
+
+
+FIRST_CALL_MARKER = "[panko-progress] first_call_done"
+
+
+def classify_timeout(out):
+    """What a killed measurement actually tells us about the candidate.
+
+    `references/evaluator.md` lumped "timed-out / crashed / OOM / compile-failed"
+    together and called all four `s = 0`. Three of them ARE verdicts about the
+    candidate: it does not compile, it crashes, it hangs. A compile that ran past
+    the budget is not -- nothing was measured, and recording it as incorrect
+    feeds a false label to every mechanism downstream that reads the
+    measurements, while charging `eval_budget` for a device run that produced no
+    number.
+
+    `measure_latency.capture_readings` writes FIRST_CALL_MARKER to the real stderr once
+    the first call (JIT compile + one execution) returns, and the parent keeps
+    partial output in `TimeoutExpired.output`. So the marker's presence splits
+    the two cases exactly:
+
+        marker absent   -> the compile never finished     -> unevaluated
+        marker present  -> it compiled, then ran long     -> a verdict (hang)
+
+    On this hardware the split matters because the compile IS the measurement:
+    it dominates the evaluation, while a warm call costs a second or two. A
+    budget tuned to the warm call therefore loses whole evaluations to the
+    compile, and compile time scales with program size -- so the candidates it
+    discards are systematically the large ones.
+    """
+    if FIRST_CALL_MARKER in (out or ""):
+        return {"timeout": "exec", "compile_s": marker_compile_s(out)}
+    return {"unevaluated": "compile_timeout", "timeout": "compile"}
+
+
+def marker_compile_s(out):
+    """The compile seconds the marker carried, or None."""
+    for line in (out or "").splitlines():
+        if FIRST_CALL_MARKER in line and "compile_s=" in line:
+            try:
+                return float(line.rsplit("compile_s=", 1)[1].strip())
+            except ValueError:
+                return None
+    return None
 
 
 class UnsupportedCommand(Exception):
@@ -238,7 +283,35 @@ INVOCATION_FAULT_MARKERS = (
     # none of them having reached the device.
     "No module named",
     "command not found",
+    # `/bin/sh: 1: source: not found` -- a test command written for bash run by
+    # dash. Not "command not found", so it is scored as the candidate failing.
+    "source: not found",
     "ImportError",
+    # The process never obtained a device context, so nothing it printed
+    # afterwards is about the candidate:
+    #
+    #     ctx is NULL!
+    #     ... rtGetDevMsg execution failed, the context is a null pointer
+    #
+    # Scored as "this tile is incorrect", these charge evaluations, drive a
+    # block to its `failure_limit`, and report good tile regions to the sampler
+    # as infeasible on the strength of a device id that was never set
+    # (`TILE_FWK_DEVICE_ID`). It is filed as an
+    # INVOCATION fault rather than a device one deliberately: the device is not
+    # busy, it was never opened, so the backoff has nothing to wait for and the
+    # run should end saying so.
+    "ctx is NULL",
+    "the context is a null pointer",
+    "rtGetDevMsg execution failed",
+)
+
+# The subset of INVOCATION_FAULT_MARKERS that names a device context that was
+# never opened. Separated only so the halt can say what to fix; the fault
+# behaviour is the ordinary invocation one.
+DEVICE_CONTEXT_MARKERS = (
+    "ctx is NULL",
+    "the context is a null pointer",
+    "rtGetDevMsg execution failed",
 )
 
 # Scanned in this order, device first, deliberately. Several invocation markers
@@ -296,8 +369,14 @@ class EnvironmentFault(Exception):
         self.retries = retries
 
 
+# The reading the search climbs. It IS `p` -- `measure_latency` reports the
+# profiler's "AICore End-to-End Time" under that name -- so nothing here has to
+# pick it out. Named for the harness's `J_OBJECTIVE`, which this package does
+# not import; `test_three_objective` keeps the two in step.
+J_OBJECTIVE = "aicore_e2e"
+
 # What a measurement carries forward into the symptom index, beside (s, p).
-_CARRIED_METRICS = (
+CARRIED_METRICS = (
     "util",
     "bubble",
     "aic_util",
@@ -305,29 +384,90 @@ _CARRIED_METRICS = (
     "pred_stall",
     "aic_bubble",
     "aiv_bubble",
+    # Every tile trial's workspace, carried to the cache
+    # with the rest of the reading.
+    "workspace_b",
+    "workspace_state",
+    # The profiler's AICore End-to-End Time, carried beside `p`
+    # (MIX_AIC) as a separate reading of the same launch, and
+    # msprof's own columns, which -- unlike util/aic_util/
+    # aiv_util -- survive `runtime_debug_mode: 0`.
+    # `mix_aic` is an objective, so its per-reading samples and
+    # spread travel with it: an objective compared on a median
+    # alone cannot be judged against its own noise. (`p`'s own
+    # readings travel as `samples`, outside `m`.)
+    "mix_aic",
+    "mix_aic_samples",
+    "mix_aic_sigma_log",
+    "mix_aic_error",
+    "aiv_time",
+    "aic_mac_ratio",
+    "aiv_vec_ratio",
+    "cube_utilization",
+    "vector_utilization",
+    # HOW `p` was composed: rows per call and rows in total.
+    # Without them a `p` that disagrees with its own
+    # `aicore_e2e` leaves the state unable to say whether it is
+    # a per-call SUM over several launches or a different
+    # quantity.
+    "mix_aic_per_call",
+    "mix_aic_rows",
 )
 
 
+# pytest ends a full traceback with the frame it raised in:
+# `/path/to/mod.py:400: FeError`. The exception NAME is on it, the
+# message is not. See `RealEvaluator._cause`.
+_FRAME_LINE = re.compile(r"^\S+\.py:\d+: \w+$")
+
+
+# Lines that carry a CAUSE rather than a summary of one. `_cause` prefers them
+# over the tail, because the tail is not where the cause is when the test
+# command is pytest.
+#
+# `FAILED` is deliberately NOT here. pytest's short summary line begins with it,
+# sits BELOW the traceback, and is the truncated line this whole helper exists to
+# get past: matching it would make `_cause` pick exactly the wrong line and look
+# like it had worked.
+#
+# STRONG carries the DIAGNOSIS -- an enum, a limit, the bytes -- and is always
+# preferred over a weak marker, wherever it sits in the output.
+CAUSE_STRONG = (
+    "exceeds",
+    "ErrCode:",
+    "Enum:",
+    "MEM_UB",
+    "Alloc tensor",
+    "can not copy",
+)
+# Lines that merely mention a failure. Used only when no strong line exists,
+# because under pytest several of them sit BELOW the real message: a frame
+# location line (`.../_controller.py:400: FeError`) ends the traceback and
+# matches "Error", and pytest's short summary matches it too.
+CAUSE_WEAK = ("Error", "error:", "ERROR", "Invalid", "assert", "Traceback")
+CAUSE = CAUSE_STRONG + CAUSE_WEAK
+
+
+def is_frame_line(line):
+    """pytest's `<path>:<lineno>: <ExceptionName>`, which ends a traceback.
+
+    It matches "Error" through the exception's NAME and carries no message, so
+    taking it as the cause throws away the one line that has the numbers.
+    """
+    return bool(_FRAME_LINE.match(line.strip()))
+
+
+def _is_weak_cause(line):
+    """Whether a line only hints at a failure, and is not a frame location."""
+    return any(m in line for m in CAUSE_WEAK) and not is_frame_line(line)
+
+
 class RealEvaluator:
-    def __init__(
-        self,
-        op,
-        op_dir,
-        op_file,
-        device,
-        test_command,
-        lint_root=None,
-        lint_stage=7,
-        warmup=1,
-        runs=3,
-        agg="min",
-        eval_timeout_s=300,
-        run_cmd=None,
-        measure_fn=None,
-        fault_backoff_s=(30, 90),
-        sleep_fn=None,
-        evaluation_mode="subprocess",
-    ):
+    def __init__(self, op, op_dir, op_file, device, test_command,
+                 lint_root=None, lint_stage=7,
+                 warmup=1, runs=9, agg="median", eval_timeout_s=300,
+                 run_cmd=None, measure_fn=None,
+                 fault_backoff_s=(30, 90), sleep_fn=None, evaluation_mode="subprocess"):
         """test_command : shell string that exits 0 iff golden+layout pass (from the dispatch prompt).
         lint_root      : path to the pypto-op-lint hook directory under
                          cannbot-skills/plugins-official/pypto-op-orchestrator/hooks
@@ -353,7 +493,7 @@ class RealEvaluator:
         self.runs = runs
         self.agg = agg
         self.eval_timeout_s = eval_timeout_s
-        self._last_output = ""  # combined stdout+stderr of the last default-runner cmd
+        self._last_output = ""                 # combined stdout+stderr of the last default-runner cmd
         # Diagnostics of the LAST successful measurement (util / bubble). The
         # objective returns only (s, p) because latency is what the study
         # optimises, and for a long time these were simply dropped -- which is
@@ -362,21 +502,23 @@ class RealEvaluator:
         # nothing and lets the winner be recorded with the reading it already
         # produced, without a second trip to the device.
         self.last_metrics = {}
+        # The warm readings behind the last `p`. Kept apart from `last_metrics`,
+        # whose values are scalars the symptom index reads; these feed only the
+        # run's noise estimate.
+        self.last_samples = []
         # The last failure's final lines, carried out so the block can persist
         # them. Without this a run reports "23 of 24 candidates failed" and
         # nothing about why -- and the capacity markers cannot be tuned
         # against output nobody kept.
         self.last_detail = ""
         self.fault_backoff_s = tuple(fault_backoff_s or ())
-        self.last_retries = 0  # backoffs spent on the last evaluation
+        self.last_retries = 0                  # backoffs spent on the last evaluation
         self._sleep = sleep_fn or time.sleep
         self._run_cmd = run_cmd or self._default_run
         self._measure_fn = measure_fn
         if evaluation_mode not in ("subprocess", "resident", "cached", "prepared"):
             raise ValueError("unknown evaluation mode")
-        if evaluation_mode != "subprocess" and (
-            run_cmd is not None or measure_fn is not None
-        ):
+        if evaluation_mode != "subprocess" and (run_cmd is not None or measure_fn is not None):
             raise ValueError("injected runners require subprocess mode")
         self.evaluation_mode = evaluation_mode
         self._session_result = {}
@@ -411,7 +553,7 @@ class RealEvaluator:
                 # The third element says whether this failure is evidence about
                 # SIZE. Only a capacity refusal is monotone; a golden mismatch at
                 # 4096 elements tells the search nothing about 8192.
-                self.last_detail = self._tail(4)
+                self.last_detail = self._cause()
                 return 0, None, self._failure_kind()
             if not self._lint_ok():
                 # The lint is a subprocess like the others and fails for the
@@ -420,9 +562,9 @@ class RealEvaluator:
                 # times as "this tile is wrong".
                 marker = self._env_fault()
                 if marker:
-                    self.last_detail = f"lint: {marker}: {self._tail(4)}"
+                    self.last_detail = f"lint: {marker}: {self._cause()}"
                     raise EnvironmentFault(marker, self._tail(), fault_kind(marker))
-                self.last_detail = "lint: " + self._tail(4)
+                self.last_detail = "lint: " + self._cause()
                 return 0, None, "other"  # Stage-7 lint S0/S1 FAIL
             m = self._measure() or {}
             # aic_util/aiv_util/pred_stall ride along on the same measurement:
@@ -430,9 +572,10 @@ class RealEvaluator:
             # prefix, so a block winner carries the per-pipe reading forward to
             # the symptom index exactly as it carries util and bubble.
             self.last_metrics = {}
-            for k in _CARRIED_METRICS:
+            for k in CARRIED_METRICS:
                 if m.get(k) is not None:
                     self.last_metrics[k] = m.get(k)
+            self.last_samples = list(m.get("samples") or [])
             p = m.get("p")
             if p is None:
                 # The measurement runs on the device too, so it can fail for the
@@ -441,10 +584,36 @@ class RealEvaluator:
                 # whole class of fix exists to stop.
                 marker = self._env_fault()
                 if marker:
-                    self.last_detail = f"{marker}: {self._tail(4)}"
+                    self.last_detail = f"{marker}: {self._cause()}"
                     raise EnvironmentFault(marker, self._tail(), fault_kind(marker))
-                self.last_detail = "no latency from the profiler"
-                return 0, None, "other"
+                # A device fault wins over this, which is why the check is here
+                # and not above: a compile killed by the budget is only
+                # unevaluated once we know the device was not the reason.
+                if m.get("unevaluated"):
+                    self.last_detail = f"unevaluated: {m['unevaluated']}"
+                    return 0, None, "unevaluated"
+                # The kernel ran but the profiler's "AICore End-to-End Time"
+                # line was not there. That is not a verdict on the candidate,
+                # and it would repeat on every trial -- so it ends the block,
+                # saying what failed. The line exists only under
+                # `runtime_debug_mode: 1`, which is the one cause worth naming
+                # because no amount of re-running recovers it at mode 0.
+                if m.get("p_error"):
+                    self.last_detail = f"objective_unmeasured: {m['p_error']}"
+                    raise EnvironmentFault(
+                        "objective_unmeasured", m["p_error"], "invocation"
+                    )
+                self.last_detail = (
+                    'objective_unmeasured: no "AICore End-to-End Time" from '
+                    "the profiler. It is written only when every top-level jit "
+                    'kernel carries debug_options={"runtime_debug_mode": 1}'
+                )
+                raise EnvironmentFault(
+                    "objective_unmeasured", self.last_detail, "invocation"
+                )
+            # The block ranks its trials on `p`, which is the same reading the
+            # ratchet ratchets on. The other objectives ride on `last_metrics`
+            # and are compared by the archive, not by this search.
             self.last_detail = ""
             return 1, float(p), "ok"
         finally:
@@ -510,6 +679,53 @@ class RealEvaluator:
     def _tail(self, n=12):
         return "\n".join(self._last_output.strip().splitlines()[-n:])
 
+    def _cause(self, n=4):
+        """The lines that say WHY, not the last `n` lines.
+
+        `_tail(4)` was what every failed trial recorded, and under a pytest
+        `--test-command` the last four lines are pytest's short summary, which
+        truncates the exception to `pypto.error...`. Nothing beyond that
+        ellipsis is kept: the classification reads the WHOLE output, so it
+        still says `incorrect_capacity`, while the recorded reason cannot say
+        WHICH buffer overflowed. The real message --
+        `Alloc tensor [N] size [X] exceeds MEM_UB size [196608]` -- sits in the
+        traceback, above the summary.
+
+        The first version of this took the DEEPEST line matching any marker,
+        and on one of the two pytest layouts that is worse than the tail it
+        replaced. Where the traceback is printed in full, its last line is a
+        frame location -- `.../pypto/_controller.py:400: FeError` -- which
+        matches "Error" and sits below the message, so what gets kept is
+        pytest's header and a capacity refusal cannot be re-adjudicated
+        afterwards.
+
+        So the markers are ranked, not positioned. A strong marker names the
+        enum, the limit or the bytes, and the deepest strong line wins wherever
+        it sits. A weak marker only mentions a failure, and is used solely when
+        no strong line exists -- never a frame location line, which is pytest's
+        own `<path>:<lineno>: <ExceptionName>` and carries no message at all.
+
+        The tail is appended after the window either way, so nothing that used
+        to be recorded is lost.
+        """
+        lines = (self._last_output or "").strip().splitlines()
+        if not lines:
+            return ""
+        hit = max(
+            (i for i, ln in enumerate(lines) if any(m in ln for m in CAUSE_STRONG)),
+            default=None,
+        )
+        if hit is None:
+            hit = max(
+                (i for i, ln in enumerate(lines) if _is_weak_cause(ln)), default=None
+            )
+        tail = lines[-n:]
+        if hit is None:
+            return "\n".join(tail)
+        window = lines[max(0, hit - 1):hit + 2]
+        out = window + [ln for ln in tail if ln not in window]
+        return "\n".join(out[-(n + 3):])
+
     def _failure_kind(self):
         """Why the last command failed: "capacity" or "other".
 
@@ -567,7 +783,7 @@ class RealEvaluator:
                 return rc
             kind = fault_kind(marker)
             if kind != "device" or wait is None:
-                self.last_detail = f"{marker}: {self._tail(4)}"
+                self.last_detail = f"{marker}: {self._cause()}"
                 raise EnvironmentFault(marker, self._tail(), kind, self.last_retries)
             self.last_retries += 1
             self._sleep(wait)
@@ -600,7 +816,7 @@ class RealEvaluator:
         """Run the frozen measure_latency.py AS A SUBPROCESS and read its JSON.
 
         It used to be imported and called in-process, which is what made a block
-        able to measure exactly one tile. `_build_run_once` calls
+        able to measure exactly one tile. `build_run_once` calls
         `torch.npu.set_device`, and the process then holds the device for the
         rest of its life -- so the NEXT trial's test command, which is a
         subprocess, could not map the registers:
@@ -626,43 +842,34 @@ class RealEvaluator:
             return self._session_result.get("metrics", {})
         if self._measure_fn is not None:
             return self._measure_fn(self.op_file)
-        ml_path = os.path.join(
-            os.path.dirname(os.path.dirname(__file__)), "measure_latency.py"
-        )
+        ml_path = os.path.join(os.path.dirname(os.path.dirname(__file__)),
+                               "measure_latency.py")
         # An argv, not a command line: nothing here needs a shell, and building
         # one meant quoting `op_file` by hand and hoping. `sys.executable` is
         # already an absolute path, so which interpreter runs does not depend on
         # PATH either.
-        argv = [
-            sys.executable,
-            ml_path,
-            "--op-dir",
-            str(self.op_dir),
-            "--op",
-            str(self.op),
-            "--op-file",
-            str(self.op_file),
-            "--device",
-            str(self.device),
-            "--warmup",
-            str(self.warmup),
-            "--runs",
-            str(self.runs),
-            "--agg",
-            str(self.agg),
-        ]
+        argv = [sys.executable, ml_path,
+                "--op-dir", str(self.op_dir), "--op", str(self.op),
+                "--op-file", str(self.op_file), "--device", str(self.device),
+                "--warmup", str(self.warmup), "--runs", str(self.runs),
+                "--agg", str(self.agg)]
+        timed_out = False
+        # Its own process group, so a timeout takes down everything under it.
+        # The measurement is msprof -> python, and killing
+        # only the direct child would leave both holding the device.
+        proc = subprocess.Popen(argv, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+                                text=True, start_new_session=True)
         try:
-            r = subprocess.run(
-                argv,
-                timeout=self.eval_timeout_s,
-                check=False,
-                stdout=subprocess.PIPE,
-                stderr=subprocess.STDOUT,
-                text=True,
-            )
-            out = r.stdout or ""
-        except subprocess.TimeoutExpired as e:
-            out = e.output if isinstance(e.output, str) else ""
+            out, _ = proc.communicate(timeout=self.eval_timeout_s)
+            out = out or ""
+        except subprocess.TimeoutExpired:
+            try:
+                os.killpg(proc.pid, signal.SIGKILL)
+            except OSError:
+                proc.kill()
+            out, _ = proc.communicate()
+            out = out or ""
+            timed_out = True
         # Kept so `_env_fault` can see a device fault raised during measurement,
         # not only during the correctness command.
         self._last_output = out
@@ -673,4 +880,6 @@ class RealEvaluator:
                     return json.loads(line)
                 except ValueError:
                     continue
+        if timed_out:
+            return classify_timeout(out)
         return {}

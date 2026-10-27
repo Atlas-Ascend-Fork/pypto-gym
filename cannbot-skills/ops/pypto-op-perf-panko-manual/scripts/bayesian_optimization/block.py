@@ -63,7 +63,7 @@ import sys
 # by accident; dropping it removed the accident, so the separation is
 # explicit now.
 from dataclasses import dataclass
-from typing import Any
+from typing import Any, NamedTuple
 
 from . import apply, driver, lever, space
 from . import domain as domain_mod, seed as seed_mod
@@ -75,7 +75,16 @@ def _read_text(path, errors="replace"):
         return f.read()
 
 
-def seeds_for(src, hw, dtype_bytes=4, current_latency=None):
+class SeedContext(NamedTuple):
+    """Inputs a block's warm-start derivation reads besides the program and the hardware."""
+
+    dtype_bytes: int = 4
+    current_latency: Any = None
+    widths: Any = None
+    dom: Any = None
+
+
+def seeds_for(src, hw, ctx=SeedContext()):
     """Warm-start configurations for a block, cheapest evidence first.
 
     `lever.seed_points` returns [(config, value_or_None, label)]: the current
@@ -85,7 +94,16 @@ def seeds_for(src, hw, dtype_bytes=4, current_latency=None):
     draws, which matters because a block that converges in nine trials would
     otherwise spend all of them warming up.
     """
-    pts = lever.seed_points(src, hw, dtype_bytes, current_latency)
+    pts = lever.seed_points(
+        src,
+        hw,
+        lever.SeedOptions(
+            dtype_bytes=ctx.dtype_bytes,
+            current_latency=ctx.current_latency,
+            widths=ctx.widths,
+            dom=ctx.dom,
+        ),
+    )
     warm = [cfg for cfg, val, _ in pts if val is None]
     measured = [(cfg, val) for cfg, val, _ in pts if val is not None]
     # The incumbent is returned SEPARATELY, and this is not tidying.
@@ -152,8 +170,39 @@ def memory_key(action_id, domain):
     needs a work-normalised objective and joint tile/extent search. It is not a
     key problem and this change does not pretend to address it.
     """
-    fp = domain_mod.fingerprint(domain)
-    return f"{action_id}|{hashlib.sha256(fp.encode('utf-8')).hexdigest()[:12]}"
+    return f"{action_id}|{_domain_hash(domain)}"
+
+
+def _domain_hash(domain):
+    return hashlib.sha256(domain_mod.fingerprint(domain).encode("utf-8")).hexdigest()[
+        :12
+    ]
+
+
+def ceiling_key(domain):
+    """Where the learned ceiling lives: the TILE DOMAIN, with no action prefix.
+
+    `memory_key` carries the action because its payload is latencies, and a
+    latency is comparable only within one program shape. The ceiling is not a
+    latency. It says which tiles the compiler will accept, which is decided by
+    the derived domain -- the view extents, the widths, the residency -- and by
+    nothing the action does beyond changing those. Keying it by the action threw
+    away a fact that was still true.
+
+    Under an action-keyed ceiling, two blocks whose domain hash is identical
+    -- so the tile space never moved -- keep separate memories merely because
+    the action id differs, and the later one re-draws the candidates the
+    earlier one already bought, paying again for the same capacity refusals.
+    Keyed on the domain, the ceiling carries and those evaluations are not
+    spent twice.
+
+    This is also the scope the refusal design asked for and could not express.
+    `_carried_refusals` declines to carry a CAPACITY refusal because it "depends
+    on the program's residency and view extents, which a structural delta
+    changes" -- and an unchanged domain hash is precisely the statement that they
+    did not change.
+    """
+    return _domain_hash(domain)
 
 
 @dataclass
@@ -174,6 +223,8 @@ class BlockOptions:
     startup_min_feasible: int = 5
     startup_cover: int = 3  # space-covering points before TPE draws
     refusals: Any = None
+    ceiling: Any = None  # see `ceiling_key`
+    repair: bool = True  # see space.repair
 
 
 def _search_options(opts, warm, incumbent, sites):
@@ -189,9 +240,13 @@ def _search_options(opts, warm, incumbent, sites):
         dtype_bytes=opts.dtype_bytes,
         memory=opts.memory,
         startup_min_feasible=opts.startup_min_feasible,
+        repair=opts.repair,
         # Run level, not structure level: what the compiler will not accept about
         # a tile call outlives the program shape that first asked it.
         refusals=opts.refusals,
+        # Domain level, not structure level: which tiles the compiler accepts is
+        # a property of the derived domain. See `ceiling_key`.
+        ceiling=opts.ceiling,
         # The row extent of vec scopes inside one loop body is a hand-off, not a
         # per-site choice. Left untied, the sampler draws mismatched extents,
         # and those are reliably among the worst configurations of a run,
@@ -219,7 +274,14 @@ def _seeded_warm_starts(src, hw, opts, sites):
     each time.
     """
     warm, measured, incumbent = seeds_for(
-        src, hw, opts.dtype_bytes, opts.current_latency
+        src,
+        hw,
+        SeedContext(
+            opts.dtype_bytes,
+            opts.current_latency,
+            (opts.domain or {}).get("vec_dtype_bytes"),
+            opts.domain,
+        ),
     )
     if opts.startup_cover:
         warm = warm + seed_mod.cover(
@@ -289,8 +351,8 @@ def run(op_file, objective, hw, opts=None):
     # An already-measured configuration is evidence and costs nothing, so it
     # competes with what the block found rather than being discarded.
     for cfg, val in measured:
-        if result["best_latency"] is None or val < result["best_latency"]:
-            result["best_config"], result["best_latency"] = cfg, float(val)
+        if result["best_objective_us"] is None or val < result["best_objective_us"]:
+            result["best_config"], result["best_objective_us"] = cfg, float(val)
             result["best_was_incumbent"] = True
     result.setdefault("best_was_incumbent", False)
     return result
@@ -312,7 +374,7 @@ def apply_best(src, best_config):
 def _empty(reason):
     return {
         "best_config": None,
-        "best_latency": None,
+        "best_objective_us": None,
         "n_trials": 0,
         "n_feasible": 0,
         "stopped_early": False,
@@ -395,6 +457,8 @@ def hw_for(op_file, live_tiles=None, envelope=None):
     hw = space.HW(
         calibrated=False,
         dtype_bytes=domain.get("dtype_bytes", 4),
+        vec_dtype_bytes=domain.get("vec_dtype_bytes"),
+        vec_trailing_ok=domain.get("vec_trailing"),
         n_live_tiles=domain.get("live_tiles", 0),
         **kw,
     )

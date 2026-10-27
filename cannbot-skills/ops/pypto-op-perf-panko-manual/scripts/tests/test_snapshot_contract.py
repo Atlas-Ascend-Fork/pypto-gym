@@ -25,7 +25,7 @@ import unittest
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent))
-from _support import CHIP_ARGS, file_hash, init_argv, record_argv, run_cli
+from _support import INIT_ARGS, file_hash, init_argv, record_argv, run_cli  # noqa: E402
 
 KERNEL = """import pypto
 
@@ -186,7 +186,7 @@ class SnapshotContractTest(unittest.TestCase):
 
     def _init(self, *extra, op_file=None):
         return _run(
-            *init_argv(self.op_dir, op_file or self.op_file, *CHIP_ARGS, *extra)
+            *init_argv(self.op_dir, op_file or self.op_file, *INIT_ARGS, *extra)
         )
 
     def _nodes(self):

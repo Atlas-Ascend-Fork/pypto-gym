@@ -54,6 +54,48 @@ COUNTS = {
     "cube_cores": ("SoCInfo", "cube_core_cnt"),
     "vector_cores": ("SoCInfo", "vector_core_cnt"),
 }
+# The device's memory, which the hypervolume uses as the ceiling on a byte axis.
+# OPTIONAL: some SKUs' inis carry no `memory_size`, so a missing value is an
+# answer rather than a failure -- the envelope is still derivable without it and
+# the caller decides what to do.
+MEMORY_OPT = ("SoCInfo", "memory_size")
+
+# At or above this a `memory_size` can only be a byte count: as MiB it would be
+# 16 TiB of device memory. Below it, it can only be MiB: as bytes it would be at
+# most 16 MiB. See `memory_mib`.
+MEMORY_BYTES_FLOOR = 1 << 24
+
+
+def memory_mib(raw):
+    """(MiB, unit) for the ini's `memory_size`, or (None, reason).
+
+    THE UNIT IS NOT STATED IN THE INI AND IT IS NOT THE SAME EVERYWHERE. One
+    part's capacity is written in MiB and another's in bytes, and reading one as
+    the other is a factor of 2^20 that does not fail loudly: it sets the
+    hypervolume's byte ceiling a million times too high. On a log axis that
+    inflates the workspace axis's span several times over, which silently skews
+    both which front point the next action extends and when the convergence
+    test fires -- so a run reports a front it did not search by. Assuming the
+    unit is what this file hit.
+
+    Inferring from the magnitude is safe because the two readings cannot
+    overlap. A device holds between about a gigabyte and a few terabytes:
+    1024..4e6 read as MiB, 2^30..2^42 read as bytes. There is no number that
+    is plausible under both.
+
+    No SKU is hard-coded. `resolve()` reads the ini of whatever SoC the runtime
+    reported for the device in the slot, every time, and this reads whatever
+    that file says.
+    """
+    try:
+        v = int(str(raw).strip())
+    except (TypeError, ValueError):
+        return None, f"memory_size is not an integer: {raw!r}"
+    if v <= 0:
+        return None, f"memory_size is not positive: {v}"
+    if v >= MEMORY_BYTES_FLOOR:
+        return v // (1 << 20), "ini:bytes"
+    return v, "ini:mib"
 
 
 def _txt(v):
@@ -279,6 +321,12 @@ def read_ini(path):
                 missing.append(f"[{sec}]{opt} is not an integer")
         else:
             missing.append(f"[{sec}]{opt}")
+    sec, opt = MEMORY_OPT
+    if cp.has_option(sec, opt):
+        mib, how = memory_mib(cp.get(sec, opt))
+        if mib is not None:
+            env["memory_mib"] = mib
+            env["memory_mib_via"] = how
     if missing:
         return None, f"{os.path.basename(path)} is missing: {', '.join(missing)}"
     env["source"] = path
@@ -317,6 +365,10 @@ def resolve(dirs=None, device=None):
         return None, why
     env["soc"] = soc
     env["soc_via"] = how
+    # Core counts from the live device when pypto can answer, the ini otherwise,
+    # and `cores_via` says which. The ini's `cube_core_cnt` is per SKU and is
+    # easy to transcribe wrong; `GetAICCoreNum` / `GetAIVCoreNum` ask the
+    # silicon. See `live_core_counts`.
     cube, vector, counted_by = live_core_counts()
     if cube is not None:
         env["cube_cores"], env["vector_cores"] = cube, vector

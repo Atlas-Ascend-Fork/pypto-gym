@@ -36,12 +36,17 @@ class ReviewRegressionTests(unittest.TestCase):
         self.test.write_text(
             "from demo_impl import demo_wrapper\nassert demo_wrapper() == 42\n"
         )
+        # warmup/runs are named rather than defaulted: the fixtures below assert
+        # `raw_count == 4`, which is what `reusable_result` compares the config's
+        # warmup+runs against, and this skill measures median-of-9 by default.
         self.evaluator = evaluator_module.RealEvaluator(
             "demo",
             str(self.operator),
             str(self.source),
             "0",
             f'cd "{self.operator}" && "{sys.executable}" "{self.test}"',
+            warmup=1,
+            runs=3,
             evaluation_mode="cached",
         )
         self.addCleanup(session.close_session, self.operator)

@@ -108,13 +108,19 @@
     "delta": "cut GM traffic by materializing less -- recompute cheap intermediates on demand instead of storing them, or store fewer / smaller cache tensors (store-vs-recompute tradeoff). Highest-leverage lever on memory-bound kernels. Applies only to kernels that write large intermediates / caches to GM; N/A when nothing large is materialized",
     "requires": [
       "materializes_large_intermediate"
+    ],
+    "moves": [
+      "workspace"
     ]
   },
   {
     "id": "F-18",
     "stage": "frontend",
     "prior_gain": 0.6,
-    "delta": "store internal tensors / carried state in BF16 while accumulating in FP32 (cast->compute->cast) to halve storage and data-movement traffic. Suited to precision-tolerant kernels whose spec tolerance allows reduced-precision storage"
+    "delta": "store internal tensors / carried state in BF16 while accumulating in FP32 (cast->compute->cast) to halve storage and data-movement traffic. Suited to precision-tolerant kernels whose spec tolerance allows reduced-precision storage",
+    "moves": [
+      "workspace"
+    ]
   },
   {
     "id": "F-19",
@@ -161,7 +167,10 @@
     "stage": "swimlane",
     "prior_gain": 0.6,
     "counterpart_of": "S-5",
-    "delta": "REMOVE vec_nbuffer_setting, or narrow its key set from the all-subgraphs {-1: N} form to a targeted {index: N}. FORM and GRANULARITY are separable axes and conflating them is expensive: the all-subgraphs form loses time on a heterogeneous vector pipeline, whose sites carry several distinct tile shapes, while the same depth applied to one homogeneous scope gains. Count the DISTINCT TILE SHAPES the pipeline governs before choosing the form: {-1: N} is a candidate only when that count is 1."
+    "delta": "REMOVE vec_nbuffer_setting, or narrow its key set from the all-subgraphs {-1: N} form to a targeted {index: N}. FORM and GRANULARITY are separable axes and conflating them is expensive: the all-subgraphs form loses time on a heterogeneous vector pipeline, whose sites carry several distinct tile shapes, while the same depth applied to one homogeneous scope gains. Count the DISTINCT TILE SHAPES the pipeline governs before choosing the form: {-1: N} is a candidate only when that count is 1.",
+    "moves": [
+      "workspace"
+    ]
   },
   {
     "id": "S-6",
@@ -181,7 +190,10 @@
     "requires": [
       "has_cube_op"
     ],
-    "delta": "REMOVE a cube_l1_reuse_setting entry, or drop the option entirely. The optimum is not always a positive depth: for some matmuls NO ENTRY beats every depth. The mechanism is structural rather than empirical -- that matmul's B operand supplies the K REDUCTION axis and is consumed exactly once per iteration, so no depth can amortize the GM->L1 fill. Depth pays only where the operand is streamed against a small M tile."
+    "delta": "REMOVE a cube_l1_reuse_setting entry, or drop the option entirely. The optimum is not always a positive depth: for some matmuls NO ENTRY beats every depth. The mechanism is structural rather than empirical -- that matmul's B operand supplies the K REDUCTION axis and is consumed exactly once per iteration, so no depth can amortize the GM->L1 fill. Depth pays only where the operand is streamed against a small M tile.",
+    "moves": [
+      "workspace"
+    ]
   },
   {
     "id": "S-7",
@@ -201,7 +213,10 @@
     "requires": [
       "has_cube_op"
     ],
-    "delta": "REMOVE cube_nbuffer_setting, or drop a subgraph from its key set. Merge granularity is UNIMODAL, not monotone: both too little and too much merging cost time, and the lowest granularity can sit inside the unset kernel's own band, so sweep the ladder rather than raise the value."
+    "delta": "REMOVE cube_nbuffer_setting, or drop a subgraph from its key set. Merge granularity is UNIMODAL, not monotone: both too little and too much merging cost time, and the lowest granularity can sit inside the unset kernel's own band, so sweep the ladder rather than raise the value.",
+    "moves": [
+      "workspace"
+    ]
   },
   {
     "id": "S-8",
@@ -252,7 +267,10 @@
     "id": "S-14",
     "stage": "swimlane",
     "prior_gain": 0.9,
-    "delta": "fuse adjacent producer->consumer ops so the intermediate stays on-chip (L1/UB), eliminating the copy_out->copy_in Global-Memory round-trip"
+    "delta": "fuse adjacent producer->consumer ops so the intermediate stays on-chip (L1/UB), eliminating the copy_out->copy_in Global-Memory round-trip",
+    "moves": [
+      "workspace"
+    ]
   },
   {
     "id": "S-15",
@@ -264,7 +282,10 @@
     "id": "S-16",
     "stage": "swimlane",
     "prior_gain": 0.9,
-    "delta": "tune JIT runtime_options stitch memory pools: raise stitch_function_inner_memory and stitch_function_outcast_memory (e.g. 128->1024) and optionally stitch_function_num_initial (128->256) -- larger inner/outcast lets the runtime pack more work per root-function / device-task (more fusion, fewer launches) on heavy multi-subgraph kernels. Distinct from S-9 (stitch_function_max_num)"
+    "delta": "tune JIT runtime_options stitch memory pools: raise stitch_function_inner_memory and stitch_function_outcast_memory (e.g. 128->1024) and optionally stitch_function_num_initial (128->256) -- larger inner/outcast lets the runtime pack more work per root-function / device-task (more fusion, fewer launches) on heavy multi-subgraph kernels. Distinct from S-9 (stitch_function_max_num)",
+    "moves": [
+      "workspace"
+    ]
   },
   {
     "id": "S-17",
@@ -273,6 +294,9 @@
     "delta": "fuse adjacent modules so the intermediate stays on-chip (no GM round-trip between modules) -- a design-level merge beyond the op-level fusion of S-14. Applies only when there are >=2 adjacent fusable modules (L1 multi-module kernels); N/A to single-module (L0) kernels",
     "requires": [
       "module_count >= 2"
+    ],
+    "moves": [
+      "workspace"
     ]
   },
   {
@@ -364,6 +388,9 @@
     "delta": "compute-once-and-reuse: remove redundant / recomputed intermediates to cut total op count",
     "requires": [
       "materializes_large_intermediate"
+    ],
+    "moves": [
+      "workspace"
     ]
   },
   {
@@ -392,5 +419,14 @@
       "has_cube_op"
     ],
     "delta": "move a small matmul onto the Vector pipe when the Cube tile is mostly padding -- the inverse of I-1, for shapes where cube occupancy is so low that the fixed cost dominates. Applies only when a matmul's M or N is far below the cube tile granularity"
+  },
+  {
+    "id": "S-21",
+    "stage": "swimlane",
+    "prior_gain": 0.9,
+    "delta": "set the JIT runtime_options `max_workspace_kb`. It caps the device workspace the runtime may reserve, and on a stitched multi-subgraph kernel that cap is what decides how many root functions the runtime can pack at once -- too small and it splits the graph into more launches, too large and it wastes the memory the stitch pools want. It is UNIMODAL and NOT monotone, so sweep it rather than raising it: on a recorded operator the peak sat at a value far from both the default and the extremes, and the same knob moved another case of the same operator by tens of percent. The winning value is per shape, so a transcribed number is worth less than a sweep. Set it together with S-9 (stitch_function_max_num): the two decide the same packing and neither reaches its own optimum while the other is wrong. Distinct from S-16, which sizes the stitch pools rather than the workspace cap. Recorded campaigns reached this knob only by inserting it by hand, and every one of those improved.",
+    "moves": [
+      "workspace"
+    ]
   }
 ]

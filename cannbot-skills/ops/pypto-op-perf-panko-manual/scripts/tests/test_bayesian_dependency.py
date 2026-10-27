@@ -26,10 +26,10 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent))
 from _support import (
-    CHIP_ARGS,
-    HARNESS,
+    INIT_ARGS,
     file_hash,  # noqa: E402
     harness,
+    harness_source,
     init_argv,
     read_state,
     run_cli,
@@ -140,7 +140,7 @@ class InitPreflightTest(unittest.TestCase):
         self.assertFalse(cap["available"])
         # The shape the skill keys off, asserted against the source so the
         # contract and the payload cannot drift apart silently.
-        src = HARNESS.read_text(encoding="utf-8")
+        src = harness_source()
         self.assertIn('"ask_user"', src)
         self.assertIn('"relay the question to the user; do not choose for them"', src)
         for option in ("install", "ablation", "stepwise"):
@@ -160,7 +160,7 @@ class InitPreflightTest(unittest.TestCase):
             self.op_file,
             "--preopt-hash",
             file_hash(self.op_file),
-            *CHIP_ARGS,
+            *INIT_ARGS,
         )
         if config:
             args += ["--config", json.dumps(config)]

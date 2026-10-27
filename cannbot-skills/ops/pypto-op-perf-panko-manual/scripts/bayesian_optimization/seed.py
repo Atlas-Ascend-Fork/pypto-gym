@@ -53,6 +53,7 @@ from dataclasses import dataclass
 from typing import Any
 
 from . import space
+from .domain import verify as verify_domain
 
 # Fallback only. The live values ride on `hw` (space.HW.cube_cores /
 # vector_cores), supplied by the harness from the run's chip envelope, so a chip
@@ -351,6 +352,18 @@ def cover(sites, hw, anchor, k, opts=None):
         for cfg in rows:
             key = _key(cfg)
             if key in seen or not space.static_feasible(cfg, hw)[0]:
+                continue
+            # The derived domain too, not alignment alone. `block.run` filters
+            # the merged warm list through `domain.verify` before handing it to
+            # the driver, so a covering point that fails it is simply deleted --
+            # and farthest-point selection walks to the EXTREMES of the pool,
+            # which is exactly where verify rejects. Only a fraction of a pool
+            # that clears alignment also clears verify, and the extreme points
+            # `cover` prefers are the likeliest to fail it -- so the set that
+            # survives is the small-tile end, losing the high-occupancy corner
+            # this function exists to keep. Gating here means the k picked are
+            # k kept.
+            if opts.domain and not verify_domain(opts.domain, cfg)[0]:
                 continue
             seen.add(key)
             out.append(cfg)

@@ -6,7 +6,7 @@
 # INCLUDING BUT NOT LIMITED TO NON-INFRINGEMENT, MERCHANTABILITY, OR FITNESS FOR A PARTICULAR PURPOSE.
 # See LICENSE in the root of the software repository for the full text of the License.
 
-"""`infeasible_K` must be reachable from an action's FIRST candidate.
+"""`unmeasured_K` must be reachable from an action's FIRST candidate.
 
 Both counters it bounds are moved by `feasible`, which runs before any device
 measurement, while the record they live in used to be created only by `record`.
@@ -28,7 +28,7 @@ import unittest
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent))
-from _support import CHIP_ARGS, file_hash, run_cli  # noqa: E402
+from _support import INIT_ARGS, file_hash, run_cli  # noqa: E402
 
 FEASIBLE_KERNEL = """import pypto
 
@@ -74,8 +74,9 @@ class RefineCounterTest(unittest.TestCase):
         seen = [self._feasible() for _ in range(3)]
         self.assertEqual([r["feasible"] for r in seen], [False, False, False])
         self.assertEqual([r["n_static"] for r in seen], [1, 2, 3])
+        self.assertEqual([r["n_unmeasured"] for r in seen], [1, 2, 3])
         self.assertEqual([r["stop_refine"] for r in seen], [False, True, True])
-        self.assertEqual(seen[1]["stop_cause"], "infeasible_K")
+        self.assertEqual(seen[1]["stop_cause"], "unmeasured_K")
         # `n` is untouched: nothing was measured, so nothing was learned about
         # the action. That is what makes this a separate, looser bound.
         self.assertEqual([r["n"] for r in seen], [0, 0, 0])
@@ -92,8 +93,9 @@ class RefineCounterTest(unittest.TestCase):
             seen.append(self._feasible())
         self.assertTrue(all(r["semantic_noop"] for r in seen))
         self.assertEqual([r["n_noop"] for r in seen], [1, 2, 3])
+        self.assertEqual([r["n_unmeasured"] for r in seen], [1, 2, 3])
         self.assertEqual([r["stop_refine"] for r in seen], [False, True, True])
-        self.assertEqual(seen[1]["stop_cause"], "semantic_noop_K")
+        self.assertEqual(seen[1]["stop_cause"], "unmeasured_K")
 
     def test_the_two_bounds_are_separate(self):
         """A no-op is not a hardware infeasibility; sharing one counter made the
@@ -137,17 +139,20 @@ class RefineCounterTest(unittest.TestCase):
             "100",
             "--preopt-p",
             "100",
+            # p_ref == preopt_p: no target, see test_target.py.
+            "--config",
+            json.dumps({"success_stop": False}),
             "--preopt-hash",
             digest,
             "--op-file",
             str(self.op_file),
             "--allow-unversioned",
-            *CHIP_ARGS,
+            *INIT_ARGS,
         )
         self.assertTrue(res["initialized"])
         state = self.op_dir / "optimization" / "search_state.json"
         st = json.loads(state.read_text(encoding="utf-8"))
-        st["config"]["infeasible_K"] = INFEASIBLE_K
+        st["config"]["unmeasured_K"] = INFEASIBLE_K
         state.write_text(json.dumps(st), encoding="utf-8")
         return res
 

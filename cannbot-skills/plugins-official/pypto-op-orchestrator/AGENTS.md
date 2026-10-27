@@ -153,7 +153,16 @@ state_transition(action="start_stage", stage=7, tuning_mode="panko")
    - **若任务为 maximize、或 (a)(b)(c) 都无法解析 → MAXIMIZE 模式**：把 P_ref 设为足够小的 floor（如 `1.0` µs）。它**只是归一化常量、不是性能目标**，使 `J≥100` 的 success 停止永不触发；优化据 `wall_clock_limit_s` 与 `eval_budget` 推进，结果以 `best_speedup_vs_preopt` / `best_latency_us` 为准（J 在此模式不代表 speedup）。
    - ⛔ **绝不捏造一个目标 latency**；MAXIMIZE 模式下也不要反复追问 P_ref。
 2. **DEVICE** = `TILE_FWK_DEVICE_ID`（run 级用户指定，**不 hardcode**）。
-3. 可选 `config`：`eval_budget` / `wall_clock_limit_s` / `stagnation_K` 等，**原样透传**，编排器不自行填充默认值。
+3. **优化目标（两种模式，默认单目标）**：`config.objectives` 决定走哪一种，**默认为
+   `["aicore_e2e"]`**——单目标 PANKO，与此前行为一致。用户同时要求优化 **workspace**
+   时，透传 `config.objectives: ["aicore_e2e", "workspace"]`，即多目标 PANKO（Pareto
+   front + hypervolume）。
+   - 多目标且 workspace 这类**字节**目标没有上界时，harness 在 `init` 处**拒绝**
+     （`hv_reference_unavailable`）并返回 `ask_user`；按上面的规则原样转达，不得代选。
+     上界来自 SKU 的 ini，或用户给的 `--chip-memory-mib <MiB>`。单目标不需要它。
+   - ⛔ **编排器不自行添加第二个目标**，也不自行删去用户要求的目标。用户只说优化
+     latency / AICore E2E 时就是单目标，不要替他开 front。
+4. 可选 `config`：`eval_budget` / `wall_clock_limit_s` / `stagnation_K` 等，**原样透传**，编排器不自行填充默认值。
 
 ⛔ **auto-tuner 返回 `ask_user` 时，原样转达给用户并停下。** PANKO 的 tile 数值由 optuna
 的 TPE 决定；缺失时 harness 拒绝初始化并给出三个选项（装 optuna / 关掉 tile search 跑 /

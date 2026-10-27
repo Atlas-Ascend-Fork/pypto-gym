@@ -147,9 +147,21 @@ def tile_calls(src):
 
 
 def tunable_count(src):
-    """How many tile sites BO can actually move. 0 means the lever is dead."""
+    """How many tile sites BO can actually move. 0 means the lever is dead.
+
+    A config knob that stands in for a tile argument counts as one. On a
+    kernel written as a factory the tile CALLS carry no literals at all, so
+    counting only those would report a dead lever on a kernel whose tile
+    values live in `_KERNEL_CONFIG`.
+    """
     try:
-        return len([s for s in apply.tunable_sites(src) if s.kind in ("cube", "vec")])
+        return len(
+            [
+                s
+                for s in apply.tunable_sites(src)
+                if s.kind in ("cube", "vec") or (s.kind == "cfg" and s.slot)
+            ]
+        )
     except SyntaxError:
         return 0
 

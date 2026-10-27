@@ -97,13 +97,13 @@ class StudySharingTest(unittest.TestCase):
 
 class SeedScopeTest(unittest.TestCase):
     def test_a_cube_action_seeds_only_cube_sites(self):
-        pts = lever.seed_points(BOTH, HW, 4, 100.0, scope="cube")
+        pts = lever.seed_points(BOTH, HW, lever.SeedOptions(4, 100.0, scope="cube"))
         self.assertTrue(pts)
         for cfg, _, _ in pts:
             self.assertEqual(_kinds(cfg), {"cube"})
 
     def test_a_vector_action_seeds_only_vec_sites(self):
-        pts = lever.seed_points(BOTH, HW, 4, 100.0, scope="vec")
+        pts = lever.seed_points(BOTH, HW, lever.SeedOptions(4, 100.0, scope="vec"))
         self.assertTrue(pts)
         for cfg, _, _ in pts:
             self.assertEqual(_kinds(cfg), {"vec"})
@@ -112,7 +112,7 @@ class SeedScopeTest(unittest.TestCase):
         """`block` asks for the union deliberately; scoping the actions must not
         take that away.
         """
-        pts = lever.seed_points(BOTH, HW, 4, 100.0)
+        pts = lever.seed_points(BOTH, HW, lever.SeedOptions(4, 100.0))
         self.assertEqual(_kinds(pts[0][0]), {"cube", "vec"})
 
 

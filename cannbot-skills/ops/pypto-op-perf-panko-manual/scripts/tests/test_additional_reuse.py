@@ -48,12 +48,17 @@ class AdditionalReuseTests(unittest.TestCase):
         self.root = Path(temporary.name).resolve()
         self.source = self.root / "demo_impl.py"
         self.source.write_text("def demo_wrapper(): return 42\n")
+        # warmup/runs are named rather than defaulted: the fixtures below assert
+        # `raw_count == 4`, which is what `reusable_result` compares the config's
+        # warmup+runs against, and this skill measures median-of-9 by default.
         self.evaluator = RealEvaluator(
             "demo",
             str(self.root),
             str(self.source),
             "0",
             f'{sys.executable} -c "pass"',
+            warmup=1,
+            runs=3,
             evaluation_mode="cached",
         )
         self.addCleanup(session.close_session, self.root)

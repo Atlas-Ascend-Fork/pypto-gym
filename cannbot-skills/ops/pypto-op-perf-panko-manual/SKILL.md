@@ -10,20 +10,52 @@ your directive and dispatches the coder. You never call `state_transition` (you 
 
 You are the **World Model** (propose δ, reflect, rescore V, Insert/Update/Prune) **and the
 Evaluator** (run the frozen `E(x)→(s,p)`). The deterministic core — selection (argmax
-`pypto_action_priority`, short symbol `V_pypto` = our composite `w_stage·prior_gain·novelty·V`;
+`pypto_action_priority`, short symbol `V_pypto` = our composite `w_stage·prior_gain·V`, where
+`prior_gain` (g) is learned from every measurement and read optimistically;
 V is PANKO's per-node value),
-stagnation, `J = s·(P_ref/p)·100`, tree-edit application, stop conditions, state I/O — lives in
-`scripts/panko_harness.py`. You **call** it; you do not re-implement its decisions.
+stagnation, `J = s·(P_ref/p)·100`, tree-edit application, stop conditions, state I/O — is
+reached through `scripts/panko_harness.py` and implemented in the `scripts/panko/` package
+beside it, one module per responsibility (`state`, `measurement`, `front`, `stopping`,
+`selection`, `delivery`, `lifecycle`, …). You **call** the CLI; you do not re-implement its
+decisions, and nothing outside the package imports its internals.
 
 The world model is the **persisted tree** in `custom/<op>/optimization/search_state.json`, not
 this session. Each cycle may resume the same task-scoped optimizer conversation: **read the state → apply one transition →
 persist → return a directive.** Therefore every V update / prune MUST carry its reason
 (`--edits ... "reasons"`); a later dispatch re-hydrates the belief from your log.
 
+## Two modes — one objective by default, the front when you name a second
+
+`config.objectives` decides which search runs, and the DEFAULT is one objective:
+
+```
+"objectives": ["aicore_e2e"]                 # default: single-objective PANKO
+"objectives": ["aicore_e2e", "workspace"]    # multi-objective PANKO
+```
+
+**Single-objective (the default).** Nothing to trade against: the archive holds one
+point, that point IS the global best, and the ratchet, `impl.py` and `J` are what they
+have always been. No hypervolume reference is needed, so no `--chip-memory-mib`. The
+other readings are still MEASURED and still recorded on `m` — pass `--workspace-b` on
+every `record` anyway, kept or not, because that record is how a single-objective run
+leaves the trade-offs it saw for whoever reads the campaign later.
+
+**Multi-objective.** Reached by naming the second axis and by nothing else. Then the
+archive is a Pareto front, dominance on the measured axis is decided by the bootstrap
+rather than by the medians, the next action's base is the point with the largest
+hypervolume contribution, and convergence is an OR of the hypervolume gain with the
+per-axis records. A byte-valued axis needs a ceiling (below), and `init` refuses
+without one rather than running the single-objective search under a front's name.
+
+**Which to run.** Optimising AICore E2E alone — the default — is the single-objective
+mode. Optimising AICore E2E *and* the workspace is the multi-objective mode. A
+sentence below that quotes a front, a hypervolume or a trade-off is about the
+second mode.
+
 ## Optimization principles — how to value actions (raise `V`)
 
 Beyond the catalog `prior_gain`, raise an action's **`V`** (the belief factor of
-`pypto_action_priority = w_stage · prior_gain · novelty · V`) by how strongly its intent serves the
+`pypto_action_priority = w_stage · prior_gain · V`) by how strongly its intent serves the
 two principles that make a pypto kernel faster and lift utilization — and **propose (insert) new
 intents** along these axes:
 
@@ -67,8 +99,16 @@ a matmul re-admits the whole cube family. Do not try to work around the split;
 if you believe an action should be reachable, propose the transformation that
 creates its precondition (F-20 does this for reductions).
 
-**Scope: the kernel, not the call.** `p` is the AICore End-to-End Time of the `@jit`
-kernel. It is kernel-internal time, not the operator's end-to-end time. The host wrapper is
+**Scope: the kernel, not the call.** Both time objectives are on-device readings of the
+`@jit` kernel. `aicore_e2e` IS `p` -- the on-device profiler's "AICore End-to-End Time" line,
+so `--p`, `--samples` and `J` all mean it. `mix_aic` is msprof's per-launch MIX_AIC
+`aicore_time(us)`, carried on `m`. They are DIFFERENT quantities
+and their ratio is not a constant: on a cube-bound kernel they nearly agree, while on a
+vector-bound one they can differ by most of an order of magnitude. Which is why naming one
+is not naming the other: a candidate can move one without moving the other, and in the
+multi-objective mode the front is where that shows. A reading under one is not comparable with a reading under the other, so
+numbers are quoted against the instrument that produced them. Neither counts the host launch
+path. The host wrapper is
 FROZEN for the whole run: `init` records a signature of everything that is not a `@jit`
 kernel, and `feasible` and `record` both reject a candidate that changed it. Counting only
 the kernel orders two candidates correctly exactly while the uncounted part is identical
@@ -85,6 +125,21 @@ not fall back to another chip's numbers, because those reject legal tiles before
 device sees them. `--chip-envelope '<json>'` supplies them deliberately and is
 recorded as such. The ini path used is recorded in the state and echoed by `init`.
 
+**A byte-valued objective needs a ceiling, and `init` refuses without one.** The
+hypervolume's reference point is fixed for the run: the preopt on the primary
+objective, and the **chip's memory** on a byte axis such as `workspace`. That comes
+from the envelope's `memory_mib` (the SKU's ini, `SoCInfo/memory_size`), or from
+`--chip-memory-mib <MiB>` when the ini does not carry it or when the kernel does not
+get the whole device -- in deployment it shares memory with weights, the KV cache and
+other operators, so the chip's total is a generous bound, not the real one. With more
+than one objective declared and no ceiling anywhere, `init` **refuses**
+(`hv_reference_unavailable`) rather than starting: without a reference the next
+action's base is picked as if there were one objective (least tried, then fastest) and
+the convergence test loses its hypervolume half, both silently -- a single-objective
+search reporting a multi-objective front. A single-objective run is unaffected and
+needs no ceiling. `init` echoes the box it will use as `hv_reference`, in each
+objective's own units.
+
 **And re-checked against the device before the first evaluation.** The SoC is resolved
 *for* `--device`, not for the box, and the name the envelope was built from is asked
 again before any block measures anything. A different chip in the slot **halts and asks
@@ -94,9 +149,19 @@ reports the mismatch the moment it sees one. Where no runtime can be asked, the 
 proceeds and the state records `confirmed: unknown`, so a report can say whether the
 numbers were checked against silicon or only against a name.
 
-**Prerequisite: the kernel must carry `debug_options={"runtime_debug_mode": 1}`.** Without
-it the profiler emits no AICore record — the library default is `0` — and `p` has no value.
-See `references/evaluator.md`.
+**`debug_options={"runtime_debug_mode": 1}` is REQUIRED, and is frozen.** The run's
+latency objective is `aicore_e2e`, and that reading exists only in the on-device profiler's
+stdout record, which is written only at mode 1. At mode 0 the "AICore End-to-End Time" line
+never appears and the run has no latency to optimise, so every top-level jit kernel carries
+the flag and the baseline is built with it. Mode 1 also supplies `util`, `aic_util` and
+`aiv_util`. The `mix_aic` objective and msprof's own columns (`aiv_time`, `aic_mac_ratio`,
+`aiv_vec_ratio`, `cube_utilization`) come from `op_summary_*.csv` and do not depend on the
+flag; `workspace` comes from the alloc callback and does not either.
+`init` records a signature of every kernel's `debug_options` and `feasible` / `record`
+reject a candidate that changed it. The reason is comparability, not truth: **an objective
+IS its instrument.** A candidate read on a different instrument is not comparable with the
+rest of the run, and a candidate whose only change is dropping the flag would score as a
+win on the difference between instruments. See `references/evaluator.md`.
 
 **Dependency.** The tile search needs `optuna >= 2.0` (developed against 4.9).
 `init` runs a capability preflight and REFUSES when
@@ -166,7 +231,7 @@ any files:
   reads it, so writing it over some other program would complete Stage 7 on a kernel the search
   never chose.
 
-So `best_latency_us` trends down monotonically and the best code can never be lost. A candidate slower
+So `best_aicore_e2e_us` trends down monotonically and the best code can never be lost. A candidate slower
 than the running best simply regressed **on top of** the best — the harness reverts it. Your only file
 action is to have the coder **apply the δ** to `op_file`. Insert new intents with parent defaulting to
 `best_node`.
@@ -194,10 +259,20 @@ Everything else is one change at a time, kept or reverted on its own measurement
 a genuinely non-monotone search, that is a different optimizer, not a setting here.
 
 ## Cycle — INIT
-> **Maximize mode:** when no target latency is given, the orchestrator passes a small floor `P_ref`
-> (a normalizer, not a target). The `J≥100` success stop then never fires by construction, so the run
-> ends on the safe stops (`wall_clock_limit_s` + `global_stagnation_limit`). Report progress by
-> `best_speedup_vs_preopt` / `best_latency_us`, not `J`.
+> **No target: leave `--p-ref` out.** `P_ref` is the target for the primary objective, and
+> `success` fires when the DELIVERED program reaches it. So `--p-ref` takes a REFERENCE
+> KERNEL'S MEASUREMENT and nothing else. Without one — no reference kernel, or this kernel
+> already beats it — omit the flag: the preopt becomes the reference, `success_stop` goes off
+> with it, and the run ends on the budget, the wall clock or `hv_stagnation`. `J` then reads as
+> a percentage of the baseline (`J = 150` is 1.5x the preopt), and the search is unchanged,
+> because `J` is monotone in `1/p` for any fixed `P_ref`. **Never put a guess there.** The flag
+> was required once, so a campaign without a reference had to invent a number. A reference the
+> preopt already beats means `j0` above 100, `success` true before the first candidate, and the
+> run over at evaluation 0 and reported as a success. `init` now REFUSES a
+> `P_ref` the preopt already meets, names both numbers, and asks which it was. `init` echoes
+> `p_ref` and `p_ref_via` (`explicit:cli` or `preopt`), and the state keeps
+> `target.P_ref_via`, so a report that quotes a speedup can say what against.
+> Report progress by `best_speedup_vs_preopt` / the front, not by `J`.
 
 0. **Normalize the kernel, before anything is measured.** `bayesian_optimization.apply` tunes a tile call only when
    every argument is an integer literal. A kernel written `pypto.set_vec_tile_shapes(TILE_B, TILE_D)`
@@ -220,9 +295,43 @@ a genuinely non-monotone search, that is a different optimizer, not a setting he
      within the noise floor. A normalization that made the kernel *faster* changed a value; restore
      `.preopt` and try again.
 
+   - **A kernel written as a FACTORY needs no rewrite — it needs `--config-key`.** When the tile
+     values live in a per-case dict that is `**`-expanded into a kernel factory
+     (`_KERNEL_CONFIG = {10: dict(mm_l0=64, ...)}` → `_make_static_kernel(..., **cfg)`), the tile
+     CALLS carry no literals and never will: normalising them would specialise every case at once.
+     Pass `init --config-key 10` instead. It marks that entry `# panko:tune`, inserting an empty
+     `10: dict(),` when the table omits the case (a no-op — the factory's defaults then apply), and
+     the core tunes the entry's numbers as ordinary sites. Without it the tile lever is DEAD on
+     these kernels and every tile value is swept by hand. `init` refuses `--config-key` on a
+     kernel that has no such table, rather than look like it is tuning one.
+
+   **The line: normalization exposes parameters and does not change values.** `set_vec_tile_shapes(TILE_B, TILE_D)`
+   → `set_vec_tile_shapes(16, 64)` is the whole of it. Changing that 64 to something larger "while we are here",
+   flattening 2-D to 1-D, or reordering operations are search actions — they must earn their place
+   through the ratchet, and moving them here would corrupt the preopt baseline every speedup in this
+   run is divided by. `normalize` refuses all three.
+
 1. Run the frozen eval `E(preopt)` → `(s0, p0)` on the **normalized** kernel (evaluator.md; wrap the
    run in `timeout <eval_timeout_s>`). If `s0 == 0`: return `{"directive":"STOP","reason":"preopt_incorrect"}`.
-2. `HARNESS init --op-dir custom/<op> --op <op> --p-ref <P_ref> --device <DEVICE> --config '<json>' --preopt-s <s0> --preopt-p <p0> --op-file <op_file>`
+   - `measure_latency` also reports **`compile_s`**. Pass it to `init` as `--preopt-compile-s <compile_s>`:
+     `eval_timeout_s` is derived from it, because the right value is a property of the operator:
+     compile time rises with the workspace a kernel allocates, and a candidate grows it further.
+     Without it the configured default stands and `config.eval_timeout_source` records that it was
+     not derived.
+   - **Pass the whole result as `--preopt-measurement`**, exactly as `record` takes
+     `--measurement`. The baseline is an archive point like any other, and every declared
+     objective reads its value from there — `workspace` above all, which `init` REFUSES to
+     start without. Spelling the readings out one flag at a time
+     (`--preopt-workspace-b` / `--preopt-workspace-state`, `--preopt-util`, `--preopt-bubble`)
+     still works and still overrides it; it is just the way to lose one.
+   - It also reports **`samples`** (the 9 warm readings behind the median), and
+     `--preopt-measurement` carries those too; `--preopt-samples <comma-separated>` passes them
+     alone and overrides it. They do two jobs: they seed the run's own noise estimate
+     (`noise.sigma_log`), which is operator-specific — the cv varies widely across operators — and
+     is what the margin-based stop reads — without them `noise.source` stays `unmeasured` — and they are
+     what lets the FRONT compare the baseline on an interval. A preopt with no samples is a
+     permanent front member judged on exact medians while every other pair uses the bootstrap.
+2. `HARNESS init --op-dir custom/<op> --op <op> [--p-ref <reference kernel's us>] --device <DEVICE> --config '<json>' --preopt-s <s0> --preopt-p <p0> --preopt-measurement '<measure_latency result as JSON>' --op-file <op_file>`
    (no `--catalog`: it defaults to this skill's own. `--preopt-hash` is optional
    and verified against `op_file` if given.)
    - If `E(preopt)` reported core-util % / bubble %, pass them as `--preopt-util <u0> --preopt-bubble <b0>` — the harness then biases the frontier toward the actions that fix the current bottleneck (deterministic symptom → V boost). The harness re-applies this at every `close` from the measured metrics, so the frontier always points at the *current* bottleneck. **Required whenever `symptom_boost > 1`**: without them the harness cannot infer a symptom and profile anchoring silently does nothing. `init` returns a `warning` field when they are missing.
@@ -240,24 +349,25 @@ a genuinely non-monotone search, that is a different optimizer, not a setting he
    reason names the rule and the numbers.
 
    **`retune: true` in the same response.** The δ you just applied moved the tile space: the view's
-   extents, the dtype or the residency changed, so the tile this program inherited was chosen for a
-   space that no longer exists. Run `block --parent <action_id>` **before** `record`, so the
+   extents, the dtype (kernel-wide or at one vec site) or the residency changed, so the tile this
+   program inherited was chosen for a space that no longer exists. Run `block --parent <action_id>` **before** `record`, so the
    candidate the ratchet judges is the (structure, tile) **pair**.
 
    This is not a nicety. A structural change submitted at its stale tile measures worse, is reverted
    as unimproved, and its bytes are burned into the eval cache — so the combination that would have
    won becomes unreachable for the rest of the run. A hand-optimised kernel is typically a structural
-   rewrite **and** the tile that suits it; neither half wins alone, and a search that judges one
-   variable at a time cannot reach it at all.
+   change **and** the tile the new structure wants; neither half wins alone, and a search that judges
+   one variable at a time cannot reach it at all.
 
    A rename, a comment or a new tile value leaves the space alone and `retune` stays false. If you
    believe the optimum moved anyway — a rewrite that changed the access pattern without changing any
    extent — you may ask for a block yourself. That block's outcome decides the action's fate:
    the core owns the mechanical detection, you own the judgement call and you pay for it.
    - **A rejection does NOT advance `n`.** `n` counts measurements that failed to improve, and the gate never ran
-     the program, so nothing was learned about the action. Rejections are counted in `n_static` against
-     `infeasible_K` (16), a separate and much looser bound that exists only so an action whose whole neighbourhood
-     is infeasible still terminates. When it fires, the response carries `stop_cause: "infeasible_K"`.
+     the program, so nothing was learned about the action. Rejections are counted in `n_static`, which is one of
+     the tallies behind `n_unmeasured` — every proposal that produced no measurement — bounded by
+     `unmeasured_K` (10) so an action whose whole neighbourhood is infeasible still terminates. When it fires,
+     the response carries `stop_cause: "unmeasured_K"`.
    - **So do not treat a rejection as a signal to give up on the action.** It is a signal about one number. The
      reason string names the binding constraint — read it and move the candidate to the other side of it. A
      `UB estimate 264KB (view 256KB + 2x tile 4KB) > budget 192KB` says the *view* is what does not fit, so
@@ -273,11 +383,44 @@ a genuinely non-monotone search, that is a different optimizer, not a setting he
      the action does not apply to this kernel.** Do not re-issue the same δ: either propose a
      materially different concrete δ, or close the action.
 1. Run `E(candidate_file)` → `(s, p)` (frozen method, `timeout`) — only on a cache miss.
+   `measure_latency.py` runs the measurement under msprof itself; `msprof` must be on PATH.
+   **If it returns `p: null` with `p_error`, the objective was not obtained** (msprof missing,
+   no MIX_AIC rows, rows that do not map to calls): do not record the candidate as `s = 0`.
+   Stop the run (`stop --force objective_unmeasured`) and tell the user what `p_error` says.
    Verify the hash you are about to evaluate differs from `already_measured` returned by `select`.
-2. `HARNESS record --op-dir custom/<op> --parent <action_id> --code-hash <sha256(candidate_file)> --s <s> --p <p> --util <util> --bubble <bubble>` → `{J, improved, n, stop_refine}`.
+2. `HARNESS record --op-dir custom/<op> --parent <action_id> --code-hash <sha256(candidate_file)> --s <s> --p <p> --samples <samples> --measurement '<measure_latency result as JSON>'` → `{J, improved, n, stop_refine}`.
+   - **Pass `--measurement`.** It carries every reading `measure_latency` produced, and an
+     objective reads its value from there. Spelling readings out one flag at a time
+     (`--util`, `--workspace-b`, `--metrics`) still works and still overrides it, but a
+     reading nobody spells out by hand is simply lost.
+   - `--workspace-b` / `--workspace-state` are `measure_latency`'s own fields (the msprof
+     workspace, read from the runtime's `alloc` callback). Pass them on EVERY record, kept or not:
+     they are how a single-objective run leaves the trade-offs it measured on record. If the state
+     is `unavailable`, pass `--workspace-state unavailable` and no size -- never `--workspace-b 0`.
+   - `--samples` is `measure_latency`'s `samples`, comma-separated. Optional, but without it the
+     measurement does not reach the noise estimate.
+   - ⚠️ **If the run hit your `timeout` before the kernel ever compiled, do NOT report `--s 0`.**
+     Report `record ... --code-hash <hash> --s 0 --unevaluated compile_timeout` instead. `s = 0` is a
+     verdict about the candidate, and a timed-out compile establishes nothing about it — reporting
+     it as incorrect charges `eval_budget` for a run that produced no number and teaches every
+     later mechanism a false label. Compile time scales with program size, so the mistake is not
+     random: it marks the large candidates wrong.
+     How to tell: `measure_latency` prints `[panko-progress] first_call_done compile_s=<x>` once the
+     first call returns. **Marker absent → `--unevaluated compile_timeout`. Marker present → the
+     candidate compiled and then ran long, which IS a verdict, so `--s 0`.**
+     The reply carries `n_timeout`, `n_unmeasured` / `unmeasured_K`, and `stop_refine` with
+     `stop_cause: unmeasured_K`.
    - A response carrying `duplicate: true` means those bytes were already measured; nothing was
      recorded and `n` is unchanged. Treat it as step 0b's `hit` case.
    - The harness snapshots a kept candidate and rolls a reverted one back to the running best **for you** — no manual file ops. `improved` here means it **beat the running global best** (a candidate that only beats this action's own local best but is still slower than the global best is a regression → reverted, `n++`).
+   - **`stop_cause` says why a refinement stopped, and there are three.** `stagnation_K` — this many
+     candidates were measured and the readings put them off the front. `undetermined_K` — this many were
+     measured and the readings could NOT order them against the front, which is not evidence about the
+     action, so they never advanced `n`; the fix is more readings per measurement, not more
+     candidates. `unmeasured_K` — this many proposals produced no measurement at all: statically
+     infeasible, a semantic no-op, a duplicate, or a compile that ran past the budget. The reply
+     carries all three counters every time, and `close` accepts any
+     of them (plus `success`, and an action that produced nothing at all).
    - If **not** `stop_refine`: **propose the next concrete candidate δ for this action.**
      `close` will refuse. This is enforced now, not advised: an action abandoned
      after one or two non-improving candidates has not been tested, it has been
@@ -291,6 +434,8 @@ a genuinely non-monotone search, that is a different optimizer, not a setting he
    1. `HARNESS close --op-dir custom/<op> --action <action_id>` (attach CLOSED, update global best).
    2. **Reflect** over the trajectory, then emit tree edits:
       `HARNESS evolve --op-dir custom/<op> --edits '{"insert":[{"parent":..,"stage":..,"delta":..,"V":..,"prior_gain":..}],"update":[{"id":..,"V":..}],"prune":[..],"prune_permanent":[..],"reasons":[".."]}'`
+      - `stage` is one of `frontend` / `swimlane` / `incore` — the three the campaign cycles
+        through. Anything else is read as `frontend` and the response says so in `notes`.
       - If this evolve would leave the frontier empty, insert at least one new intent in the same
         call. The response carries `expansion_required: true` when it did not.`
       Insert = new promising child intents; Update = rescore frontier V on new evidence;
@@ -299,7 +444,17 @@ a genuinely non-monotone search, that is a different optimizer, not a setting he
       scale** (`references/action_catalog.json`: strong ≈ 0.9 / medium ≈ 0.6 / weak or speculative
       ≈ 0.3), so novel actions mix fairly with seeds — do not assign > 0.9 without hard evidence.
    3. `HARNESS stop --op-dir custom/<op>` → `{stop, reason}`.
-      - If `stop`: `HARNESS report --op-dir custom/<op>` (the harness has already restored the global-best
+      - If `stop` and `verify.required`: **verify before reporting.** Repeat until `steps_left == 0`
+        (four steps, ABBA: preopt, delivered, delivered, preopt):
+        `HARNESS verify --op-dir custom/<op>` → `{arm, op_file, runs}` (stages that arm's program) →
+        run `measure_latency --op-file <op_file> --warmup 1 --runs <runs> --agg median` →
+        `HARNESS verify --op-dir custom/<op> --samples <samples>` (the harness puts the delivered
+        kernel back after every step). The result is a bootstrap interval on the speedup:
+        `confirmed` / `unconfirmed` / `regressed`. Search-time acceptance is a point comparison, so
+        the search's own speedup is biased upward; this is where it is checked. If the device goes
+        away, `HARNESS verify --op-dir custom/<op> --skip device_unavailable` -- the report then says
+        UNVERIFIED rather than presenting the search number as confirmed.
+      - Then `HARNESS report --op-dir custom/<op>` (the harness has already restored the global-best
         `op_file` for delivery); return `{"directive":"STOP","reason":"<reason>","best":{...}}`.
       - Else: `HARNESS select --op-dir custom/<op>` → next action `a` (the harness restores the running
         best into `op_file`); return `{"directive":"CODE","op_file":"<op_file>","action_id":"<a.id>","intent":"<a.delta>"}`.
@@ -312,6 +467,17 @@ a genuinely non-monotone search, that is a different optimizer, not a setting he
 HARNESS block --op-dir custom/<op> --parent <action_id> --test-command '<E(x) command>'
               [--reason '<why now>'] [--live-tiles <n>] [--max-trials <n>] [--lint-root <path>]
 ```
+
+**`eval/test_inputs.py` is the objective's input contract.** `measure_latency`
+builds the wrapper's arguments from it before calling the kernel: it wants
+`build_inputs(device)` (or `build_inputs()`, or an `INPUTS` sequence). **`device`
+is the `--device` value VERBATIM -- the id as a string, `"7"` -- not a torch
+device**, so `torch.randn(device=device)` raises `Invalid device string: '7'`.
+By then `torch.npu.set_device` has been called and `TILE_FWK_DEVICE_ID` is set,
+so a builder can ignore the argument and use `.npu()`, or write
+`f"npu:{device}"` if it wants it explicitly. A builder that raises is reported
+as `p: None` with `p_error` naming it -- nothing ran, so it is an environment
+fault, never a verdict on the candidate -- but it still costs the cycle.
 
 `--test-command` runs **without a shell**. The supported form is
 `cd custom/<op> && python3 test_<op>.py`, with optional `NAME=value` prefixes and
@@ -335,22 +501,168 @@ the op_file. You then `record` it and decide what to do next.
 **What comes back.**
 
 ```json
-{"ran": true, "best_config": {...}, "best_latency": 4.02, "code_hash": "…",
+{"ran": true, "best_config": {...}, "best_objective_us": 4.02,
+ "best_mix_aic_us": 8.1, "best_workspace_b": 524288,
+ "best_workspace_state": "measured", "code_hash": "…",
  "n_trials": 21, "n_feasible": 19, "stopped_early": true,
  "device_trials": 21, "charged": 20, "granted": 42}
 ```
 
-Then: `record --parent <action_id> --code-hash <code_hash> --s 1 --p <best_latency>`.
+The block ranks its trials on `p`, the same reading `J` uses, so `best_objective_us` is
+`p`, `best_mix_aic_us` is the same launch's MIX_AIC, and `best_workspace_b` is the same
+launch's workspace. Then:
+`record --parent <action_id> --code-hash <code_hash> --s 1 --p <best_objective_us> --metrics '{"mix_aic": <best_mix_aic_us>}' --workspace-b <best_workspace_b> --workspace-state <best_workspace_state>`
+
+**Pass the workspace. Every objective must have a value on every measurement, and
+`workspace` is an objective in the multi-objective mode -- so a promotion carrying only
+`--p` and `mix_aic` used to HALT the run (exit 4, `objective_unmeasured`) for bytes the
+block had measured a moment earlier. The harness now recovers the block's own reading when the promoting
+call carries none, so either way works; passing it is the form that does not depend on
+that recovery. A promotion is still not a re-measurement: `--samples` is what must not
+be passed, because the block already counted every trial's readings. The workspace is
+not a reading -- it is one number, compared exactly -- so handing it over counts nothing
+twice.**
+
+- **Every objective must have a value on every measurement.** `config.objectives` defaults to
+  `["aicore_e2e"]` alone (see Two modes); `workspace` and `mix_aic` are available but not
+  default, and their readings are carried on `m` in every run whether or not they are
+  objectives -- see `references/evaluator.md` for what `mix_aic` costs as a declared one. Pass `--measurement` on every `record` and
+  `--preopt-measurement` at `init` and they are all covered. A declared objective with no
+  value HALTS the run (exit 4, `error: objective_unmeasured`) -- it names what was missing and
+  where it should have come from. A user-declared objective reads from `m`: record it with
+  `--metrics '{"<key>": <value>}'`, and declare `samples_from` if it has readings to be judged
+  on an interval rather than on a number.
+- **There is no `latency` objective.** It meant `p`, and `p` has been two different
+  instruments, so the name did not say what was being optimised. Name the instrument:
+  `aicore_e2e` or `mix_aic`. `config.objectives: ["latency", ...]` is refused.
+- **`J` is always `aicore_e2e`**, whatever `config.objectives` says, and `aicore_e2e` needs
+  `debug_options={"runtime_debug_mode": 1}` on every top-level jit kernel. At mode 0 the
+  profiler writes no "AICore End-to-End Time" line, so the reading does not exist and cannot
+  be recovered by re-recording; `init` refuses and says so.
+- **Dominance on latency is an interval, not a median.** Two points are ordered only when a
+  percentile bootstrap of the ratio of their medians excludes 1 (the same estimator and seed
+  `verify` uses); otherwise the latencies are a TIE, and the other objectives decide. So two
+  points separated only by an unresolved latency both stay on the front, while one that is not
+  measurably slower and uses strictly less workspace dominates. Pass `--samples` on every
+  `record` — without readings the comparison falls back to the medians. The workspace is
+  compared exactly; it has no noise.
+- **To settle an undetermined pair, re-measure — it is free.** `record --remeasure --code-hash
+  <hash> --samples <...>` adds readings to a point the archive already holds: not charged to
+  `eval_budget` (which counts distinct programs measured), no `n`, no ratchet. The
+  readings are pooled, `p` becomes their median, and the front is re-derived. It refuses a hash
+  the archive does not hold, and refuses without `--samples`.
+- **Every selection is recorded.** `select` appends the full candidate list with each node's
+  `V`, `g`, `w_stage` and `V_sel` to `optimization/selects.jsonl`, and the log line names the
+  runner-up and its score so it says how close the call was. Nothing asks you to do anything
+  with it; it is what makes a later question about the search's own decisions answerable.
+- **There is ONE search, and it runs on the front from the first evaluation.** A candidate is
+  KEPT when no archive point dominates it and it is no worse than the preopt on the primary
+  objective (`aicore_e2e`) — so a program that is slower than the preopt is never kept whatever
+  it saves elsewhere, and a trade-off that is no slower IS kept and the action continues from it.
+  `record` answers with `improved` (accepted), `faster` (the latency question) and `acceptance`
+  (the margin, the reference and what it was compared against). With one objective this is the
+  old `j > bar`, verdict for verdict.
+- **A candidate the readings cannot order is not counted against the action.** `stagnation_K`
+  treated every non-accepted candidate alike, and a large share of measured candidates sit inside
+  the measurement's own spread. So a rejection advances `n` only when the readings put the
+  candidate off the front — a front point dominates it on the interval, or it is slower than the
+  preopt by more than the readings explain. Otherwise it advances
+  `n_undetermined`, which closes the action at `undetermined_K` (default 7, so an action is
+  bounded at 14 candidates) with `stop_cause: undetermined_K`. `acceptance.clarity` on every
+  `record` says which it was, and the trajectory row says `undetermined, n unchanged`. The fix
+  for an action that only ever produces undetermined candidates is more readings per measurement,
+  not more candidates.
+  `select` restores the front point the last `close` chose — `restore_code_hash` says which, and
+  `base_code_hash` is on every `select` and `close`. That point is the one with the largest
+  exclusive hypervolume contribution among the points no worse than the preopt and non-dominated
+  on the medians: the emptiest neighbourhood on the front. With one objective only the fastest
+  point contributes, so the search accumulates greedily exactly as before.
+  A run ends on `success`, the budget, the wall clock, `frontier_exhausted` — or
+  `hv_stagnation`: `hv_stagnation_limit` (default 48) measurements since the front last GREW.
+  Growth is the OR of two signals, because neither sees every real improvement: the hypervolume
+  gain clearing `hv_min_gain` (1%) by more than the readings' own noise, or an axis RECORD moving
+  by more than `axis_min_gain` (1%, or `axis_min_gain_bytes` 5% on a byte axis). The hypervolume
+  is a volume, so the box's shape weights the axes and an 8% workspace cut is 0.14% of it;
+  conversely a point filling the middle of the front moves no record and is only visible as
+  volume. The reference is FIXED for the run — the preopt on the primary objective, the chip's
+  memory on a byte axis, which is measured as log(bytes) — so `hv` reads as a progress curve and
+  a point with a worse workspace no longer inflates the volume of everything already there.
+  The stop payload and the report carry `hv`, `hv_stagnation` and the last counted gain;
+  `hv_stagnation_limit: null` leaves the measurement and removes the halt.
+  `progress.front_stagnation` still counts measurements since the archive last accepted any
+  point, reported and not enforced.
+  The two-phase run (`mo_phases`, `greedy_stagnation_limit`, `front_stagnation_limit`,
+  `progress.phase`) is gone: a phase 1 that pursues latency alone is a single-objective run, and
+  the switch never fired on a real campaign anyway.
+- **Every front point is verified, not only the delivered one.** After the delivered point's
+  ABBA pass finishes, `verify` opens the next front point's pass against the same preopt and
+  says so (`status: pending`, `point`, `front_points_left`); keep calling `verify` until it
+  reports a verdict with no point left. `impl.py` holds the delivered point throughout, and
+  none of it is charged to `eval_budget`. Each point's verdict lands in `frontier.json` and in
+  the report's frontier block. `config.verify_front: false` verifies the delivered point alone.
+- **The report ends with an Accounting block and a Recommended block.** The accounting says
+  where the budget went (tile blocks vs structure, repaired draws, free rejections), how long the
+  front has gone without a new point and which point the search is extending, and what the
+  archive holds — all of it already in the state, written out because
+  a run is reviewed from this file. The recommended block names the best point on each
+  objective (a fact about the front) and one `balanced` point under a stated convention (the
+  knee: min-max normalised, nearest the ideal corner). With two points there is no knee, and
+  the report says so. None of it moves `impl.py`.
+- **The frontier is a deliverable.** `stop` and `report` write every non-dominated
+  (latency, workspace) point to `optimization/frontier/` with its source and measurements, and the
+  report ends with which point `impl.py` holds. That is the best PRIMARY objective among every
+  correct measurement whose source is on disk, ties broken by the remaining objectives — read off
+  the measurements rather than off `best_node`, which is `J` and only moves at a `close`, and can
+  let a run ship a program another front point beat. Do not ask which point to ship:
+  the preference belongs to whoever weighs this kernel against the others on the device.
+
+- **Too-big draws are repaired, not rejected.** A draw that overflows a buffer (UB, L0A/B/C, L1,
+  or the learned ceiling) is shrunk one ladder rung at a time on the offending axes until it fits,
+  and that point is measured. So `n_repaired` trials in the log line cost a device evaluation
+  each, where a rejection was free. **The value is filed at the params that were MEASURED**, and
+  the drawn point gets the penalty a rejection would have given it — telling the surrogate the
+  infeasible region is fine is what made it keep drawing there, and with repair on every such
+  draw costs an evaluation. `best_config` is always the measured config.
+  `config.bayesian_optimization_repair: false` restores rejection.
+- **Blocks may never have taken more than half of what the run has spent**
+  (`config.block_budget_share`, 0.5), counted across every block. It is a RUNNING RATIO against
+  `evals_used`, not a slice of `eval_budget`, so it applies whether or not the run names a
+  budget -- `eval_budget: null` used to remove the guard entirely, because a share of an
+  unstated total is undefined. Tile numbers are the one lever the model cannot propose, but an
+  action the search never reaches contributes nothing: with the share off, a run can spend
+  nearly its whole budget on repeated blocks of a single action and deliver its preopt.
+- **One block may take at most `config.block_max_trials` device trials** (12). Separate from the
+  share, which bounds the run's total tile spend and so lets a single block take all of it, and
+  separate from `failure_limit`, which only brakes a block that cannot search at all. Without
+  it a handful of blocks can take half a run's evaluations between them and return almost no
+  feasible trials, with neither the share nor `failure_limit` binding any of it. The cap is
+  also the FLOOR the share may not push below, so the first block of a run is usable.
+- **The run delivers the best program it measured**, closed or not. If the budget or the clock
+  ends the run while an action is still open, `stop` promotes that action's best first when it
+  beat the global best (`progress.promoted_at_stop`, and a `promote-at-stop` line in the log).
 
 - **Do not dispatch the coder.** The winner is already on disk, and every tile
   binding site moved together. A coder that changes the kernel's tile but not the
   wrapper's padding arithmetic ships a kernel that fails verification; the action
   is then scored unproductive and closed. That mistake has cost real wins.
-- **Do not re-measure it.** `best_latency` was measured on the device inside the
-  block. Pass it through.
+- **Do not re-measure it.** The block measured every objective on the device.
+  Pass them through -- `best_objective_us`, `best_mix_aic_us` and
+  `best_workspace_b` -- and pass no `--samples`.
 - **Do not propose a tile value of your own,** before or after. Inside tile
   tuning the concrete number is the core's; your search is which action to take
   and what the result implies for the *others*.
+- **When an action's intent must name a cube tile anyway, it is `[L0, L1]`.**
+  `pypto.set_cube_tile_shapes(m, k, n)` takes the three AXES, each a two-element
+  pair with **L0 first**, under `0 < L0 <= L1` and `L1 % L0 == 0`. So `[256, 128]`
+  is not "L1 256, L0 128" -- it is an L0 larger than its L1 and not a divisor of
+  it, and the lint gate rejects it before the device is touched. Four places
+  agree and none of them is this one: the lint gate (citing the pypto API doc),
+  `bo_apply`'s writer (verified against the installed pypto), the lever (which
+  draws `(L0, L1/L0)` so the constraint holds by construction) and the
+  optimization catalogue. An inverted intent costs a cycle: the coder is right
+  to refuse to reorder the literal, because reordering it is reinterpreting the
+  delta, which is yours. Write the pair in this order and the question does not
+  arise.
 
 **`aborted` naming environment faults ends the block. Whether it ends the RUN is
 not yours to decide — call `stop` and relay what it says.** The evaluator already
@@ -364,10 +676,9 @@ device a question of its own before ending anything. Two answers come back:
   normally; the aborted block's observations are kept and a later block on the
   same structure resumes from them.
 
-Deciding this in the optimizer is what ended one recorded campaign a fraction
-of the way into its budget, on a handful of faults that had cost no budget at
-all. Never assert a device is unavailable from a block that finished some time
-ago.
+Deciding this in the optimizer ends a campaign a fraction of the way into its
+budget, on faults that had cost no budget at all. Never assert a device is
+unavailable from a block that finished some time ago.
 
 `ran: false` or `best_config: null` carries a `reason`. The one that matters:
 *"no tunable tile site; the tile call is not written with integer literals"* means
@@ -388,19 +699,17 @@ judgment is the one error that leaves no trace anywhere in the run.
 
 **Omitting it is not neutral.** Without it the footprint bound is OFF and the
 block checks alignment only, so every tile too large for the buffer costs a
-device evaluation instead of being rejected for free. It has been forgotten in
-every recorded block to date; `block` now says so in the trajectory and in its
-own output, and the count it is worth is two evaluations per block.
+device evaluation instead of being rejected for free. It is easy to forget, so
+`block` says so in the trajectory and in its own output.
 
 **A block is worth spending only when the tile space actually moved.** A
 structural delta that changes a view extent triggers `retune: true`, but that
-flag says the space CHANGED, not that it changed usefully. One recorded run
-raised the batch extent twice on shapes where the loop count was already 1, so
-both deltas produced the same single-task program and the second block spent
-nine evaluations re-searching the space the first had just converged on. Before
-accepting a retune, ask what about the tile space is different; if the answer is
-"nothing the core can see", the delta is a tile proposal wearing a structural
-name, and the core has already searched that axis.
+flag says the space CHANGED, not that it changed usefully. Raising an extent on
+a shape whose loop count is already 1 produces the same single-task program
+twice over, so a second block re-searches the space the first had just
+converged on. Before accepting a retune, ask what about the tile space is
+different; if the answer is "nothing the core can see", the delta is a tile
+proposal wearing a structural name, and the core has already searched that axis.
 
 ## Tile actions: the core has already written the file
 
@@ -456,7 +765,7 @@ one and pick the δ yourself.
 - `{"directive":"CODE","op_file":"custom/<op>/<op>_impl.py","action_id":"u13","intent":"<δ>"}`
 - `{"directive":"CODE","op_file":"custom/<op>/<op>_impl.py","action_id":"u10","intent":"<δ>","coder":false}`
   — the core already wrote it; the orchestrator must not dispatch the coder.
-- `{"directive":"STOP","reason":"success|converged|wall_clock|frontier_exhausted|global_stagnation|eval_budget|preopt_incorrect|device_unavailable|harness_fault","best":{"latency_us":..,"J":..,"speedup_vs_preopt":..}}`
+- `{"directive":"STOP","reason":"success|converged|wall_clock|frontier_exhausted|global_stagnation|eval_budget|preopt_incorrect|device_unavailable|harness_fault","best":{"aicore_e2e_us":..,"mix_aic_us":..,"J":..,"speedup_vs_preopt":..}}`
   (`device_unavailable` and `harness_fault` come from `stop` after a block aborted on environment
   faults. Report whichever it returns; never choose between them yourself.)
   (`converged` = a full frontend→swimlane→incore cycle produced no ≥ `stage_min_gain` improvement.)

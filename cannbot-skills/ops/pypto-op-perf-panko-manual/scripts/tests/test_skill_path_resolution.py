@@ -26,7 +26,7 @@ import unittest
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent))
-from _support import CHIP_ARGS, HARNESS, SCRIPTS_DIR, init_argv  # noqa: E402
+from _support import INIT_ARGS, SCRIPTS_DIR, init_argv  # noqa: E402
 
 SKILL_DIR = SCRIPTS_DIR.parent
 
@@ -63,7 +63,9 @@ class SkillPathResolutionTest(unittest.TestCase):
                 *init_argv(
                     "custom/demo",
                     "custom/demo/demo_impl.py",
-                    *CHIP_ARGS,
+                    "--preopt-metrics",
+                    '{"mix_aic": 250.0}',
+                    *INIT_ARGS,
                     *extra,
                     catalog=None,
                 ),
@@ -102,14 +104,14 @@ class SkillPathResolutionTest(unittest.TestCase):
         self.assertEqual(payload["open"], 0)
 
     def test_skill_root_follows_the_symlink_to_the_real_layout(self):
+        """`realpath`, not `abspath`: the resolver has to see through the
+        symlink a quickstart install leaves in the project.
+        """
         sys.path.insert(0, str(SCRIPTS_DIR))
-        import importlib.util
+        from panko import config
 
-        spec = importlib.util.spec_from_file_location("panko_harness", HARNESS)
-        mod = importlib.util.module_from_spec(spec)
-        spec.loader.exec_module(mod)
-        self.assertEqual(Path(mod.SKILL_ROOT).resolve(), SKILL_DIR.resolve())
-        self.assertTrue(Path(mod.DEFAULT_CATALOG).is_file())
+        self.assertEqual(Path(config.SKILL_ROOT).resolve(), SKILL_DIR.resolve())
+        self.assertTrue(Path(config.DEFAULT_CATALOG).is_file())
 
 
 if __name__ == "__main__":

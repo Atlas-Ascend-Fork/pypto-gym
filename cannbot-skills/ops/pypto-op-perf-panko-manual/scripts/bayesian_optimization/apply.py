@@ -41,7 +41,7 @@ import re
 from dataclasses import dataclass, field
 from collections import namedtuple
 
-from . import const, space
+from . import config_sites, const, space
 
 # `loop_depth` = how many enclosing loops the call sits in. It is the cheapest
 # available proxy for "how much work flows through this site", and it separates
@@ -51,14 +51,18 @@ from . import const, space
 # `trip` is the loop's iteration count when `pypto.loop(<int literal>, ...)`
 # writes one, else None. master's rule for unroll is "the largest value must not
 # exceed the trip count", and this is the only place that number exists.
+# `slot` is where a CONFIG knob lands in a tile call -- ("cube", axis, level) or
+# ("vec", i) -- so the knob gets the same ladder and the same footprint as the
+# literal it stands in for. None for every other kind, and for a config knob
+# that reaches the kernel by another route (a runtime option).
 Site = namedtuple(
     "Site",
-    "id kind ordinal func_text start end loop_depth loop_span trip",
-    defaults=(0, None, None),
+    "id kind ordinal func_text start end loop_depth loop_span trip slot",
+    defaults=(0, None, None, None),
 )
 
 _TILE_FUNCS = ("set_cube_tile_shapes", "set_vec_tile_shapes")
-_TUNABLE = ("cube", "vec", "global", "unroll", "pass", "const")
+_TUNABLE = ("cube", "vec", "global", "unroll", "pass", "const", "cfg")
 MAX_VEC_ARITY = 4  # set_vec_tile_shapes(d0[, d1[, d2[, d3]]])
 # How a jit decorator can be spelled at the call site.
 _JIT_NAMES = ("jit", "frontend.jit", "pypto.frontend.jit")
@@ -69,6 +73,25 @@ _PASS_KNOBS = tuple(
     space.PASS_DOMAINS
 )  # pass_options keys BO tunes (compiler merge passes)
 UNSET = "__unset__"  # absent-knob sentinel: "do not write this knob"
+
+
+def _insert_at(src, pos):
+    """`pos` walked back over whitespace and one trailing comma.
+
+    Every insertion point here is "just before the closing `}` or `)`", computed
+    as `end_offset - 1`. A collection written with a trailing comma already has
+    one there, so the insertion produced `..., 1,\n, "knob": 4}` and
+    `pypto.loop(4,, unroll_list=[...])` -- both SyntaxError, and a syntax error
+    carries no pypto ErrCode, so `driver.error_signature` returns "" and nothing
+    is carried: every trial that sets that knob pays a full evaluation for the
+    same broken rewrite.
+    """
+    i = pos
+    while i > 0 and src[i - 1] in " \t\r\n":
+        i -= 1
+    if i > 0 and src[i - 1] == ",":
+        i -= 1
+    return i
 
 
 def _func_name(func):
@@ -113,7 +136,7 @@ def _int_list(n):
     )
 
 
-def _line_starts(src):
+def line_starts(src):
     """(lineno, col) -> absolute offset. Tile-call lines are ASCII, so char==byte offset holds."""
     starts = [0]
     for line in src.splitlines(keepends=True):
@@ -228,14 +251,27 @@ def _tile_kind(node, name):
     NOT be swept, because rewriting it with numbers would change what the kernel
     computes. Those become `*_dyn`.
     """
+    # A call carrying KEYWORDS is not tunable at any arity. `_site_text` replaces
+    # the whole call span from what the six- or four-knob reader parsed out of
+    # `node.args`, so a keyword is not preserved -- it would be read as another
+    # positional and written back as one. A directive given two tile extents
+    # and a named buffer count comes back as three positional extents, which
+    # both loses the keyword and hands BO a buffer count to sweep as if it
+    # were a third tile dimension. Still parses, still compiles, silent.
+    if node.keywords:
+        return "cube_dyn" if name == "set_cube_tile_shapes" else "vec_dyn"
     if name == "set_cube_tile_shapes":
-        # Tunable only in the standard m/k/n form: exactly three axis lists, each
+        # Tunable only in the standard m/k/n form: EXACTLY three axis lists, each
         # a 2-element [L0, L1] integer pair. A 3-element k axis ([kL0, kAL1,
         # kBL1]) or a split_k variant is left as cube_dyn rather than mis-parsed
         # -- the six-knob reader assumes two values per axis.
-        lit = len(node.args) >= 3 and all(
+        #
+        # Exactly three, not three-or-more: this inspected `node.args[:3]` and
+        # `_site_text` then rewrote the whole call from those three, so a fourth
+        # positional argument was silently deleted from the kernel.
+        lit = len(node.args) == 3 and all(
             isinstance(a, ast.List) and len(a.elts) == 2 and _int_list(a)
-            for a in node.args[:3]
+            for a in node.args
         )
         return "cube" if lit else "cube_dyn"
     if 1 <= len(node.args) <= MAX_VEC_ARITY and all(_int_const(a) for a in node.args):
@@ -269,7 +305,7 @@ def _collect_tile(node, name, ctx, found):
     )
 
 
-def _collect_runtime_options(kw, off, found):
+def _collect_runtime_options(kw, off, src, found):
     present = set()
     for k, v in zip(kw.value.keys, kw.value.values):
         if not (isinstance(k, ast.Constant) and k.value in _RUNTIME_KNOBS):
@@ -283,13 +319,15 @@ def _collect_runtime_options(kw, off, found):
                     k.value,
                 )
             )
-    insert = off(kw.value.end_lineno, kw.value.end_col_offset) - 1  # just before "}"
+    insert = _insert_at(
+        src, off(kw.value.end_lineno, kw.value.end_col_offset) - 1
+    )  # just before "}"
     for knob in _RUNTIME_KNOBS:
         if knob not in present:
             found.g_absent.append((insert, knob))
 
 
-def _collect_pass_options(kw, off, found):
+def _collect_pass_options(kw, off, src, found):
     present = set()
     for kk, vv in zip(kw.value.keys, kw.value.values):
         if not (isinstance(kk, ast.Constant) and kk.value in _PASS_KNOBS):
@@ -314,7 +352,7 @@ def _collect_pass_options(kw, off, found):
             )
         else:
             found.p_named.add(kk.value)
-    insert = off(kw.value.end_lineno, kw.value.end_col_offset) - 1
+    insert = _insert_at(src, off(kw.value.end_lineno, kw.value.end_col_offset) - 1)
     for knob in _PASS_KNOBS:
         if knob not in present:
             found.p_in_dict.append((insert, knob))
@@ -331,7 +369,7 @@ def _is_unroll_list(kw):
     )
 
 
-def _collect_keywords(node, off, trip, found):
+def _collect_keywords(node, off, src, trip, found):
     """(has_pass_options, loop_has_unroll) for one call's keywords."""
     has_pass_options = loop_has_unroll = False
     for kw in node.keywords:
@@ -342,9 +380,9 @@ def _collect_keywords(node, off, trip, found):
             and isinstance(kw.value, ast.Dict)
             and kw.value.keys
         ):
-            _collect_runtime_options(kw, off, found)
+            _collect_runtime_options(kw, off, src, found)
         elif kw.arg == "pass_options" and isinstance(kw.value, ast.Dict):
-            _collect_pass_options(kw, off, found)
+            _collect_pass_options(kw, off, src, found)
             has_pass_options = True
         # loop unroll schedule: the unroll_list keyword on a pypto loop
         elif _is_unroll_list(kw):
@@ -369,7 +407,7 @@ def _literal_trip(node):
 
 def _walk_calls(tree, ctx):
     """One pass over every call, gathering everything a rewrite could act on."""
-    off = ctx[0]
+    off, src = ctx[0], ctx[1]
     found = _Found()
     for node in ast.walk(tree):
         if not isinstance(node, ast.Call):
@@ -379,10 +417,14 @@ def _walk_calls(tree, ctx):
             _collect_tile(node, name, ctx, found)
         is_loop = name == "loop"
         trip = _literal_trip(node) if is_loop else None
-        has_pass_options, loop_has_unroll = _collect_keywords(node, off, trip, found)
+        has_pass_options, loop_has_unroll = _collect_keywords(
+            node, off, src, trip, found
+        )
         takes_arguments = bool(node.args or node.keywords)
         if is_loop and not loop_has_unroll and takes_arguments:
-            found.u_absent.append((off(node.end_lineno, node.end_col_offset) - 1, trip))
+            found.u_absent.append(
+                (_insert_at(src, off(node.end_lineno, node.end_col_offset) - 1), trip)
+            )
         if name in _JIT_NAMES and not has_pass_options and node.keywords:
             # The whole kwarg has to be written, not just a key. Every recorded
             # kernel is in this state: `@jit(runtime_options={...})` and nothing
@@ -390,7 +432,10 @@ def _walk_calls(tree, ctx):
             # these passes.
             for knob in _PASS_KNOBS:
                 found.p_no_kwarg.append(
-                    (off(node.end_lineno, node.end_col_offset) - 1, knob)
+                    (
+                        _insert_at(src, off(node.end_lineno, node.end_col_offset) - 1),
+                        knob,
+                    )
                 )
     return found
 
@@ -519,13 +564,37 @@ def _const_sites(src):
     return sites
 
 
+def _cfg_sites(src):
+    """Per-case config-dict entries, for a kernel written as a FACTORY.
+
+    Selection is `config_sites`', and is default-deny: nothing at all unless the
+    kernel carries a `panko:tune` marker naming which case is being optimised.
+    A present knob gets the span of its integer literal; an absent one gets a
+    zero-width insertion point and the ", " that will precede it -- the same
+    convention `_global_sites` uses, so the kernel as written stays a reachable
+    point and the core can also try setting the knob.
+    """
+    return [
+        Site(
+            id=f"cfg:{k.name}",
+            kind="cfg",
+            ordinal=i,
+            func_text="" if k.present else ", ",
+            start=k.start,
+            end=k.end,
+            slot=k.slot,
+        )
+        for i, (_n, k) in enumerate(sorted(config_sites.admitted(src).items()))
+    ]
+
+
 def discover_sites(src):
     """Return all tile-call sites (cube / vec / vec3) in source order, each with a stable id.
 
     Raises SyntaxError if src doesn't parse (a useful guard before spending an evaluation).
     """
     tree = ast.parse(src)
-    off = _line_starts(src)
+    off = line_starts(src)
     # Byte spans of every loop body. Both kinds count: `for idx in pypto.loop(...)`
     # and the plain `for n_off in range(0, N, NC)` a model writes to chunk an axis --
     # the second is a Python loop unrolled at trace time, and a tile inside it still
@@ -549,6 +618,7 @@ def discover_sites(src):
         + _global_sites(found)
         + _unroll_sites(found)
         + _const_sites(src)
+        + _cfg_sites(src)
     )
 
 
@@ -670,6 +740,19 @@ def _global_text(s, cfg, absent):
     return f'{s.func_text}"{space.global_knob(s.id)}": {v}' if absent else str(v)
 
 
+def _cfg_text(s, cfg, absent):
+    """A per-case knob, as the value or as the whole keyword.
+
+    UNSET leaves it out, which is the kernel as written: the factory's own
+    default then applies, exactly as it does for a case the dict does not
+    mention.
+    """
+    v = cfg["value"]
+    if v == UNSET:
+        return _SKIP
+    return f"{s.func_text}{s.id.split(':', 1)[1]}={v}" if absent else str(v)
+
+
 def _unroll_text(s, cfg, absent):
     """An unroll list, as the list literal or as the whole keyword."""
     v = cfg["value"]
@@ -694,6 +777,8 @@ def _site_text(s, cfg, kwarg_inserts):
         return _global_text(s, cfg, absent)
     if s.kind == "const":
         return str(cfg["value"])
+    if s.kind == "cfg":
+        return _cfg_text(s, cfg, absent)
     return _unroll_text(s, cfg, absent)
 
 
@@ -746,7 +831,7 @@ def _read_site(kind, nums):
             "nL0": nums[4],
             "nL1": nums[5],
         }
-    if kind in ("global", "const"):
+    if kind in ("global", "const", "cfg"):
         return {"value": nums[0]}
     if kind == "pass":
         # The span is the inner dict `{-1: N}`, so the first number is the -1 key

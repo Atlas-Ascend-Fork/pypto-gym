@@ -24,7 +24,7 @@ frozen evaluator E(x) (golden compare), never here.
 """
 
 from dataclasses import dataclass
-from typing import Any, Optional
+from typing import Any, NamedTuple, Optional
 
 # Discrete domains (ordinal). TPE handles categoricals well.
 #
@@ -233,18 +233,23 @@ class HW:
     dtype_bytes: int = 4  # L1 staging is fp16/bf16 but estimate conservatively in fp32
     head_dim: int = 128  # bounds the vector tail tile
     n_l1: Optional[int] = None  # L1 N-dim tile; None => no n_l0/n_l1 constraint
-    calibrated: bool = (
-        True  # False => skip op-specific L1/subdivision checks (keep alignment
-    )
-    #          only) so an un-calibrated op still explores via the gate
+    # False => skip the op-specific L1/subdivision checks (alignment is kept)
+    # so an un-calibrated op still explores via the gate.
+    calibrated: bool = True
     # The unified-buffer capacity rule. Deliberately NOT behind `calibrated`:
     # `calibrated` gates the checks that need an op's DESIGN (m_l1/k_l1/n_l1), and
     # these two need only the program and the chip. Leaving the footprint bound
     # switched off is what let a 16384-element tile reach the device against a
     # buffer that holds about 12288.
     ub_budget_kb: int = 192
-    n_live_tiles: int = 0  # 0 => unknown, rule off. Supplied by the optimizer
-    #      as a FACT about residency, never as a bound.
+    # 0 => unknown, rule off. Supplied by the optimizer as a FACT about
+    # residency, never as a bound.
+    n_live_tiles: int = 0
+    # {site_id: element width} and {site_id: the trailing extent the kernel is
+    # ALREADY running}, both from the derived domain. Only the trailing-alignment
+    # rule reads them, and only to ADMIT -- see `vec_feasible`.
+    vec_dtype_bytes: Any = None
+    vec_trailing_ok: Any = None
     # The three L0 matmul-operand buffers. Unlike m_l1/k_l1/n_l1 these are FIXED
     # HARDWARE, not per-kernel, so they are checked regardless of `calibrated`:
     # the L0 tile the kernel sets must fit its buffer no matter what the L1
@@ -320,6 +325,31 @@ def admit(base, val):
 
 
 CONST_SCALES = [1 / 8, 1 / 4, 1 / 2, 1, 2, 4, 8]
+
+
+def cfg_domain(slot, anchor):
+    """Ladder for a per-case config knob, chosen by where the knob LANDS.
+
+    The point of tracing the slot is here: `mm_l0` stands in for a cube m-axis
+    L0 and gets the cube ladder, `vec_rows` stands in for the leading vector
+    dimension and gets the vector one. Without it every knob would share one
+    generic ladder, the footprint bound would have nothing to compute, and the
+    lever would be running but not reasoning -- which is the state such a
+    kernel is left in when its knobs are swept by hand.
+
+    A knob that reaches the kernel by another route (a runtime option) has no
+    slot and is scaled off its incumbent, like a `const`.
+    """
+    if not slot:
+        return const_domain(anchor)
+    if slot[0] == "cube":
+        # Both levels from the cube ladder. The L1 multiplier trick does not
+        # apply: the two levels are separate dict entries here and only one of
+        # them may even be tunable, so the relation is left to the static gate
+        # rather than made true by construction.
+        return admit(CUBE_CHOICES, anchor)
+    base = VEC_TRAILING_CHOICES if slot[1] else VEC_CHOICES
+    return admit(base, anchor)
 
 
 def const_domain(anchor):
@@ -514,6 +544,10 @@ def _draw_site(trial, site, r, ctx):
         return _draw_scalar(trial, r, a, const_domain(a.get("value")))
     if site.kind == "unroll":
         return _draw_scalar(trial, r, a, unroll_domain(getattr(site, "trip", None)))
+    if site.kind == "cfg":
+        return _draw_scalar(
+            trial, r, a, cfg_domain(getattr(site, "slot", None), a.get("value"))
+        )
     return _draw_vec(trial, r, a, ctx)
 
 
@@ -719,7 +753,7 @@ def _cube_feasible(c, hw):
     return True, ""
 
 
-def _vec_feasible(v, hw):
+def vec_feasible(v, hw, sid=None):
     """Alignment on the contiguous (trailing) dimension, whatever the arity.
 
     The leading dimensions are row counts and carry no alignment rule; only the
@@ -737,10 +771,39 @@ def _vec_feasible(v, hw):
     # kernel is ALREADY running. Rejecting it there threw away the warm start
     # on a kernel whose reduction-output legs run and pass golden with a
     # trailing extent of 1 -- and with no feasible observation TPE had nothing
-    # to model, so the block returned best_config: null after 16 draws and 0
-    # device trials. A rule that rejects a running kernel is not describing the
+    # to model, so the block returned best_config: null having measured
+    # nothing. A rule that rejects a running kernel is not describing the
     # hardware.
-    if trail != 1 and trail % 16 != 0:
+    # The hardware constraint is 32 BYTES, not 16 elements. Sixteen elements is
+    # 32 B at two bytes each and at nothing else: an fp32 leg is aligned at 8
+    # (8 x 4 B = 32 B), which the kernels write and comment as such
+    # ("[128,1] 尾轴 4B 按 32B=8 FP32 元素配置"), and this rule rejected it. That
+    # is the defect the footprint rule had one function over, in the same shape:
+    # a quantity in elements compared against a constant that assumes one dtype.
+    #
+    # The three admissions below only ever ADD to what `trail % 16 == 0` allows.
+    # Tightening is the direction that would need device evidence -- an int8 leg
+    # needs 32 elements for the same 32 B, and nothing here has measured that --
+    # so a candidate that passes today still passes.
+    db = (hw.vec_dtype_bytes or {}).get(sid) if sid else None
+    running = (hw.vec_trailing_ok or {}).get(sid) if sid else None
+    aligned = (
+        trail % 16 == 0
+        # A trailing extent of 1 is a degenerate reduction-output leg, not a
+        # vectorised axis: there is nothing to align when the axis is one
+        # element wide.
+        or trail == 1
+        # The width the site's own statements declare, against the real 32 B.
+        or (db and (trail * db) % 32 == 0)
+        # And whatever the kernel is running. `_running_live_caps` takes the
+        # same position on the footprint rule, for the same reason the comment
+        # above gives: a rule that rejects a running kernel is not describing
+        # the hardware. Rejecting the incumbent costs more than a bad draw --
+        # it is the warm start, so TPE has nothing to model and the block
+        # returns best_config: null having measured nothing.
+        or (running is not None and trail == running)
+    )
+    if not aligned:
         return False, f"trailing vec dim {trail} not 16-aligned"
     # The UB footprint bound is NOT here. It is per-vec-site and needs the
     # residency `domain.vec_residency` reads from the source, so it lives in
@@ -773,7 +836,7 @@ def static_feasible(site_configs, hw):
         elif "mL0" in c:
             ok, reason = _cube_feasible(c, h)
         else:
-            ok, reason = _vec_feasible(c, h)
+            ok, reason = vec_feasible(c, h, sid)
         if not ok:
             return False, f"{sid}: {reason}"
     return True, ""
@@ -782,3 +845,127 @@ def static_feasible(site_configs, hw):
 # No hardcoded per-op envelopes live here — BO is operator-agnostic. Callers pass the envelope from
 # the op's DESIGN (BOINIT --m_l1/--k_l1/...) or omit it (HW(calibrated=False), the default). Recording
 # a specific op's numbers in this general module is exactly the coupling we avoid.
+
+
+# ------------------------------------------------------------------------------- repair
+# A draw the static rules reject is almost always TOO BIG: nearly every static
+# rejection inside a block is a buffer overflow -- the UB footprint, L0A, L0B,
+# L0C or L1 -- and the rest are the divisibility and alignment rules this
+# module now satisfies by construction. Rejecting such a draw hands TPE a 1e12
+# cliff and the block one fewer measurement, and rejections outnumber
+# measurements. Shrinking the offending dimension one rung at a time until the
+# draw fits turns every such draw into a measurement at the nearest feasible
+# point, and TPE is told that value for the point it drew (Baldwinian repair):
+# the infeasible region reads as a plateau at its boundary rather than a wall,
+# which is what lets the surrogate learn that bigger stops helping.
+#
+# One rung at a time and stop at the first feasible point, NOT jump to the
+# largest legal tile: winning tiles sit on standard sizes well inside the
+# buffers, so the draw's own neighbourhood is the thing to keep.
+REPAIR_MAX_STEPS = 64
+
+_CUBE_FIELDS_FOR = {"L0A": ("mL0", "kL0"), "L0B": ("kL0", "nL0"), "L0C": ("mL0", "nL0")}
+
+
+def _lower(ladder, v):
+    below = [x for x in ladder if x < v]
+    return max(below) if below else None
+
+
+def _cube_moves(c, reason, anchor):
+    """Candidate shrinks of one cube site for `reason`: (field, new site config)."""
+    moves = []
+    if reason.startswith("L1 tile"):
+        for ax in ("m", "k", "n"):
+            l0, l1 = c.get(f"{ax}L0"), c.get(f"{ax}L1")
+            divisible = bool(l0 and l1 and l1 % l0 == 0)
+            if divisible and l1 > l0:
+                moves.append((l1, dict(c, **{f"{ax}L1": l1 - l0})))
+        if moves:
+            return moves
+        fields = ("kL0", "mL0", "nL0")
+    else:
+        fields = next(
+            (f for k, f in _CUBE_FIELDS_FOR.items() if reason.startswith(k)),
+            ("mL0", "kL0"),
+        )
+    for f in fields:
+        v = c.get(f)
+        nv = _lower(admit(CUBE_CHOICES, (anchor or {}).get(f)), v) if v else None
+        if nv is None:
+            continue
+        ax = f[0]
+        mult = (c[f"{ax}L1"] // v) if c.get(f"{ax}L1") and c[f"{ax}L1"] % v == 0 else 1
+        moves.append((v, dict(c, **{f: nv, f"{ax}L1": nv * mult})))
+    return moves
+
+
+def _vec_moves(sid, c, reason, anchor, domain):
+    fields = vec_fields(c)
+    if "head_dim" in reason:
+        fields = fields[-1:]
+    moves = []
+    for f in fields:
+        v = c.get(f)
+        nv = _lower(vec_domain(sid, f, vec_fields(c), anchor, domain), v) if v else None
+        if nv is not None:
+            moves.append((v, dict(c, **{f: nv}), f))
+    return moves
+
+
+class RepairContext(NamedTuple):
+    """What a repair consults while shrinking: the anchor, the derived domain, ties, step limit."""
+
+    anchor: Any = None
+    domain: Any = None
+    tie: Any = None
+    max_steps: int = REPAIR_MAX_STEPS
+
+
+def _tie_d0(cur, sid, new_site, tie):
+    """Carry one site's chosen leading tile dimension to the sites tied to it."""
+    for grp in tie or []:
+        if sid not in grp:
+            continue
+        for g in grp:
+            if g in cur and "d0" in cur[g]:
+                cur[g]["d0"] = new_site["d0"]
+
+
+def repair(cfg, check, ctx=RepairContext()):
+    """(repaired config, steps) or (None, steps) when no shrink helps.
+
+    `check(cfg) -> (ok, reason)` with `reason` starting "<site_id>: ...", the
+    form `static_feasible`, `domain.verify` and the driver's ceiling gate all
+    use. Only capacity rules are repaired: any other reason (alignment, the
+    L1/L0 relation, a rule this function does not know) returns None and the
+    draw is rejected as before.
+    """
+    cur = {k: dict(v) for k, v in cfg.items()}
+    for step in range(ctx.max_steps + 1):
+        ok, reason = check(cur)
+        if ok:
+            return cur, step
+        sid, _, why = (reason or "").partition(": ")
+        if sid not in cur or not _is_capacity(why):
+            return None, step
+        c, a = cur[sid], (ctx.anchor or {}).get(sid) or {}
+        if "mL0" in c:
+            moves = [(v, nc, None) for v, nc in _cube_moves(c, why, a)]
+        else:
+            moves = _vec_moves(sid, c, why, a, ctx.domain)
+        if not moves:
+            return None, step
+        _, new_site, field = max(moves, key=lambda m: m[0])
+        cur[sid] = new_site
+        if field == "d0":
+            _tie_d0(cur, sid, new_site, ctx.tie)
+    return None, ctx.max_steps
+
+
+def _is_capacity(why):
+    return (
+        why.startswith(("L0A", "L0B", "L0C", "L1 tile", "largest tile"))
+        or " UB" in why
+        or "head_dim" in why
+    )

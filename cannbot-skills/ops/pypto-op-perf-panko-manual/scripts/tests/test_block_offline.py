@@ -87,13 +87,15 @@ class BlockOfflineTest(unittest.TestCase):
         """
         result, _ = self._run()
         measured = [
-            h["latency"]
+            h["objective_us"]
             for h in result["history"]
-            if h.get("status") == "ok" and h.get("latency") is not None
+            if h.get("status") == "ok" and h.get("objective_us") is not None
         ]
         self.assertTrue(measured)
-        self.assertEqual(result["best_latency"], min(measured + [1000.0]))
-        self.assertEqual(result["best_was_incumbent"], result["best_latency"] == 1000.0)
+        self.assertEqual(result["best_objective_us"], min(measured + [1000.0]))
+        self.assertEqual(
+            result["best_was_incumbent"], result["best_objective_us"] == 1000.0
+        )
 
     def test_it_stops_on_stagnation_rather_than_on_the_budget(self):
         """A flat objective improves on nothing, so the block closes at

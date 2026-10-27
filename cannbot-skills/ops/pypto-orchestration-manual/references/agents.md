@@ -239,6 +239,15 @@ neither reads the skill nor runs the harness.
   on `best`, then `complete_stage(7)`.
 - **The coder needs no knowledge of PANKO.** It receives one fully specified change
   and applies it once, exactly as in any other dispatch.
+- **Two modes, and `config.objectives` is the whole of the switch.** The default is
+  `["aicore_e2e"]` — one objective, the single-objective search, which is what Stage 7
+  has always run. A user who also wants the **workspace** optimised gets
+  `["aicore_e2e", "workspace"]` passed through in `config`, and that is the
+  multi-objective search (Pareto front, hypervolume). The orchestrator relays the
+  user's choice and adds nothing: it does not open a front the user did not ask for.
+  A byte-valued objective needs a ceiling, so a multi-objective run whose SKU ini
+  carries no `memory_size` is refused at `init` (`hv_reference_unavailable`) with an
+  `ask_user` — relay it, do not choose. A single-objective run needs no ceiling.
 - **Gate:** Stage 6 is `complete_stage(6)` before the first dispatch (trusted, not
   re-confirmed). Lint gate **OL63** additionally requires `progress.stop_reason` in
   `search_state.json` to be non-empty before `complete_stage(7)` — the orchestrator

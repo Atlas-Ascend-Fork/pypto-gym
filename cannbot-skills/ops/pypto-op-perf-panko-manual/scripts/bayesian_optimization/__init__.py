@@ -14,6 +14,7 @@ Imported as a package, so a call site reads `bayesian.space.HW` rather than a
     import bayesian_optimization as bayesian
 
     apply      AST discovery of tile call sites, byte-exact argument rewriting
+    config_sites  per-case config-table entries, for a kernel written as a factory
     normalize  is a proposed normalisation admissible? (static, INIT)
     space      discrete domains and the static feasibility gate
     lever      ask / tell over one action's tile sites, persisted in search_state
@@ -38,6 +39,7 @@ mechanism, at the per-action lever's timing.
 from . import (
     apply,  # noqa: F401
     block,  # noqa: F401
+    config_sites,  # noqa: F401
     const,  # noqa: F401
     domain,  # noqa: F401
     driver,  # noqa: F401

@@ -16,7 +16,7 @@ only two.
                                              recorded in ERR_CONFIG_ALIGNMENT)
     footprint x dtype x live tiles <= UB    (here)
 
-Neither was enforced. `_vec_feasible` checked the alignment and stopped; the
+Neither was enforced. `vec_feasible` checked the alignment and stopped; the
 harness constructed `HW(calibrated=False)`, which switched off even the checks
 that existed. A ceiling seed larger than the buffer can hold at the kernel's
 live-tile count then reaches the device, returns s=0, and records a PENALTY at
@@ -68,6 +68,35 @@ try:
     import feasibility  # noqa: E402
 except Exception:  # pragma: no cover
     feasibility = None
+
+from . import apply  # noqa: E402
+
+
+# One table, shared with `feasibility`, which gets it from `pypto.bytes_of` when
+# pypto can be imported and from its own literal fallback otherwise. Resolved
+# LAZILY: `feasibility.dtype_bytes_table()` loads the runtime's shared objects on
+# its first call, and this module is imported by an offline test suite that must
+# not pay for that. The fallback here exists only so the module keeps parsing
+# when the extractor is unavailable.
+_DTYPE_FALLBACK = {
+    "DT_FP32": 4,
+    "DT_FLOAT": 4,
+    "DT_FP16": 2,
+    "DT_BF16": 2,
+    "DT_INT8": 1,
+    "DT_UINT8": 1,
+    "DT_INT32": 4,
+}
+
+
+def dtype_bytes_table():
+    """`{dtype name: width}`, from `feasibility` when it can be reached."""
+    table = getattr(feasibility, "dtype_bytes_table", None)
+    if callable(table):
+        got = table()
+        if got:
+            return got
+    return _DTYPE_FALLBACK
 
 
 # Unsupplied means the capacity rule is OFF, not that residency is two. A guess
@@ -181,24 +210,43 @@ def _is_vector_op(rhs, tiles, roots=frozenset({"pypto"})):
     return False
 
 
-def _rhs_tensor_operands(node):
-    """Distinct tensor NAMES read on the right-hand side of a vector op, + result.
+def _rhs_tensor_operands(node, tiles=None):
+    """Distinct TILE names read on the right-hand side of a vector op, + result.
 
     `(operands + 1)` is the `tensor_count` the design docs give: 2 for a unary op,
     3 for a binary one. Module refs (`pypto` in `pypto.cast`) and `pypto.DT_*`
     attributes are not operands, so `sigmoid(gate)` is one operand and
     `gate * sigmoid` is two. Called only for statements `_is_vector_op` has
     already accepted.
+
+    `tiles` is the set of names known to hold a tile-shaped tensor -- the same
+    set `_is_vector_op` uses, and for the same reason. Without it this counted
+    every `Name` on the right-hand side, so a scalar passed BY NAME was charged a
+    tile: `pypto.muls(a, SCALE)` came out at 3 live and `pypto.muls(a, 3)` at 2,
+    for identical programs. Loop indices, extents and tile constants are
+    routinely named, so the inflated count was the common case -- and it halves
+    the site's UB budget in `verify` and halves its ladder in `vec_ladder_cap`,
+    which is the narrowing this module's header says leaves no trace anywhere in
+    the run. `_is_vector_op`'s own docstring already states the rule: over-counting
+    residency is the dangerous direction.
+
+    `tiles=None` keeps the old behaviour for a caller that has no tile set.
     """
-    bases = {
-        a.value.id
-        for a in ast.walk(node)
-        if isinstance(a, ast.Attribute) and isinstance(a.value, ast.Name)
-    }
-    names = {n.id for n in ast.walk(node) if isinstance(n, ast.Name)}
-    return len(names - bases)
+    if tiles is None:
+        bases = {
+            a.value.id
+            for a in ast.walk(node)
+            if isinstance(a, ast.Attribute) and isinstance(a.value, ast.Name)
+        }
+        names = {n.id for n in ast.walk(node) if isinstance(n, ast.Name)}
+        return len(names - bases)
+    return len(
+        {n.id for n in ast.walk(node) if isinstance(n, ast.Name) and n.id in tiles}
+    )
 
 
+# ast.walk does not preserve statement order across nesting, so collect the
+# setters and assignments with their positions and sort once.
 def _ordered_statements(scopes):
     """The tile setters and the assignments, in source order.
 
@@ -225,63 +273,221 @@ def _assigned_names(node):
     return out
 
 
-def vec_residency(src):
-    """Peak vec-tile residency per `set_vec_tile_shapes` site, from the source.
+def _called_names(fn):
+    """Plain function names this function calls: `helper(...)`, not `pypto.op(...)`."""
+    out = set()
+    for n in ast.walk(fn):
+        if isinstance(n, ast.Call) and isinstance(n.func, ast.Name):
+            out.add(n.func.id)
+    return out
 
-    Returns `{vec_site_id: n}` where n is the largest `operands + 1` over the
-    elementwise ops the site governs -- the number of tile-shaped tensors the UB
-    must hold at once for that directive. This replaces the single `--live-tiles`
-    number the optimizer used to supply by judgement, which drifted between 4, 6
-    and 8 across runs of the same kernel and set the search space with it.
 
-    Site ids match `apply`: `set_vec_tile_shapes` calls are numbered vec#0,
-    vec#1, ... in source order. A directive governs the elementwise statements
-    that follow it until the next `set_vec_tile_shapes`; matmul / view / loop
-    statements in between belong to the cube directive or to control flow and are
-    not counted (see `_NON_VEC_CALLS`).
+def _is_nested_def(fn, i, spans):
+    """Whether this def's line span lies inside another def's span."""
+    for j, (a, b) in enumerate(spans):
+        if j != i and a <= fn.lineno and fn.end_lineno <= b:
+            return True
+    return False
 
-    Scoped to the KERNEL. This walked the whole module, so statements in the
-    host-side torch wrapper -- `torch.cat`, `torch.add`, an `empty_like` feeding
-    a BinOp -- were charged to whichever tile directive happened to precede them
-    in the file. They hold no unified buffer, so the estimate came out high, the
-    per-site cap came out small, and legal tiles were rejected before they
-    reached the device. It also meant editing the wrapper moved the kernel's
-    search space. A module with no jit function is not a PyPTO kernel at all, so
-    that case keeps the whole-module walk rather than silently returning nothing.
+
+def _kernel_scopes(tree):
+    """The functions whose body is kernel code, in source order.
+
+    The `@jit` def is the entry, but it is routinely NOT where the tiles are. The
+    generated node files put the work in plain helpers and call them from inside
+    the single jit body -- most of a node's `set_vec_tile_shapes` calls can sit
+    in a helper and only a few in the jit function -- and the library kernels do
+    the same: a jit wrapper around a helper that holds every site.
+
+    Restricting the walk to jit defs alone therefore did not exclude the torch
+    wrapper; it excluded the kernel. On that node it saw four sites of eleven
+    and numbered them vec#0..3, which are apply's vec#7..10 -- so `verify` read
+    one site's residency under another site's name, and the seven it never saw
+    fell back to a residency of one.
+
+    So the scope is the jit defs plus every module-level function reachable from
+    them by call name. The torch wrapper stays out because nothing in a kernel
+    calls it -- the edge runs the other way.
+    """
+    funcs = {}
+    for fn in ast.walk(tree):
+        if isinstance(fn, (ast.FunctionDef, ast.AsyncFunctionDef)):
+            funcs.setdefault(fn.name, fn)
+    roots = [fn for fn in funcs.values() if _is_jit(fn)]
+    if not roots:
+        return [tree]
+    seen, stack, out = set(), list(roots), []
+    while stack:
+        fn = stack.pop()
+        if fn.name in seen:
+            continue
+        seen.add(fn.name)
+        out.append(fn)
+        for name in _called_names(fn):
+            callee = funcs.get(name)
+            if callee is not None and callee.name not in seen:
+                stack.append(callee)
+    # A def nested inside another selected def is already walked with its parent;
+    # keeping it as its own scope would count its statements twice.
+    spans = [(fn.lineno, fn.end_lineno) for fn in out]
+    out = [fn for i, fn in enumerate(out) if not _is_nested_def(fn, i, spans)]
+    out.sort(key=lambda fn: fn.lineno)
+    return out
+
+
+def _vec_site_ids(src):
+    """{byte offset of a `set_vec_tile_shapes` call: the id `apply` gives it}.
+
+    The ids have to come from `apply`, not from a second count here. `apply`
+    numbers `vec` and `vec_dyn` on SEPARATE counters -- a dynamic site
+    (`set_vec_tile_shapes(v1_tile[0], v1_tile[1])`) is discovered but never
+    rewritten, so it does not consume a `vec#` ordinal -- while a local count in
+    source order does not skip it. On any kernel carrying a `vec_dyn` site the
+    two numberings disagree from that point on.
+    """
+    try:
+        sites = apply.discover_sites(src)
+    except SyntaxError:
+        return {}
+    return {s.start: s.id for s in sites if s.kind.startswith("vec")}
+
+
+def _dt_width(node, env):
+    """The width a `DT_*` expression names, or None. `env` resolves `dtype = DT_X`."""
+    table = dtype_bytes_table()
+    if isinstance(node, ast.Attribute) and node.attr in table:
+        return table[node.attr]
+    if isinstance(node, ast.Name):
+        if node.id in table:
+            return table[node.id]
+        return env.get(node.id)
+    return None
+
+
+def _declared_width(rhs, env, widths):
+    """The element width this right-hand side produces, or None when unreadable.
+
+    Two readings, and no third:
+      * an explicit dtype argument -- `matmul(a, b, pypto.DT_FP32)`,
+        `cast(x, pypto.DT_BF16)`, `view(y, dtype=pypto.DT_FP32)`. This is what
+        carries the answer through an antiquant kernel: the INT8 cache is read
+        once and everything downstream of the matmul is the fp32 the matmul was
+        asked for.
+      * failing that, the widest operand already known -- an elementwise op
+        returns what it was given.
+    A name whose width no statement declares stays absent rather than guessed.
+    """
+    if isinstance(rhs, ast.Call):
+        for a in list(rhs.args) + [k.value for k in rhs.keywords]:
+            w = _dt_width(a, env)
+            if w:
+                return w
+    operands = [
+        widths.get(n.id)
+        for n in ast.walk(rhs)
+        if isinstance(n, ast.Name) and n.id in widths
+    ]
+    return max(operands) if operands else None
+
+
+def _vec_widths_seen(rhs, produced, widths):
+    """The element widths one vector statement's result and operands declare."""
+    seen = [produced] if produced else []
+    for n in ast.walk(rhs):
+        if isinstance(n, ast.Name) and n.id in widths:
+            seen.append(widths.get(n.id))
+    return seen
+
+
+def _vec_scope_walk(scope, ids, off, roots, res):
+    """Fold one kernel scope's statements into the per-site residency map."""
+    active = None
+    tiles = set()  # names known to hold a tile-shaped tensor
+    widths = {}  # names whose element width the source declares
+    env = {}  # names bound to a DT_* constant
+    for _, _, kind, node in _ordered_statements([scope]):
+        if kind == "setter":
+            active = ids.get(off(node.lineno, node.col_offset))
+            if active is not None:
+                res.setdefault(active, {"live": 1, "dtype_bytes": None})
+            continue
+        rhs = node.value
+        w = _dt_width(rhs, env)
+        if w:
+            for name in _assigned_names(node):
+                env[name] = w
+            continue
+        # A statement contributes to residency only if it is a vector op. It
+        # contributes a tile NAME regardless, so a later BinOp can tell a tile
+        # operand from a loop scalar.
+        is_vec = active is not None and _is_vector_op(rhs, tiles, roots)
+        produced = _declared_width(rhs, env, widths) if _produces_a_tile(rhs) else None
+        if is_vec:
+            cell = res[active]
+            cell["live"] = max(cell["live"], _rhs_tensor_operands(rhs, tiles) + 1)
+            seen = _vec_widths_seen(rhs, produced, widths)
+            if seen:
+                cell["dtype_bytes"] = max(cell["dtype_bytes"] or 0, max(seen))
+        if is_vec or _produces_a_tile(rhs):
+            names = _assigned_names(node)
+            tiles |= names
+            if produced:
+                widths.update(dict.fromkeys(names, produced))
+    return res
+
+
+def vec_sites(src):
+    """Per-`set_vec_tile_shapes` site: how many tiles it holds and how wide they are.
+
+    Returns `{site_id: {"live": int, "dtype_bytes": int or None}}`, keyed by the
+    ids `apply` assigns.
+
+    `live` is the largest `operands + 1` over the elementwise ops the site
+    governs -- the number of tile-shaped tensors the UB must hold at once for
+    that directive. This replaces the single `--live-tiles` number the optimizer
+    used to supply by judgement, which drifted between 4, 6 and 8 across runs of
+    the same kernel and set the search space with it.
+
+    `dtype_bytes` is the widest element the site's own statements are declared to
+    work on, and it is None when the source does not say. It exists because the
+    single kernel-wide number it replaces was the MINIMUM width appearing
+    anywhere in the file: an INT8 KV cache sets the currency to 1 byte for a
+    softmax site whose every operand is the fp32 the matmul above it produced,
+    and the 192 KB UB gate then passes tiles several times over the buffer.
+
+    A directive governs the elementwise statements that follow it until the next
+    `set_vec_tile_shapes`, and the walk restarts at every function boundary: a
+    directive does not reach across a `def` in any form this module can read, and
+    under-counting residency is the safe direction (see `_is_vector_op`).
     """
     try:
         tree = ast.parse(src)
     except SyntaxError:
         return {}
     roots = pypto_roots(tree)
-    kernels = [
-        fn
-        for fn in ast.walk(tree)
-        if isinstance(fn, (ast.FunctionDef, ast.AsyncFunctionDef)) and _is_jit(fn)
-    ]
-    scopes = kernels or [tree]
-    res, ordinal, active = {}, -1, None
-    tiles = set()  # names known to hold a tile-shaped tensor
-    # ast.walk does not preserve statement order across nesting, so collect the
-    # setters and assignments with their positions and sort once.
-    for _, _, kind, node in _ordered_statements(scopes):
-        if kind == "setter":
-            ordinal += 1
-            active = f"vec#{ordinal}"
-            res.setdefault(active, 1)
-            continue
-        rhs = node.value
-        # A statement contributes to residency only if it is a vector op. It
-        # contributes a tile NAME regardless, so a later BinOp can tell a tile
-        # operand from a loop scalar.
-        is_vec = active is not None and _is_vector_op(rhs, tiles, roots)
-        if is_vec:
-            n = _rhs_tensor_operands(rhs) + 1
-            if n > res.get(active, 1):
-                res[active] = n
-        if is_vec or _produces_a_tile(rhs):
-            tiles |= _assigned_names(node)
+    ids = _vec_site_ids(src)
+    off = apply.line_starts(src)
+    res = {}
+    for scope in _kernel_scopes(tree):
+        _vec_scope_walk(scope, ids, off, roots, res)
     return res
+
+
+def vec_residency(src):
+    """Peak vec-tile residency per site, `{site_id: n}`. See `vec_sites`."""
+    return {sid: cell["live"] for sid, cell in vec_sites(src).items()}
+
+
+def vec_dtype_bytes(src):
+    """
+    Element width per vec site, `{site_id: n}`, omitting the sites the source
+    does not declare. See `vec_sites`.
+    """
+    return {
+        sid: cell["dtype_bytes"]
+        for sid, cell in vec_sites(src).items()
+        if cell["dtype_bytes"]
+    }
 
 
 def _func_attr(call):
@@ -290,29 +496,70 @@ def _func_attr(call):
 
 
 def vec_ladder_cap(domain, site_id, field, fields):
-    """The largest value `field` may take before it overflows the UB even with
+    """
+    The largest value `field` may take before it overflows the UB even with
     every other dimension of this vec site at its smallest legal rung.
 
-    The UB rule is joint -- `prod(dims) * dtype * residency <= UB` -- so no single
-    dimension has a fixed bound. But a rung is safe to DROP if it overflows when
-    all the OTHER dimensions are minimal: no feasible tile can contain it. That
-    bound is `UB / (dtype * residency * prod of the other fields' minima)`, where
-    the trailing (contiguous, 16-aligned) field's minimum is 16 and the rest are
-    1. Returns None when the footprint bound is off, so the caller keeps the full
-    ladder. Removing only these rungs discards no reachable configuration; it
-    stops TPE spending its startup draws on tiles a hundredfold over the buffer.
+    The UB rule is joint -- the tiles one operation holds have to fit TOGETHER
+    (`vec_op_groups`) -- so no single dimension has a fixed bound. But a rung is
+    safe to DROP if it overflows when everything else is minimal: no feasible
+    tile can contain it. For each operation this site takes part in, the budget
+    left for this site is the UB less what that operation's OTHER entries spend
+    at their minima, and this site's own other axes are 1. The cap is the
+    smallest such bound over the operations, so it agrees with `verify` by
+    construction.
+
+    That agreement is the point, not a nicety. The cap trims the ladder and
+    `verify` admits the seed; when the cap was the tighter of the two, a seed
+    `verify` had passed was enqueued into a study whose categorical domain no
+    longer contained it, and optuna raised out of `study.optimize` before the
+    block's first measurement. Every other field's minimum is 1, the trailing one
+    included: the 16-alignment rule does not forbid 1, and `space.vec_feasible`
+    admits a trailing extent of 1 explicitly, because kernels carry
+    `set_vec_tile_shapes(<rows>, 1)` reduction legs.
+
+    Returns None when the footprint bound is off at this site, so the caller
+    keeps the full ladder.
     """
-    ub = (domain or {}).get("ub_bytes")
-    db = (domain or {}).get("dtype_bytes")
-    r = ((domain or {}).get("vec_residency") or {}).get(site_id)
-    if not (ub and db and r):
+    domain = domain or {}
+    ub = domain.get("ub_bytes")
+    groups = domain.get("vec_op_groups")
+    if site_id in (domain.get("vec_unmodelled") or ()):
         return None
-    others = 1
-    for j, f in enumerate(fields):
-        if f == field:
+    if not (ub and groups):
+        return None
+    minimal = {field: 1 for field in fields}
+    cap = None
+    for group in groups:
+        mine = [sh for sid, sh in group if sid == site_id]
+        if not mine:
             continue
-        others *= 16 if j == len(fields) - 1 else 1
-    return ub // (db * max(1, r) * others)
+        # What the operation's other entries spend with this site's tile at its
+        # floor -- they are tiles of OTHER sites, whose configs this call does
+        # not carry, so they are charged at the one-element floor the same way.
+        others = sum(
+            group_bytes(domain, {sid: dict(minimal)}, sid, sh)
+            for sid, sh in group
+            if sid != site_id
+        )
+        room = ub - others
+        if room <= 0:
+            return 1
+        # Every entry of THIS site in this operation scales with `field`, so they
+        # are one coefficient, not a fixed cost. An operation holding four tiles
+        # of this site charges four times what one unit of `field` costs. Pricing
+        # the other three at their floor instead is what made the cap 4x too
+        # loose, and a cap looser than `verify` is as broken as one tighter: the
+        # ladder then offers rungs the gate refuses and the block spends its
+        # startup draws on them.
+        coef = sum(
+            group_bytes(domain, {site_id: dict(minimal)}, site_id, sh) for sh in mine
+        )
+        if coef <= 0:
+            continue
+        bound = room // coef
+        cap = bound if cap is None else min(cap, bound)
+    return cap
 
 
 def read_views(src):
@@ -444,12 +691,170 @@ def _prod(xs):
     return p
 
 
+def _running_trailing(src):
+    """{site_id: the trailing tile extent the kernel is ALREADY running}.
+
+    Read by `space.vec_feasible` and used only to admit. The alignment rule is
+    written in elements against a constant that assumes a 2-byte dtype, so it
+    can throw away the warm start on a kernel that is already running and
+    golden-passing at that extent. Losing a bad draw costs one trial; losing
+    the incumbent costs the block, because TPE then has no feasible observation
+    to model and returns best_config: null.
+    """
+    try:
+        running = apply.current_config(src)
+    except SyntaxError:  # pragma: no cover
+        return {}
+    out = {}
+    for sid, c in running.items():
+        # The highest-numbered `d*`, the same reading `_effective` clamps
+        # against. Positionally last and numerically last agree on a config
+        # `apply` has just parsed out of the source, and disagree on one a block
+        # winner wrote back, so naming the axis keeps the two sides of the clamp
+        # talking about the same axis.
+        dims = {
+            int(k[1:]): v for k, v in c.items() if k.startswith("d") and k[1:].isdigit()
+        }
+        if dims:
+            out[sid] = dims[max(dims)]
+    return out
+
+
+def _running_live_caps(src, report):
+    """Per-site residency capped so the tile the kernel IS RUNNING fits the UB.
+
+    `prod(dims) x dtype x residency <= 192 KB` rejects kernels' own delivered
+    tile shapes. Two things could explain that: the buffer is larger than
+    192 KB, or the residency walk over-counts. The source cannot say which, and
+    the first version of this function bet on the buffer and raised the site's
+    byte budget to the running footprint.
+
+    The device settles it: a tile drawn inside a budget raised that way comes
+    back `F40005 TENSOR_MEMORY_ALLOCATION ... exceeds MEM_UB 196608`. The
+    buffer is exactly the 196608 the model says, so the residency is the wrong
+    number.
+
+    So the capacity stays at the model's and the RESIDENCY is capped instead, to
+    the largest value consistent with both facts we have: the program runs, and
+    the buffer is 192 KB. That is `ub // (prod(dims) x dtype)` for the running
+    tile, and a draw the device would refuse for capacity is then refused for
+    free.
+
+    Only ever LOWERS a residency, and only at a site whose own running tile
+    disproves it. A site the model already fits is untouched.
+
+    Returns (caps, unmodelled). A site whose running tile exceeds the buffer on
+    its OWN, at one live copy, is in `unmodelled`: no residency explains it, so
+    something else about that site is wrong -- its width, or the assumption that
+    `prod(dims)` is resident at all. `verify` then does not judge that site.
+    That is not the raised budget again: a raised budget invents a number and
+    licenses draws against it, while this records that the site is unreadable
+    and leaves it to the device, where `_lower_ceiling` learns a real bound from
+    real refusals. Every site we CAN model is still gated at 192 KB.
+
+    Derived from the running tile, so it moves when the tile moves -- which is
+    why both are kept out of `fingerprint`, for the same reason `per_site` is.
+    """
+    ub = report.get("ub_bytes")
+    if not ub:
+        return {}, []
+    try:
+        running = apply.current_config(src)
+    except SyntaxError:  # pragma: no cover
+        return {}, []
+    caps, unmodelled = {}, []
+    for sid, c in running.items():
+        dims = [v for k, v in c.items() if k.startswith("d")]
+        # Default 1, the same default `verify` charges a site the walk has no
+        # entry for. Skipping those here leaves a site carrying a multi-million
+        # element `prod(dims)` -- plainly not a UB-resident footprint --
+        # unflagged and then rejected at live=1, which is the running program
+        # excluded by a rule that never examined it.
+        live = report["vec_residency"].get(sid, 1)
+        if not dims:
+            continue
+        db = report["vec_dtype_bytes"].get(sid) or report["dtype_bytes"]
+        per_tile = _prod(dims) * db
+        if per_tile <= 0 or per_tile * live <= ub:
+            continue
+        if per_tile > ub:
+            unmodelled.append(sid)
+            continue
+        caps[sid] = ub // per_tile
+    return caps, sorted(unmodelled)
+
+
+def live_for(domain, site_id):
+    """
+    The residency `verify` charges this site: the walk's count, capped by what
+    the running tile proves (`_running_live_caps`).
+    """
+    res = (domain or {}).get("vec_residency") or {}
+    live = res.get(site_id, 1)
+    cap = ((domain or {}).get("vec_live_cap") or {}).get(site_id)
+    return min(live, cap) if cap else live
+
+
+def _note_residency_caps(report):
+    """Record in the report where the residency walk capped its count."""
+    residency = report.get("vec_residency")
+    capped = report.get("vec_live_cap")
+    if capped:
+        report["notes"].append(
+            "the residency walk over-counts at "
+            + ", ".join(
+                f"{sid} ({residency[sid]} -> {cap})"
+                for sid, cap in sorted(capped.items())
+            )
+            + "; the running tile does not fit the UB at the walk's count, so "
+            "the count is capped and the 192 KB budget stands"
+        )
+    if report.get("vec_unmodelled"):
+        report["notes"].append(
+            "the footprint bound is OFF at "
+            + ", ".join(report.get("vec_unmodelled"))
+            + ": one running tile there already exceeds the UB, so no residency "
+            "explains it and this module cannot judge that site. The device "
+            "does, through the learned ceiling."
+        )
+
+
+def _summarise_footprint(report):
+    """Fold the per-site widths and residencies into the scalar summary."""
+    kdb = report.get("dtype_bytes")
+    per_site = report.get("vec_dtype_bytes")
+    residency = report.get("vec_residency")
+    # The worst site is the one that spends the most buffer per tile ELEMENT, which
+    # is width x residency -- not residency alone. With one width for the whole
+    # kernel those two orderings coincided; with a per-site width they do not.
+    worst = (
+        max(
+            ((per_site.get(sid) or kdb) * live, live) for sid, live in residency.items()
+        )
+        if residency
+        else None
+    )
+    report["live_tiles"] = worst[1] if worst else 0
+    if worst and worst[0] > 0 and report.get("ub_bytes"):
+        report["capacity_elems"] = report.get("ub_bytes") // worst[0]
+    else:
+        report["notes"].append(
+            "no vec site found, so the footprint bound is off (alignment only)"
+        )
+
+
 def derive(op_file, live_tiles=None, ub_budget_kb=192):
     """What the program says about the tiles it can hold.
 
     Returns:
         {"capacity_elems": int or None,     the footprint bound, in elements
          "live_tiles": int, "dtype_bytes": int,
+         "vec_residency": {site_id: int},   tiles the site holds at once
+         "vec_dtype_bytes": {site_id: int}, element width, where the source says
+         "ub_bytes": int,                   the per-site budget `verify` applies
+         "vec_live_cap": {site_id: int},    residency capped by the running tile
+         "vec_trailing": {site_id: int},    the trailing extent it is running
+         "vec_unmodelled": [site_id],       sites the footprint bound is off at
          "views": [...],                    for change detection ONLY
          "per_site": {},                    always empty; see below
          "notes": [str]}
@@ -507,20 +912,27 @@ def derive(op_file, live_tiles=None, ub_budget_kb=192):
     # governs a different number of simultaneously-resident tiles, so the bound
     # is per site: `prod(dims) * dtype * residency <= UB`. `verify` applies it.
     report["ub_bytes"] = int(ub_budget_kb) * 1024 if ub_budget_kb else 0
-    report["vec_residency"] = vec_residency(src)
+    sites = vec_sites(src)
+    report["vec_residency"] = {sid: c["live"] for sid, c in sites.items()}
+    # Per-site element width, for the sites whose statements declare one. Absent
+    # sites fall back to the kernel-wide `dtype_bytes` in `verify`, so this map
+    # only ever makes the gate more accurate where the source is explicit; it
+    # never narrows on a guess.
+    report["vec_dtype_bytes"] = {
+        sid: c["dtype_bytes"] for sid, c in sites.items() if c["dtype_bytes"]
+    }
+    report["vec_trailing"] = _running_trailing(src)
+    # What one operation holds in UB at once. This is what `verify` gates on;
+    # `vec_residency` / `vec_live_cap` below are retained for the SEARCH SPACE
+    # bounds in `space`, which still reason per site.
+    report["vec_op_groups"] = vec_op_groups(src)
+    report["vec_live_cap"], report["vec_unmodelled"] = _running_live_caps(src, report)
+    _note_residency_caps(report)
     # `capacity_elems` and `live_tiles` are retained as a single-number summary
     # for `changed()` / logging only -- computed from the WORST site so the
     # fingerprint still moves when the footprint envelope moves. The real gate is
     # per-site in `verify`; nothing reads this scalar as a bound any more.
-    db = report["dtype_bytes"]
-    peak = max(report["vec_residency"].values(), default=0)
-    report["live_tiles"] = peak
-    if db > 0 and peak > 0 and report["ub_bytes"]:
-        report["capacity_elems"] = report["ub_bytes"] // (db * peak)
-    else:
-        report["notes"].append(
-            "no vec site found, so the footprint bound is off (alignment only)"
-        )
+    _summarise_footprint(report)
     return report
 
 
@@ -536,7 +948,9 @@ def fingerprint(domain):
 
     What actually invalidates a tile optimum is a change to the inputs of the
     derivation: the view extents, the dtype, the residency. Those and nothing
-    else are what this fingerprint carries.
+    else are what this fingerprint carries -- the dtype both as the kernel-wide
+    number and as the per-site map, since an edit that changes one site's
+    precision moves that site's budget and nothing else would show it.
 
     Deliberately NOT including `per_site`. Since an axis is only constrained when
     the view genuinely exceeds the running tile, the per-dimension domains depend
@@ -548,6 +962,18 @@ def fingerprint(domain):
             sorted(tuple(v) for v in (domain.get("views") or [])),
             domain.get("capacity_elems"),
             domain.get("dtype_bytes"),
+            tuple(sorted((domain.get("vec_dtype_bytes") or {}).items())),
+            # Residency per site, for the same reason as the widths, and it
+            # was the one input to `verify` the fingerprint did not carry.
+            # `capacity_elems` summarises the WORST site only, so a fusion
+            # that takes a non-worst site from 2 live tiles to 4 moved that
+            # site's budget while every field here stayed put: `changed()`
+            # reported "unchanged", no retune fired, and `block.memory_key`
+            # handed the next block a study whose observations were taken
+            # when that site had twice the room. Unlike `vec_live_cap` this
+            # does not depend on any tile VALUE, so including it cannot
+            # loop.
+            tuple(sorted((domain.get("vec_residency") or {}).items())),
         )
     )
 
@@ -572,7 +998,377 @@ def changed(before, after):
             f"capacity {before.get('capacity_elems')} -> "
             f"{after.get('capacity_elems')} elements"
         )
+    for sid in sorted(
+        set(before.get("vec_dtype_bytes") or {})
+        | set(after.get("vec_dtype_bytes") or {})
+    ):
+        b = (before.get("vec_dtype_bytes") or {}).get(sid)
+        a = (after.get("vec_dtype_bytes") or {}).get(sid)
+        if b != a:
+            bits.append(f"{sid} width {b}B -> {a}B")
     return True, "; ".join(bits) or "the derived tile domain changed"
+
+
+def _effective(site_config, trailing):
+    """(elements, clamped?) for one site's tile, against what it is running on.
+
+    The trailing dim is the highest-numbered `d*` key, not the last one the dict
+    happens to hold: a block winner's config is written back with `d1` before
+    `d0` on some sites, and reading position rather than name would clamp the
+    wrong axis.
+    """
+    dims = {}
+    for k, v in site_config.items():
+        if k.startswith("d") and k[1:].isdigit():
+            dims[int(k[1:])] = v
+    if not dims:
+        return 0, False
+    clamped = False
+    if trailing:
+        last = max(dims)
+        if dims.get(last, 0) > trailing:
+            dims[last], clamped = trailing, True
+    n = 1
+    for v in dims.values():
+        n *= v
+    return n, clamped
+
+
+# Calls whose first or second argument DECLARES the result's extent. The tile
+# directive sets a granularity; what is allocated is also bounded by the tensor's
+# own shape, and these are the places the source states it.
+_SHAPE_ALLOC = frozenset(("full", "tensor", "empty", "zeros", "ones"))
+_SHAPE_RESHAPE = frozenset(("view", "reshape"))
+# Reductions: the reduced axis becomes 1 (or disappears without `keepdim`). A
+# softmax's row statistic is ONE COLUMN, and charging it a whole tile makes
+# most of this model's refusals wrong.
+_REDUCE_CALLS = frozenset(
+    (
+        "sum",
+        "amax",
+        "amin",
+        "mean",
+        "prod",
+        "any",
+        "all",
+        "argmax",
+        "argmin",
+        "rowmax",
+        "rowsum",
+    )
+)
+
+
+def int_literal(node):
+    """A literal int, including `-1`, which the parser gives as a UnaryOp."""
+    if (
+        isinstance(node, ast.Constant)
+        and isinstance(node.value, int)
+        and not isinstance(node.value, bool)
+    ):
+        return node.value
+    if isinstance(node, ast.UnaryOp) and isinstance(node.op, ast.USub):
+        inner = int_literal(node.operand)
+        return -inner if inner is not None else None
+    return None
+
+
+def _int_consts(tree):
+    """`{name: int}` for the module's and kernel's plain integer assignments.
+
+    `Q_TILE = 128`, `QT = 320`. These are what the shape arguments are written
+    in, so without them every declared shape reads as unknown and the bound this
+    module exists to apply is never applied.
+    """
+    out = {}
+    for n in ast.walk(tree):
+        if not isinstance(n, ast.Assign):
+            continue
+        v = int_literal(n.value)
+        if v is None:
+            continue
+        for t in n.targets:
+            if isinstance(t, ast.Name):
+                out[t.id] = v
+    return out
+
+
+def literal_shape(node, consts):
+    """`[int or None]` for a literal shape argument, or None when it is not one.
+
+    A dimension the source does not state as an integer -- a kernel parameter
+    like `head_dim`, a `SymbolicScalar` -- is None, which means "do not bound
+    this axis", never zero and never a guess.
+    """
+    if not isinstance(node, (ast.List, ast.Tuple)):
+        return None
+    out = []
+    for e in node.elts:
+        v = int_literal(e)
+        if v is not None:
+            out.append(v)
+        elif isinstance(e, ast.Name) and e.id in consts:
+            out.append(consts[e.id])
+        else:
+            out.append(None)
+    return out
+
+
+def _broadcast_shape(a, b):
+    """The extent an elementwise result spans, right-aligned. Unknown stays
+    unknown: `[320, 1]` with `[320, None]` is `[320, None]`, not `[320, 1]`."""
+    if a is None:
+        return b
+    if b is None:
+        return a
+    n = max(len(a), len(b))
+    a = [None] * (n - len(a)) + list(a)
+    b = [None] * (n - len(b)) + list(b)
+    return [None if (x is None or y is None) else max(x, y) for x, y in zip(a, b)]
+
+
+def _covers(have, need):
+    """Can a tensor of extent `have` hold a result of extent `need`?
+
+    This decides whether the compiler may write an operation's result into an
+    operand whose life ends at that operation -- the reuse `CheckOpBufferSize`
+    sees as one memory id rather than two. An unknown extent is not a promise on
+    either side, with one exception: identical extents, unknowns included. In an
+    elementwise chain the result's shape IS the broadcast of its operands, so an
+    operand carrying exactly the result's shape is the one that set it and holds
+    exactly as much. That exception is the `sub(scores_scaled, mij)` step of a
+    flash-attention softmax, where the subtrahend is one column and the minuend
+    is the whole tile; without it the kernel's own running baseline comes out
+    over the 192 KB buffer.
+    """
+    if have is None or need is None:
+        return False
+    if list(have) == list(need):
+        return True
+    n = max(len(have), len(need))
+    a = [None] * (n - len(have)) + list(have)
+    b = [None] * (n - len(need)) + list(need)
+    for x, y in zip(a, b):
+        if x is None or y is None or x < y:
+            return False
+    return True
+
+
+def _kwarg(call, name):
+    for k in call.keywords:
+        if k.arg == name:
+            return k.value
+    return None
+
+
+def _rhs_attr(rhs):
+    """The method name a statement's right-hand side calls, or None."""
+    if isinstance(rhs, ast.Call) and isinstance(rhs.func, ast.Attribute):
+        return rhs.func.attr
+    return None
+
+
+def _tile_names(rhs, tiles):
+    """The names a right-hand side reads that already hold a tile."""
+    return {n.id for n in ast.walk(rhs) if isinstance(n, ast.Name) and n.id in tiles}
+
+
+def _last_reads(stmts):
+    """The index of the last statement that reads each name."""
+    last_read = {}
+    for i, (_, _, kind, node) in enumerate(stmts):
+        if kind != "assign":
+            continue
+        written = _assigned_names(node)
+        for n in ast.walk(node.value):
+            if isinstance(n, ast.Name) and n.id not in written:
+                last_read[n.id] = i
+    return last_read
+
+
+def _reduced_shape(rhs, base, consts):
+    """The shape a reduce call leaves of `base`, or None."""
+    dim = _kwarg(rhs, "dim")
+    if dim is None and len(rhs.args) > 1:
+        dim = rhs.args[1]
+    axis = int_literal(dim) if dim is not None else None
+    if not base or axis is None:
+        return None
+    shape = list(base)
+    i = axis if axis >= 0 else len(shape) + axis
+    if not 0 <= i < len(shape):
+        return shape
+    keep = _kwarg(rhs, "keepdim")
+    if isinstance(keep, ast.Constant) and keep.value is False:
+        shape.pop(i)
+    else:
+        shape[i] = 1
+    return shape
+
+
+def _stmt_shape(rhs, attr, read, shapes, consts):
+    """The declared extent of what one statement produces, or None."""
+    if attr in _SHAPE_ALLOC and rhs.args:
+        return literal_shape(rhs.args[0], consts)
+    if attr in _SHAPE_RESHAPE and len(rhs.args) > 1:
+        return literal_shape(rhs.args[1], consts)
+    if attr in _REDUCE_CALLS:
+        base = None
+        for name in sorted(read):
+            base = _broadcast_shape(base, shapes.get(name))
+        return _reduced_shape(rhs, base, consts)
+    shape = None
+    for name in sorted(read):
+        shape = _broadcast_shape(shape, shapes.get(name))
+    return shape
+
+
+def _group_entries(active, read, shapes, tiles):
+    """The distinct tensors one vector statement holds, as [site, shape] entries."""
+    group, seen = [], set()
+    for name in sorted(read):
+        if name in seen or shapes.get(name) is None and name not in tiles:
+            continue
+        seen.add(name)
+        group.append([active, shapes.get(name)])
+    return group
+
+
+def _scope_op_groups(scope, ids, off, roots, consts):
+    """The per-operation tile groups one kernel scope charges to the buffer."""
+    stmts = _ordered_statements([scope])
+    # The last statement that READS each name, for the liveness reuse rule.
+    last_read = _last_reads(stmts)
+    groups = []
+    active = None
+    tiles, shapes, env = set(), {}, {}
+    for idx, (_, _, kind, node) in enumerate(stmts):
+        if kind == "setter":
+            active = ids.get(off(node.lineno, node.col_offset))
+            continue
+        rhs = node.value
+        w = _dt_width(rhs, env)
+        if w:
+            for name in _assigned_names(node):
+                env[name] = w
+            continue
+        written = _assigned_names(node)
+        is_vec = active is not None and _is_vector_op(rhs, tiles, roots)
+        attr = _rhs_attr(rhs)
+        read = _tile_names(rhs, tiles)
+        shape = _stmt_shape(rhs, attr, read, shapes, consts)
+        if is_vec:
+            group = _group_entries(active, read, shapes, tiles)
+            reused = any(
+                last_read.get(name) == idx and _covers(shapes.get(name), shape)
+                for name in read
+            )
+            if not (written & read) and not reused:
+                group.append([active, shape])
+            if group:
+                groups.append(group)
+        if is_vec or _produces_a_tile(rhs):
+            tiles |= written
+            shapes.update(dict.fromkeys(written, shape))
+    return groups
+
+
+def vec_op_groups(src):
+    """What ONE operation holds in UB at once: `[[[site_id, shape], ...], ...]`.
+
+    This is the shape of the compiler's own check. `CheckOpBufferSize`
+    (framework/src/passes/block_graph_pass/schedule_ooo/schedule_base.h) sums one
+    operation's inputs AND outputs, deduplicated by `memoryrange.memId`, against
+    the buffer -- not a site's tile against the buffer. No per-site rule can be
+    right: the same tile at the same width and the same residency both RUNS on
+    one kernel and is REFUSED for capacity on another, so the quantity that
+    decides is which tiles share one operation.
+
+    Each entry is `[site_id, shape]`, one per distinct tensor the operation
+    holds. `site_id` is the site ACTIVE at that operation, not where the tensor
+    was first allocated: `set_vec_tile_shapes` tiles the statements that FOLLOW
+    it, so the directive in force governs every operand of those statements. An
+    online-softmax update under `set_vec_tile_shapes(128, 128)` reads an
+    accumulator allocated under `set_vec_tile_shapes(64, 512)`, and it reads it
+    128 x 128 at a time. `shape` is the tensor's own declared extent, which
+    bounds the allocation from the other side.
+
+    Two tensors are the same memory, and counted once, when either
+      * the statement writes into an operand (`oi[:] = ...`), or
+      * an operand's life ends at this operation and `_covers` says the result
+        fits in it. This is the compiler's liveness reuse. Without it every
+        elementwise chain is charged one fresh tile per statement, and
+        configurations these kernels are known to run come out over the buffer
+        -- which would cost the warm start, and with it the block, since TPE
+        then has no feasible observation and returns `best_config: null`.
+
+    `tests/test_capacity_gate.py` holds the adjudication of this rule against
+    the device's own verdicts.
+
+    This is a BOUND that rejects the right candidates, and it is not a claim to
+    reproduce the compiler's arithmetic. Two things the refusal messages show
+    are not modelled here:
+
+      * within a kernel the overflowing operation and its total do not move
+        when the tile moves -- a total that is not a function of the tile, so
+        what a draw decides is whether that operation is reached, not how big
+        it is. A draw wider than the data does not shrink to the data the way
+        `vec_trailing` assumes -- it appears to saturate;
+      * some capacity refusals are not this rule at all. `ReplaceTensor ...
+        can not copy to UB, tensor size [...] exceeds the UB size [196608]` is
+        a single tensor the pass must copy whole, independent of the tile.
+        Those are recorded as `incorrect_capacity` and a tile gate cannot
+        answer them.
+    """
+    try:
+        tree = ast.parse(src)
+    except SyntaxError:
+        return []
+    roots = pypto_roots(tree)
+    ids = _vec_site_ids(src)
+    off = apply.line_starts(src)
+    consts = _int_consts(tree)
+    out = []
+    for scope in _kernel_scopes(tree):
+        out.extend(_scope_op_groups(scope, ids, off, roots, consts))
+    return out
+
+
+def group_bytes(domain, config, site_id, shape):
+    """One entry's footprint: the site's tile, bounded by the tensor it holds.
+
+    `min(tile_axis, tensor_axis)` per axis, because the directive sets a
+    granularity and the tensor bounds it -- plus the running trailing extent,
+    which bounds an axis the source does not state an integer for.
+    """
+    c = (config or {}).get(site_id)
+    if not c:
+        return 0
+    dims = {
+        int(k[1:]): v for k, v in c.items() if k.startswith("d") and k[1:].isdigit()
+    }
+    if not dims:
+        return 0
+    axes = [dims[k] for k in sorted(dims)]
+    if shape:
+        pad = (
+            list(shape[-len(axes):])
+            if len(shape) >= len(axes)
+            else [None] * (len(axes) - len(shape)) + list(shape)
+        )
+        axes = [min(t, s) if s else t for t, s in zip(axes, pad)]
+    trailing = (domain.get("vec_trailing") or {}).get(site_id)
+    if trailing:
+        axes[-1] = min(axes[-1], trailing)
+    n = 1
+    for v in axes:
+        n *= v
+    width = (
+        (domain.get("vec_dtype_bytes") or {}).get(site_id)
+        or domain.get("dtype_bytes")
+        or 4
+    )
+    return n * width
 
 
 def verify(domain, config, dtype_bytes=4):
@@ -580,27 +1376,65 @@ def verify(domain, config, dtype_bytes=4):
 
     Called on every candidate, which is what makes a too-wide domain harmless.
 
-    The UB footprint rule is per vec SITE: a directive's tile must satisfy
-    `prod(dims) * dtype * residency <= UB`, where `residency` is how many tiles
-    that directive keeps live at once (`vec_residency`, from the source) and UB
-    is the 192 KB unified buffer. Each site has its own tile size and its own
-    residency, so the check cannot be collapsed to one number -- doing so is what
-    made the old bound reject `(1,64)` beside `(128,192)` for a total that was
-    never how the buffer is spent. Cube sites carry no `d*` dims and are checked
+    The UB footprint rule is per OPERATION, over `vec_op_groups`:
+
+        sum over the tiles one operation holds of
+            prod(min(tile_axis, tensor_axis, running trailing)) * dtype   <= UB
+
+    `vec_op_groups` carries the whole derivation and the evidence for it; read it
+    before changing anything here. In short: the buffer is shared, so the thing
+    that has to fit is one operation's inputs and outputs together, and a rule
+    written per site is wrong in both directions at once. The per-site rule this
+    replaced both missed capacity refusals the device went on to make and
+    free-rejected candidates the device would have run -- throwing away
+    candidates that would have worked, which is why tile blocks collapsed: TPE
+    had no feasible observations left to model.
+
+    `dtype` is the width of the elements that directive works on, read from the
+    source per site (`vec_sites`), because it is a property of the directive and
+    not of the file. A single kernel-wide width was the currency here until it
+    was noticed that it is the MINIMUM over every `DT_*` token in the file: an
+    antiquant kernel's int8 cache sets it to 1 byte for an fp32 softmax site,
+    and the gate then passes tiles several times over the buffer.
+
+    A site the walk could not read is in `vec_unmodelled` and is not judged. With
+    no groups at all -- an unparseable source, or a kernel with no vec directive
+    -- the footprint bound is simply OFF, which is the existing rule for a domain
+    that cannot state a bound. Cube sites carry no `d*` dims and are checked
     against L0A/B/C in `space` instead.
     """
-    db = domain.get("dtype_bytes") or dtype_bytes
+    del dtype_bytes  # per-site now; see `vec_sites`
     ub = domain.get("ub_bytes")
-    res = domain.get("vec_residency") or {}
-    for sid, c in config.items():
-        dims = [v for k, v in c.items() if k.startswith("d")]
-        if not (dims and ub):
-            continue
-        live = res.get(sid, 1)
-        need = _prod(dims) * db * live
-        if need > ub:
+    groups = domain.get("vec_op_groups") or ()
+    if not ub or not groups:
+        return True, ""
+    skip = set(domain.get("vec_unmodelled") or ())
+    for group in groups:
+        total, parts, spend = 0, [], {}
+        for sid, shape in group:
+            if sid in skip:
+                continue
+            b = group_bytes(domain, config, sid, shape)
+            if not b:
+                continue
+            total += b
+            spend[sid] = spend.get(sid, 0) + b
+            extent = (
+                "x".join("?" if x is None else str(x) for x in shape)
+                if shape
+                else "unbounded"
+            )
+            parts.append(f"{sid}[{extent}]={b}B")
+        if total > ub:
+            # The reason opens with "<site_id>: ", which `space.repair` parses to
+            # decide what to shrink, and carries " UB" so `_is_capacity` knows it
+            # is a capacity refusal and not an alignment one. The site named is
+            # the one spending the most in THIS operation -- shrinking any other
+            # one costs a rung and does not clear the overflow.
+            worst = max(spend, key=spend.get)
             return False, (
-                f"{sid}: {_prod(dims)} elements x {db}B x {live} live "
-                f"= {need}B > {ub}B UB"
+                f"{worst}: one operation holds "
+                + " + ".join(parts)
+                + f" = {total}B > {ub}B UB"
             )
     return True, ""

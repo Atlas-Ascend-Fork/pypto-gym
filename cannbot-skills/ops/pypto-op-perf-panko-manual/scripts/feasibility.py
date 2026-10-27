@@ -255,7 +255,7 @@ def extract(path):
     # dtype: assume the SMALLEST width seen, so an unknown or mixed-precision
     # kernel is never rejected on a footprint we may have overestimated.
     # `_` is in the class because `DT_FP8E4M3` and `DT_FP4_E2M1X2` carry one and
-    # the old pattern stopped at it, so those names were never looked up.
+    # a pattern that stops at it never looks those names up.
     table = dtype_bytes_table()
     widths = [w for w in (table.get(m) for m in re.findall(r"DT_[A-Z0-9_]+", src)) if w]
     info["dtype_bytes"] = min(widths) if widths else 2

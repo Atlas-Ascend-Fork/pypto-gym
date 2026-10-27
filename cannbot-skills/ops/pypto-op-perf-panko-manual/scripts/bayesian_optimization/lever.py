@@ -32,14 +32,16 @@ rather than `study.optimize`, because the evaluation happens in the optimizer's
 own cycle, not here.
 """
 
+import ast
 import hashlib
 import math
 import re
 
 from dataclasses import dataclass
-from typing import Any
+from typing import Any, NamedTuple
 
 from . import apply, space
+from .domain import verify as verify_domain
 
 PENALTY = 1e12  # same sentinel as driver: any real latency is far below
 
@@ -176,18 +178,69 @@ def structural_signature(src):
     site is an ordinary assignment. `apply` classifies that call `vec_dyn` and
     leaves it alone, so the two limitations still cancel -- but a literal
     1-argument call, `set_vec_tile_shapes(8192)`, is now tuned.
+
+    Hashed through the AST, not the text. This used to hash the erased SOURCE,
+    so a reflowed line, a changed comment or a rewritten docstring moved it --
+    and every delta a model writes rewrites comments. Two things paid for that.
+    `_live` un-retires an action the moment the signature moves, so a prune that
+    was supposed to hold "while the structure is unchanged" lapsed on a comment
+    and the selector handed the action back. `lever_key` keys the BO study by it,
+    so the surrogate for that space was discarded and its measurements re-bought
+    from the device. `domain.fingerprint`'s docstring names this exact failure as
+    the reason it does not use this function.
+
+    A renamed variable still moves it. That is deliberate: normalising names away
+    would collapse programs that differ, and unlike a comment a rename is an edit
+    to the program itself.
     """
     try:
         sites = apply.discover_sites(src)
     except SyntaxError:
         return "unparseable"
     out, cur = [], 0
-    for s in sorted(sites, key=lambda x: x.start):
+    for s in sorted(sites, key=lambda x: (x.start, x.end)):
+        # Zero-width sites are INSERTION points for a knob the file does not
+        # carry ("write this key here"), not spans of anything, and several of
+        # them share one offset. Erasing them emitted adjacent string literals
+        # inside a call and the result did not parse -- which sent every hash
+        # down the text fallback, the behaviour this was replacing. An absent
+        # knob is absent in both programs being compared, so it contributes
+        # nothing either way.
+        if s.end <= s.start or s.start < cur:
+            continue
         out.append(src[slice(cur, s.start)])
-        out.append(f"<{s.kind}>")
+        # Quoted, so the erased program still parses: a tile site spans a whole
+        # call statement, a global site spans one dict value, and a string
+        # literal is legal in both positions.
+        out.append(f'"<{s.kind}>"')
         cur = s.end
     out.append(src[cur:])
-    return hashlib.sha256("".join(out).encode("utf-8")).hexdigest()[:12]
+    erased = "".join(out)
+    try:
+        tree = ast.parse(erased)
+    except SyntaxError:  # pragma: no cover
+        # The erasure produced something unparseable. Fall back to the text, which
+        # is what this did before -- noisier, never wrong.
+        return hashlib.sha256(erased.encode("utf-8")).hexdigest()[:12]
+    _strip_docstrings(tree)
+    return hashlib.sha256(ast.unparse(tree).encode("utf-8")).hexdigest()[:12]
+
+
+def _strip_docstrings(tree):
+    """Drop every docstring in place. A docstring is prose about the program, not
+    the program, and `ast.unparse` keeps it because it is a string expression."""
+    for node in ast.walk(tree):
+        body = getattr(node, "body", None)
+        if not isinstance(body, list) or not body:
+            continue
+        if not isinstance(
+            node, (ast.Module, ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)
+        ):
+            continue
+        first = body[0]
+        is_doc = isinstance(first, ast.Expr) and isinstance(first.value, ast.Constant)
+        if is_doc and isinstance(first.value.value, str) and len(body) > 1:
+            del body[0]
 
 
 def lever_key(catalog_id, src):
@@ -225,24 +278,32 @@ def _is_tile(c, sid=""):
     return any(k.startswith("d") for k in c) or "mL0" in c
 
 
-def _tile_bytes(cfg, dtype_bytes):
+def draw_tile_bytes(cfg, dtype_bytes, widths=None):
     """Elements in the largest site, times the dtype. Cube sites report their L0A.
 
     Arity-agnostic: the vec footprint is the product of however many dimensions
     the call carries, which is the same quantity `feasibility.py` charges to the
     unified buffer.
+
+    `widths` is the per-site element width from the derived domain, for the same
+    reason the comment at the harness's call site gives about `dtype_bytes`
+    itself: sizing a bf16 site at fp32 is not conservative, it is wrong, and
+    sizing an fp32 site at the int8 of some other site in the file is wrong in
+    the other direction.
     """
+    widths = widths or {}
     n = 0
-    for c in cfg.values():
+    for sid, c in cfg.items():
+        db = widths.get(sid) or dtype_bytes
         fields = [k for k in c if k.startswith("d")]
         if fields:
             p = 1
             for f in fields:
                 p *= c[f]
-            n = max(n, p)
+            n = max(n, p * db)
         elif "mL0" in c:
-            n = max(n, c["mL0"] * c["kL0"])
-    return n * dtype_bytes
+            n = max(n, c["mL0"] * c["kL0"] * db)
+    return n
 
 
 def _snap(value, domain):
@@ -264,7 +325,7 @@ def _cube_l1(before, after, ax):
     domain from the ANCHOR -- `L1_MULTS` plus whatever ratio the kernel itself
     carries. A generator that scales L0 and leaves L1 where it was therefore
     invents a ratio the study cannot replay: shrinking a 128/128 axis to 16
-    records a multiplier of 8 against a domain of (1, 2, 3, 4), and `_rebuild`
+    records a multiplier of 8 against a domain of (1, 2, 3, 4), and `rebuild_study`
     raises ValueError on the NEXT call to `ask` -- the lever is dead for the
     rest of the run, one call after a seed it accepted.
 
@@ -361,7 +422,7 @@ def _nudged(cur, idx, step):
     return out if changed else None
 
 
-def _family(cur, dtype_bytes):
+def _family(cur, dtype_bytes, widths=None):
     """[(tile_bytes, config)] around the current tile, deduplicated, small to large.
 
     Two generators, because they cover different scales. The uniform scalings
@@ -370,13 +431,13 @@ def _family(cur, dtype_bytes):
     fine, x1.5 per step, which is what a kernel generated at 64 KB needs to reach
     96 KB without overshooting to 144.
     """
-    seen = {_tile_bytes(cur, dtype_bytes)}
+    seen = {draw_tile_bytes(cur, dtype_bytes, widths)}
     fam = []
 
     def add(cfg):
         if cfg is None:
             return
-        nb = _tile_bytes(cfg, dtype_bytes)
+        nb = draw_tile_bytes(cfg, dtype_bytes, widths)
         if nb in seen:
             return
         seen.add(nb)
@@ -391,7 +452,30 @@ def _family(cur, dtype_bytes):
     return fam
 
 
-def seed_points(src, hw, dtype_bytes=4, current_latency=None, scope=None):
+class SeedOptions(NamedTuple):
+    """Inputs the seed derivation reads besides the program and the hardware."""
+
+    dtype_bytes: int = 4
+    current_latency: Any = None
+    scope: Any = None
+    widths: Any = None
+    dom: Any = None
+
+
+def _band_ok(nb, cfg, bounds, hw, opts):
+    """Whether one family member clears both the byte band and the derived domain."""
+    lo, hi = bounds
+    if not lo <= nb <= hi:
+        return False
+    if not space.static_feasible(cfg, hw)[0]:
+        return False
+    # And the derived domain, which is where residency lives. The band
+    # above bounds the tile's own bytes; it does not know that the site
+    # holds several of them at once.
+    return not opts.dom or verify_domain(opts.dom, cfg, opts.dtype_bytes)[0]
+
+
+def seed_points(src, hw, opts=SeedOptions()):
     """Three grounded starting observations instead of ten random trials.
 
     TPE takes `n_startup_trials = 10` uniformly random draws before its
@@ -422,12 +506,12 @@ def seed_points(src, hw, dtype_bytes=4, current_latency=None, scope=None):
     cur = {
         k: v
         for k, v in cur.items()
-        if _is_tile(v, k) and (scope is None or k.startswith(scope + "#"))
+        if _is_tile(v, k) and (opts.scope is None or k.startswith(opts.scope + "#"))
     }
     if not cur:
         return []
-    out = [(cur, current_latency, "current")]
-    fam = _family(cur, dtype_bytes)
+    out = [(cur, opts.current_latency, "current")]
+    fam = _family(cur, opts.dtype_bytes, opts.widths)
     if not fam:
         return out
 
@@ -437,11 +521,7 @@ def seed_points(src, hw, dtype_bytes=4, current_latency=None, scope=None):
     # ceiling: without it the floor seed can come out many times larger than
     # the buffer holds, which the harness gate then refuses.
     lo, hi = FLOOR_KB * 1024, ceil_kb(hw) * 1024
-    band = [
-        (nb, cfg)
-        for nb, cfg in fam
-        if lo <= nb <= hi and space.static_feasible(cfg, hw)[0]
-    ]
+    band = [(nb, cfg) for nb, cfg in fam if _band_ok(nb, cfg, (lo, hi), hw, opts)]
     if band:
         out.append((band[0][1], None, "floor"))
         if len(band) > 1:
@@ -450,8 +530,21 @@ def seed_points(src, hw, dtype_bytes=4, current_latency=None, scope=None):
 
 
 # --------------------------------------------------------------------------- study
-def _rebuild(record, sites, groups, anchor, seed=0):
-    """Reconstruct the Optuna study from the trials persisted in the state file."""
+def rebuild_study(record, sites, groups, anchor, seed=0):
+    """Reconstruct the Optuna study from the trials persisted in the state file.
+
+    Every value a persisted trial HOLDS is admitted into its own distribution,
+    not only the current anchor's. The ladders are a sampling grid, and the
+    anchor moves: a kernel whose G_TILE is 12 (off-ladder) seeds a trial at
+    `vec#0.d0 = 12`, and the moment the core proposes 24 as the new anchor, a
+    distribution built from the anchor alone no longer contains 12 and the
+    replay raises -- `ValueError: '12' not in (1, 2, 4, 8, 16, 24, ...)` --
+    and takes the rest of the campaign with it.
+
+    A trial the study still refuses is DROPPED and counted, never raised: a
+    proposal that cannot be made is a proposal the caller does without, and it
+    must not cost the measurement that asked for it.
+    """
     import optuna
 
     optuna.logging.set_verbosity(optuna.logging.WARNING)
@@ -462,22 +555,53 @@ def _rebuild(record, sites, groups, anchor, seed=0):
         # work from the fourth candidate rather than the eleventh.
         sampler=optuna.samplers.TPESampler(seed=seed, n_startup_trials=3),
     )
-    for t in record.get("trials", []):
-        if t.get("value") is None:
-            continue
-        study.add_trial(
-            optuna.trial.create_trial(
-                params=t["params"],
-                distributions={k: _dist(k, sites, groups, anchor) for k in t["params"]},
-                value=float(t["value"]),
+    trials = [t for t in record.get("trials", []) if t.get("value") is not None]
+    held = held_values(record)
+    dropped = 0
+    for t in trials:
+        try:
+            study.add_trial(
+                optuna.trial.create_trial(
+                    params=t["params"],
+                    distributions={
+                        k: _dist(k, sites, groups, anchor, held.get(k))
+                        for k in t["params"]
+                    },
+                    value=float(t["value"]),
+                )
             )
-        )
+        except (ValueError, TypeError):
+            dropped += 1
+    if dropped:
+        record["replay_dropped"] = record.get("replay_dropped", 0) + dropped
     return study
 
 
-def _dist(name, sites, groups, anchor):
+def held_values(record):
+    """{param: {values}} over every COMPLETE persisted trial.
+
+    Every distribution this study is handed -- the replay's and the ask's --
+    has to be built with this, and with the same values. Optuna keys a
+    categorical parameter by its choices: a distribution that has lost a value
+    the study already holds is a different parameter, and the sampler raises
+    rather than guess which one was meant.
+    """
+    out = {}
+    for t in record.get("trials", []):
+        if t.get("value") is None:
+            continue
+        for k, v in (t.get("params") or {}).items():
+            out.setdefault(k, set()).add(v)
+    return out
+
+
+def _dist(name, sites, groups, anchor, held=None):
     """The distribution a persisted param was drawn from. space.suggest names
     parameters `<rep_site_id>.<field>`, and every field is categorical.
+
+    `held` is every value the persisted trials carry for this parameter. They
+    were legal when they were drawn, so they stay legal here whatever the
+    anchor has since become.
     """
     import optuna
 
@@ -499,7 +623,9 @@ def _dist(name, sites, groups, anchor):
                 and a[f"{ax}L1"] % a[f"{ax}L0"] == 0
                 else None
             )
-            return optuna.distributions.CategoricalDistribution(space.admit(base, val))
+            return optuna.distributions.CategoricalDistribution(
+                _with_held(space.admit(base, val), held)
+            )
         base = space.CUBE_CHOICES
     elif field.startswith("d"):
         # Which rung ladder depends on the position, and the position depends on
@@ -509,7 +635,15 @@ def _dist(name, sites, groups, anchor):
         base = space.VEC_TRAILING_CHOICES if field == fields[-1] else space.VEC_CHOICES
     else:
         base = space.GLOBAL_DOMAINS.get(space.global_knob(sid), [])
-    return optuna.distributions.CategoricalDistribution(space.admit(base, a.get(field)))
+    return optuna.distributions.CategoricalDistribution(
+        _with_held(space.admit(base, a.get(field)), held)
+    )
+
+
+def _with_held(base, held):
+    """`base`, plus every value the persisted trials already hold."""
+    extra = {v for v in (held or ()) if v not in base}
+    return sorted(set(base) | extra, key=lambda x: (str(type(x)), x)) if extra else base
 
 
 @dataclass
@@ -519,6 +653,13 @@ class AskOptions:
     """
 
     dtype_bytes: int = 4
+    # Per-site element widths from the derived domain, where the source declares
+    # one. Empty means every site is measured at `dtype_bytes`, as before.
+    vec_dtype_bytes: Any = None
+    # The derived domain itself. `gate_draw` applies `domain.verify` through it, so
+    # the lever and the block judge a footprint by the same rule. Without it the
+    # lever had no residency term at ALL -- see `gate_draw`.
+    domain: Any = None
     current_latency: Any = None
     seed: int = 0
 
@@ -563,7 +704,7 @@ def _next_seed(rec, sites, scope):
     }
 
 
-def _draw_one_site(study, ctx):
+def draw_one_site(study, ctx):
     """ONE SITE PER DRAW, the rest held at the anchor.
 
     The gate is an AND over every site, so a draw that moves all of them is
@@ -585,16 +726,27 @@ def _draw_one_site(study, ctx):
     rec, sites, anchor = ctx["rec"], ctx["sites"], ctx["anchor"]
     site = sites[rec.get("cursor", 0) % len(sites)]
     rec["cursor"] = rec.get("cursor", 0) + 1
-    held = {site.id: dict(anchor.get(site.id, {}))}
+    at_anchor = {site.id: dict(anchor.get(site.id, {}))}
+    # The same `held` the replay used. Without it this asked for a distribution
+    # built from the anchor alone, while the study held trials replayed against
+    # a wider one -- so a kernel whose G_TILE is 12 (off-ladder) rebuilt
+    # cleanly and then raised on the very next draw: `'12' not in (1, 2, 4, 8,
+    # 16, 24, ...)`. Guarded, that is not a crash any more, but it is still the
+    # lever dead for the rest of the action, which leaves the coder guessing
+    # tile numbers by hand.
+    held = held_values(rec)
     trial = study.ask(
-        {k: _dist(k, sites, None, anchor) for k in space.flatten(held, [site])}
+        {
+            k: _dist(k, sites, None, anchor, held.get(k))
+            for k in space.flatten(at_anchor, [site])
+        }
     )
     cfg = dict(anchor)
     cfg.update(space.unflatten(trial.params, [site]))
     return trial, cfg, site.id
 
 
-def _gate(cfg, hw, dtype_bytes):
+def gate_draw(cfg, hw, dtype_bytes, widths=None, dom=None):
     """The free gates a draw must clear. Returns (ok, status, reason).
 
     The widened ladder spans 1 to 16384 per dimension, so the product reaches 268M
@@ -602,14 +754,25 @@ def _gate(cfg, hw, dtype_bytes):
     `space` cannot catch them -- it validates alignment and the L1 relations, not
     the footprint -- and the harness gate would, but only after charging the
     action a stagnation count each time, so an action could close at K=7 having
-    measured nothing at all. The bound is the buffer's: this run's UB over 2
-    buffers.
+    measured nothing at all.
+
+    The footprint bound is `domain.verify` when a derived domain is available,
+    and only otherwise the standing "UB over 2 buffers" rule. That rule has no
+    residency term, and residency is the whole difference between a site that
+    holds one tile and one that holds four: at residency 4, a tile this gate
+    passes at 64 KB is rejected by `domain.verify` at 256 KB -- the kind of tile
+    `domain`'s header describes reaching the device and returning s=0. In the
+    other direction, halving the buffer for a residency-1 site is 2x too tight,
+    and rejects tiles the kernel runs well at.
     """
     ok, reason = space.static_feasible(cfg, hw)
     if not ok:
         return False, "infeasible_static", reason
+    if dom:
+        ok, why = verify_domain(dom, cfg, dtype_bytes)
+        return (True, "ok", reason) if ok else (False, "over_buffer", why)
     cap = ceil_kb(hw)
-    nb = _tile_bytes(cfg, dtype_bytes)
+    nb = draw_tile_bytes(cfg, dtype_bytes, widths)
     if nb > cap * 1024:
         return (
             False,
@@ -627,12 +790,14 @@ def _tpe_candidate(rec, sites, src, scope, hw, opts):
     anchor = apply.current_config(src)
     in_scope = {s.id for s in sites}
     ctx = {"rec": rec, "sites": sites, "anchor": anchor}
-    study = _rebuild(rec, sites, None, anchor, opts.seed)
+    study = rebuild_study(rec, sites, None, anchor, opts.seed)
     tried_sites = []
     for _ in range(32):  # gate rejections are free; keep asking
-        trial, cfg, site_id = _draw_one_site(study, ctx)
+        trial, cfg, site_id = draw_one_site(study, ctx)
         tried_sites.append(site_id)
-        ok, status, reason = _gate(cfg, hw, opts.dtype_bytes)
+        ok, status, reason = gate_draw(
+            cfg, hw, opts.dtype_bytes, opts.vec_dtype_bytes, opts.domain
+        )
         if ok:
             rec["pending"] = {"params": trial.params, "label": "tpe"}
             # Feasibility is judged on the WHOLE program -- the buffer is shared,
@@ -697,7 +862,17 @@ def ask(state_bo, catalog_id, src, hw, opts=None):
         _fill_seeds(
             rec,
             sites,
-            seed_points(src, hw, opts.dtype_bytes, opts.current_latency, scope),
+            seed_points(
+                src,
+                hw,
+                SeedOptions(
+                    opts.dtype_bytes,
+                    opts.current_latency,
+                    scope,
+                    opts.vec_dtype_bytes,
+                    opts.domain,
+                ),
+            ),
         )
     seeded = _next_seed(rec, sites, scope)
     if seeded:

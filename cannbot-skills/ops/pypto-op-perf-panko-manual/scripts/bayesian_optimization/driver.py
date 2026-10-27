@@ -145,19 +145,59 @@ def _dedup(*groups):
     return out
 
 
-def _tile_bytes(cfg, dtype_bytes):
-    """Bytes in the largest tile of `cfg`. 0 when the config has no tile site."""
+def site_widths(opts):
+    """Per-site (element width, residency) from the derived domain, or {}.
+
+    Both, because both are how the buffer is actually spent. `domain.verify`
+    charges a site `elements x width x residency`; this charged `elements x
+    width` and took the max over sites. On a kernel whose vec#1 holds 3 tiles
+    and vec#3 holds 4, a draw that overflows because of vec#3 sets the ceiling
+    from whichever site is largest in that wrong currency -- so the innocent
+    site is retired at exactly its own legal maximum and the site that caused
+    the refusal stays under the ceiling and is drawn again until the block's
+    failure limit closes it.
+    """
+    dom = getattr(opts, "domain", None) or {}
+    widths = dom.get("vec_dtype_bytes") or {}
+    res = dom.get("vec_residency") or {}
+    keys = set(widths) | set(res)
+    if not keys:
+        return {}
+    default = dom.get("dtype_bytes") or getattr(opts, "dtype_bytes", 4)
+    # `live_for`, not the raw walk: the ceiling has to be in the same currency
+    # the gate spends, and the gate charges the capped residency.
+    return {
+        sid: (widths.get(sid) or default) * max(1, domain_mod.live_for(dom, sid))
+        for sid in keys
+    }
+
+
+def draw_tile_bytes(cfg, dtype_bytes, widths=None):
+    """Bytes in the largest tile of `cfg`. 0 when the config has no tile site.
+
+    `widths` is the per-site BUFFER COST of one tile element -- the element width
+    times the site's residency, as `site_widths` builds it from the derived domain.
+    It matters because the ceiling is a claim about SIZE and is compared across
+    sites, so it has to be in the currency the buffer is actually spent in. With
+    one width for the whole kernel and no residency at all, the number was an
+    element count wearing a byte label: in a kernel whose `dtype_bytes` came out
+    1, a refusal at an fp32 site retires int8 tiles of the same element count
+    that would have fitted four times over, and a refusal caused by a 4-live
+    site is charged to whichever site has the most elements.
+    """
+    widths = widths or {}
     n = 0
-    for c in cfg.values():
+    for sid, c in cfg.items():
+        db = widths.get(sid) or dtype_bytes
         dims = [v for k, v in c.items() if k.startswith("d")]
         if dims:
             p = 1
             for d in dims:
                 p *= d
-            n = max(n, p)
+            n = max(n, p * db)
         elif "mL0" in c:
-            n = max(n, c["mL0"] * c["kL0"])
-    return n * dtype_bytes
+            n = max(n, c["mL0"] * c["kL0"] * db)
+    return n
 
 
 # The `Invalid L1/L0 relation` error class -- and the machinery that used to learn
@@ -197,11 +237,28 @@ class SearchOptions:
     anchor: Any = None  # the config the kernel is running
     startup_min_feasible: int = 5
     refusals: Any = None  # compiler refusals already earned
+    # The smallest footprint the compiler has refused on THIS TILE DOMAIN, from
+    # any earlier block. Separate from `memory` because it is a different kind of
+    # fact: `memory.trials` are latencies, comparable only within one program
+    # shape, while the ceiling says which tiles the compiler will accept, which
+    # depends on the derived domain and nothing else. Sharing one key made the
+    # ceiling inherit the narrower lifetime -- see `block.ceiling_key`.
+    ceiling: Any = None
     tie: Any = None
+    repair: bool = True  # shrink a too-big draw instead of rejecting it
 
 
 def _emit(ctx, rec, trial, status, reason=None):
     """Record one trial outcome: the history, the caller's callback, the study's attrs."""
+    rep = ctx.get("repair")
+    if rep:
+        # `config` is what was MEASURED; the draw it stands for is kept beside it.
+        rec = dict(
+            rec,
+            repaired_from=rep["from"],
+            repair_steps=rep["steps"],
+            repair_reason=rep["why"],
+        )
     ctx["history"].append(rec)
     if ctx["opts"].on_trial:
         ctx["opts"].on_trial(rec)
@@ -235,7 +292,7 @@ def _known_value(ctx, cfg, key, trial):
             {
                 "config": cfg,
                 "status": "duplicate_config",
-                "latency": None,
+                "objective_us": None,
                 "reason": f"already measured in this block ({v})",
             },
             trial,
@@ -248,7 +305,7 @@ def _known_value(ctx, cfg, key, trial):
             {
                 "config": cfg,
                 "status": "known_compile_failure",
-                "latency": None,
+                "objective_us": None,
                 "reason": f"the compiler refused this configuration before "
                 f"({ctx['refused'][key]}); carried across structures",
             },
@@ -259,6 +316,62 @@ def _known_value(ctx, cfg, key, trial):
     return None
 
 
+def _largest_site(cfg, dtype_bytes, widths=None):
+    best, nb = None, 0
+    for sid, c in cfg.items():
+        b = draw_tile_bytes({sid: c}, dtype_bytes, widths)
+        if b > nb:
+            best, nb = sid, b
+    return best, nb
+
+
+def static_reason(ctx, cfg):
+    """(status, reason) for a draw the free gates reject, else None.
+
+    Pure: the caller decides whether to emit it or to repair the draw.
+    """
+    opts, hw = ctx["opts"], ctx["hw"]
+    nb = draw_tile_bytes(cfg, opts.dtype_bytes, site_widths(opts))
+    # `> floor`, not just `< ceiling`: a ceiling is only actionable while it sits
+    # ABOVE the footprint the kernel is running at. `_lower_ceiling` checks that
+    # when it LEARNS one, and that was enough while a ceiling died with the
+    # action that bought it. It no longer does -- `block.ceiling_key` carries it
+    # across every block on the same tile domain -- and the incumbent moves
+    # underneath it: a later block on the same domain can be running a smaller
+    # footprint than the block a ceiling was legitimately learned against, so
+    # the carried ceiling sits below the running value. Acting on it would
+    # retire the ladder including the value already
+    # in the kernel, which is the undetectable narrowing this design is most
+    # exposed to. So the guard is applied again here, where it is USED.
+    if nb and nb >= ctx["state"]["ceiling"] and nb > ctx["state"]["floor"]:
+        sid, _ = _largest_site(cfg, opts.dtype_bytes, site_widths(opts))
+        return (
+            "over_learned_ceiling",
+            f"{sid}: largest tile {nb}B >= {ctx['state']['ceiling']}B, "
+            f"which the device refused",
+        )
+    ok, reason = space.static_feasible(cfg, hw)
+    if ok and opts.domain:
+        ok, reason = domain_mod.verify(opts.domain, cfg, hw.dtype_bytes)
+    return None if ok else ("infeasible_static", reason)
+
+
+def _try_repair(ctx, cfg):
+    """The nearest feasible config below `cfg`, or None. See `space.repair`."""
+    if not ctx["opts"].repair:
+        return None, 0
+
+    def check(c):
+        bad = static_reason(ctx, c)
+        return (True, "") if bad is None else (False, bad[1])
+
+    return space.repair(
+        cfg,
+        check,
+        space.RepairContext(ctx["anchor"], ctx["opts"].domain, ctx["opts"].tie),
+    )
+
+
 def _static_verdict(ctx, cfg, key, trial):
     """The gates that reject a draw without touching the device.
 
@@ -267,14 +380,17 @@ def _static_verdict(ctx, cfg, key, trial):
     """
     del key
     opts, hw = ctx["opts"], ctx["hw"]
-    nb = _tile_bytes(cfg, opts.dtype_bytes)
-    if nb and nb >= ctx["state"]["ceiling"]:
+    nb = draw_tile_bytes(cfg, opts.dtype_bytes, site_widths(opts))
+    # `> floor` for the same reason as in `static_reason`: a carried ceiling can
+    # sit below a later incumbent on the same domain, and retiring the running
+    # value is the one narrowing that leaves no trace.
+    if nb and nb >= ctx["state"]["ceiling"] and nb > ctx["state"]["floor"]:
         _emit(
             ctx,
             {
                 "config": cfg,
                 "status": "over_learned_ceiling",
-                "latency": None,
+                "objective_us": None,
                 "reason": f"{nb}B >= {ctx['state']['ceiling']}B, "
                 f"which the device refused",
             },
@@ -295,7 +411,7 @@ def _static_verdict(ctx, cfg, key, trial):
                 "config": cfg,
                 "status": "infeasible_static",
                 "reason": reason,
-                "latency": None,
+                "objective_us": None,
             },
             trial,
             "infeasible_static",
@@ -322,7 +438,7 @@ def _record_fault(ctx, cfg, exc, trial):
         "detail": getattr(exc, "detail", ""),
         "kind": getattr(exc, "kind", "device"),
         "retries": getattr(exc, "retries", 0),
-        "latency": None,
+        "objective_us": None,
     }
     _emit(ctx, rec, trial, "env_fault")
     ctx["state"]["faults"] += 1
@@ -346,7 +462,7 @@ def _lower_ceiling(ctx, cfg):
     tile smaller than the running one means the marker matched something else.
     """
     state = ctx["state"]
-    nb = _tile_bytes(cfg, ctx["opts"].dtype_bytes)
+    nb = draw_tile_bytes(cfg, ctx["opts"].dtype_bytes, site_widths(ctx["opts"]))
     if nb and nb < state["ceiling"] and nb > state["floor"]:
         state["ceiling"] = nb
 
@@ -376,7 +492,7 @@ def _record_refusal(ctx, cfg, key, outcome, trial):
             "config": cfg,
             "status": "incorrect_capacity" if kind == "capacity" else "incorrect",
             "reason": detail or "s=0",
-            "latency": None,
+            "objective_us": None,
         },
         trial,
         "incorrect",
@@ -384,10 +500,95 @@ def _record_refusal(ctx, cfg, key, outcome, trial):
     # A refusal is a measurement too: re-running it costs the same evaluation and
     # returns the same PENALTY.
     ctx["state"]["seen"][key] = PENALTY
+    if ctx.get("repair"):
+        ctx["state"]["seen"][ctx["repair"]["drawn_key"]] = PENALTY
     return PENALTY
 
 
-def _record_ok(ctx, cfg, key, p, trial):
+# Consecutive unevaluated trials a block tolerates before it gives up. A
+# compile that will not finish inside the budget usually will not finish for the
+# next few draws either -- the space is continuous and TPE draws near what it
+# just drew -- so an unbounded retry would spend the whole block on timeouts.
+UNEVALUATED_LIMIT = 3
+
+
+def record_unevaluated(ctx, cfg, detail, trial):
+    """The device never returned a number, and that is not the candidate's fault.
+
+    `_record_refusal` does four things that are all WRONG for a compile killed by
+    the budget, and each one is a lasting error rather than a lost trial:
+
+      - it lowers the `ceiling` on a "capacity" kind, teaching a size limit that
+        was never demonstrated;
+      - it files an `error_signature` as a cross-structure refusal, so a timeout
+        would free-reject this tile in every LATER block;
+      - it writes `state["seen"][key] = PENALTY`, so the study remembers the
+        configuration as measured-and-terrible;
+      - it returns PENALTY as the objective value, which tells TPE this point is
+        bad when the truth is that there is no observation here at all.
+
+    So: none of those. The caller raises `optuna.TrialPruned`, which is what
+    "no observation" means to the study, and the trial does not count toward
+    stagnation either -- `stagnation` counts measurements that failed to
+    improve, and this measured nothing.
+    """
+    ctx["state"]["unevaluated"] += 1
+    _emit(
+        ctx,
+        {
+            "config": cfg,
+            "status": "unevaluated",
+            "reason": detail or "compile exceeded eval_timeout_s",
+            "objective_us": None,
+        },
+        trial,
+        "unevaluated",
+    )
+
+
+def _register_measured(ctx, cfg, p, trial):
+    """File a repaired trial's value under the params that were MEASURED.
+
+    A repaired draw is two different points: the one TPE drew, which the device
+    cannot run, and the one we shrank it to, which we measured. Reporting the
+    measured value for the DRAWN point tells the surrogate that the infeasible
+    region is fine -- so it keeps drawing there, and since every such draw is now
+    repaired and measured, it keeps costing an evaluation. Unbounded, a run can
+    spend most of its device trials re-measuring repairs of draws from the same
+    infeasible region, without any action closing.
+
+    So the value goes where it was measured, as its own completed trial, and the
+    drawn point gets the PENALTY a static rejection would have given it. The
+    measurement is still kept and can still win the block -- what changes is the
+    coordinates it teaches.
+
+    Returns True when the measured point was filed; False leaves the caller on
+    the old path, because a study that will not accept the trial must not cost a
+    block its measurement.
+    """
+    study = ctx.get("study")
+    params = (ctx.get("repair") or {}).get("measured_params")
+    if study is None or not params:
+        return False
+    try:
+        study.add_trial(
+            optuna.trial.create_trial(
+                params=params,
+                distributions=dict(trial.distributions),
+                value=float(p),
+                user_attrs={
+                    "status": "ok",
+                    "measured_params": params,
+                    "repaired_into": True,
+                },
+            )
+        )
+    except (ValueError, TypeError, RuntimeError):
+        return False
+    return True
+
+
+def record_ok(ctx, cfg, key, p, trial):
     """A measured latency.
 
     The diagnostics the evaluator just read are carried with it. They are not part
@@ -396,35 +597,59 @@ def _record_ok(ctx, cfg, key, p, trial):
     because nobody passed it along is indistinguishable from a kernel that
     genuinely idled.
     """
-    rec = {"config": cfg, "status": "ok", "reason": "", "latency": float(p)}
+    # `objective_us` is what this trial was RANKED on, which is `p`. The field
+    # used to be called `latency`, which named no instrument. The launch's other
+    # readings ride on `metrics` below.
+    rec = {"config": cfg, "status": "ok", "reason": "", "objective_us": float(p)}
     met = getattr(ctx["objective"], "last_metrics", None)
     if met:
         rec["metrics"] = dict(met)
+    samples = getattr(ctx["objective"], "last_samples", None)
+    if samples:
+        rec["samples"] = list(samples)
     _emit(ctx, rec, trial, "ok")
     ctx["state"]["seen"][key] = float(p)
+    if ctx.get("repair"):
+        # The drawn point is infeasible whatever the repaired one measured.
+        if _register_measured(ctx, cfg, p, trial):
+            ctx["state"]["seen"][ctx["repair"]["drawn_key"]] = PENALTY
+            return PENALTY
+        ctx["state"]["seen"][ctx["repair"]["drawn_key"]] = float(p)
     return float(p)
 
 
 def _objective(ctx, trial):
     """One trial: draw a configuration, reject it for free if we can, else measure it."""
     opts, sites = ctx["opts"], ctx["sites"]
-    cfg = space.suggest(
-        trial,
-        sites,
-        space.DrawOptions(
-            groups=opts.groups, anchor=ctx["anchor"], domain=opts.domain, tie=opts.tie
-        ),
-    )
+    cfg = space.suggest(trial, sites,
+                        space.DrawOptions(groups=opts.groups, anchor=ctx["anchor"],
+                                          domain=opts.domain, tie=opts.tie))
     key = json.dumps(space.flatten(cfg, sites, opts.groups, opts.tie), sort_keys=True)
-    for gate in (_known_value, _static_verdict):
-        known = gate(ctx, cfg, key, trial)
+    ctx["repair"] = None
+    known = _known_value(ctx, cfg, key, trial)
+    if known is not None:
+        return known
+    bad = static_reason(ctx, cfg)
+    if bad is not None:
+        fixed, steps = _try_repair(ctx, cfg)
+        if fixed is None:
+            return _static_verdict(ctx, cfg, key, trial)
+        # Measure the repaired point; the value is reported for the drawn one.
+        measured_params = space.flatten(fixed, sites, opts.groups, opts.tie)
+        ctx["repair"] = {"from": cfg, "steps": steps, "why": bad[1][:200],
+                         "drawn_key": key, "measured_params": measured_params}
+        trial.set_user_attr("measured_params", measured_params)
+        cfg = fixed
+        key = json.dumps(space.flatten(cfg, sites, opts.groups, opts.tie), sort_keys=True)
+        known = _known_value(ctx, cfg, key, trial)
         if known is not None:
+            ctx["state"]["seen"][ctx["repair"]["drawn_key"]] = known
             return known
     try:
         # An objective may return (s, p) or (s, p, kind). `kind` is "capacity"
         # only when the failure is monotone evidence about size.
         got = ctx["objective"](cfg)
-        s, p, kind = got if len(got) == 3 else (got[0], got[1], None)
+        s, p, kind = (got if len(got) == 3 else (got[0], got[1], None))
         detail = getattr(ctx["objective"], "last_detail", "")
     except evaluator.EnvironmentFault as e:
         _record_fault(ctx, cfg, e, trial)
@@ -432,7 +657,12 @@ def _objective(ctx, trial):
     ctx["state"]["faults"] = 0
     if s:
         ctx["state"]["failures"] = 0
-        return _record_ok(ctx, cfg, key, p, trial)
+        ctx["state"]["unevaluated"] = 0
+        return record_ok(ctx, cfg, key, p, trial)
+    if kind == "unevaluated":
+        record_unevaluated(ctx, cfg, detail, trial)
+        raise optuna.TrialPruned()
+    ctx["state"]["unevaluated"] = 0
     ctx["state"]["failures"] += 1
     return _record_refusal(ctx, cfg, key, (kind, detail), trial)
 
@@ -476,6 +706,18 @@ def _stopper(ctx, study, trial):
             ctx,
             study,
             f"{state['failures']} consecutive candidates the device would not run",
+        )
+        return
+    if state["unevaluated"] >= UNEVALUATED_LIMIT:
+        # A brake of the same shape as the two above, for the third thing that
+        # measures nothing. Named separately in the abort reason because the
+        # remedy is different: faults mean fix the device, failures mean the
+        # search is drawing badly, and this one means `eval_timeout_s` is too
+        # small for the programs this action produces.
+        _abort(
+            ctx,
+            study,
+            f"{state['unevaluated']} consecutive compiles past eval_timeout_s",
         )
         return
     v = trial.value
@@ -546,6 +788,11 @@ def _replay(study, sites, opts, anchor, memory):
                         k: _dist(k, sites, opts.groups, anchor) for k in t["params"]
                     },
                     value=float(t["value"]),
+                    # A repaired observation keeps what was measured, or a resumed
+                    # block would report the unrepaired draw as its best config.
+                    user_attrs=(
+                        {"measured_params": t["measured"]} if t.get("measured") else {}
+                    ),
                 )
             )
             replayed += 1
@@ -570,7 +817,7 @@ def _warm_start(study, sites, opts, memory):
         study.enqueue_trial(flat)
 
 
-def _initial_state(memory, anchor, opts):
+def initial_state(memory, anchor, opts):
     """The block's running facts about the device.
 
     `ceiling`: the smallest tile footprint the device has refused in this block.
@@ -581,12 +828,21 @@ def _initial_state(memory, anchor, opts):
     want different limits, and neither is a stagnation: stagnation counts
     MEASUREMENTS that failed to improve, and none of these measured anything.
     """
+    # The domain-level ceiling wins when the caller supplies one; `memory` is
+    # the fallback so a state file written before the split still resumes.
     return {
-        "ceiling": float(memory.get("ceiling") or float("inf")),
+        "ceiling": float(opts.ceiling or memory.get("ceiling") or float("inf")),
         "faults": 0,
         "failures": 0,
         "fault_kind": None,
-        "floor": _tile_bytes(anchor, opts.dtype_bytes) if anchor else 0,
+        # Consecutive trials whose COMPILE ran past the budget. A fourth
+        # kind alongside faults, failures and stagnation, for the same
+        # reason the docstring gives: it measured nothing, so it is neither
+        # a verdict about the tile nor a stagnation.
+        "unevaluated": 0,
+        "floor": draw_tile_bytes(anchor, opts.dtype_bytes, site_widths(opts))
+        if anchor
+        else 0,
         # flattened params -> what the device returned. Seeded from the
         # predecessor block's observations so a resumed block does not pay
         # again for what its predecessor already measured.
@@ -635,12 +891,13 @@ def _result(study, ctx, memory, replayed):
     best = min(feasible, key=lambda t: t.value) if feasible else None
     ceiling = None if state["ceiling"] == float("inf") else int(state["ceiling"])
     return {
-        "best_config": (
-            space.unflatten(best.params, ctx["sites"], opts.groups, opts.tie)
-            if best
-            else None
-        ),
-        "best_latency": best.value if best else None,
+        # The MEASURED params: a repaired trial's own params are the draw, which
+        # the static rules reject and which was never run.
+        "best_config": (space.unflatten(best.user_attrs.get("measured_params", best.params),
+                                        ctx["sites"], opts.groups, opts.tie)
+                        if best else None),
+        "n_repaired": sum(1 for h in history if h.get("repaired_from") is not None),
+        "best_objective_us": best.value if best else None,
         # Trials the study RAN, not trials it holds. `enqueue_trial` creates a
         # WAITING trial immediately, so `len(study.trials)` counts points that
         # were queued and never reached because the budget ran out first -- a
@@ -648,9 +905,8 @@ def _result(study, ctx, memory, replayed):
         # would report 5. The number is logged as the block's cost and read as
         # "how much did this action explore", so it has to be what happened.
         # (Charging was never affected: that path counts `device_trials`.)
-        "n_trials": sum(
-            1 for t in study.trials if t.state != optuna.trial.TrialState.WAITING
-        ),
+        "n_trials": sum(1 for t in study.trials
+                        if t.state != optuna.trial.TrialState.WAITING),
         "n_feasible": len(feasible),
         "stopped_early": stag["stopped"],
         "aborted": stag["aborted"],
@@ -665,18 +921,22 @@ def _result(study, ctx, memory, replayed):
         # often it
         # appears, so the duplicates quietly biased the surrogate toward
         # whatever the interrupted block happened to measure first.
-        "memory": {
-            "trials": _dedup(
-                [{"params": t.params, "value": t.value} for t in feasible],
-                memory.get("trials", []),
-            ),
-            "ceiling": ceiling,
-        },
+        "memory": {"trials": _dedup([dict({"params": t.params, "value": t.value},
+                                          **({"measured": t.user_attrs["measured_params"]}
+                                             if "measured_params" in t.user_attrs else {}))
+                                     for t in feasible],
+                                    memory.get("trials", [])),
+                   "ceiling": ceiling},
+        # DOMAIN-level, so it is returned separately from `memory` for the caller
+        # to store under the domain alone. It stays inside `memory` too, so a
+        # caller that has not been taught the new key keeps working.
+        "ceiling": ceiling,
         # Structure-INDEPENDENT, so it is returned separately from `memory` and
         # the caller stores it at run level rather than under the structure key.
         "refusals": _dedup_refusals((opts.refusals or []) + ctx["new_refusals"]),
         "env_faults": sum(1 for h in history if h.get("status") == "env_fault"),
-        "failures": sum(1 for h in history if h.get("status") in _FAILURE_STATUSES),
+        "failures": sum(1 for h in history
+                        if h.get("status") in _FAILURE_STATUSES),
         "history": history,
     }
 
@@ -696,7 +956,7 @@ def run_bo(objective, sites, hw, opts=None):
                   feasible latency (mirrors PANKO's global_stagnation_limit; 0/None disables it).
                   Small spaces (e.g. an elementwise op's 2 knobs) converge and stop well under the cap.
 
-    Returns dict: best_config (per-site), best_latency, n_trials, n_feasible, stopped_early, history.
+    Returns dict: best_config (per-site), best_objective_us, n_trials, n_feasible, stopped_early, history.
     """
     opts = opts or SearchOptions()
     optuna.logging.set_verbosity(optuna.logging.WARNING)
@@ -728,10 +988,11 @@ def run_bo(objective, sites, hw, opts=None):
         "sites": sites,
         "hw": hw,
         "opts": opts,
+        "study": study,
         "anchor": anchor,
         "history": [],
         "new_refusals": [],
-        "state": _initial_state(memory, anchor, opts),
+        "state": initial_state(memory, anchor, opts),
         "refused": _carried_refusals(opts),
         "stag": {"best": float("inf"), "since": 0, "stopped": False, "aborted": None},
     }

@@ -29,8 +29,8 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent))
 from _support import (
-    CATALOG,
-    CHIP_ARGS,
+    CATALOG,  # noqa: E402
+    INIT_ARGS,
     HARNESS,
     feasible_argv,
     file_hash,
@@ -136,6 +136,118 @@ class WrapperSignatureTest(unittest.TestCase):
         return harness.wrapper_signature(src) == self.base
 
 
+DBG_KERNEL = KERNEL.replace(
+    '@pypto.frontend.jit(runtime_options={"device_sched_mode": 1})',
+    '@pypto.frontend.jit(runtime_options={"device_sched_mode": 1},\n'
+    '                    debug_options={"runtime_debug_mode": 1})',
+)
+
+
+class DebugOptionsSignatureTest(unittest.TestCase):
+    """`debug_options` is the measurement's configuration, not the kernel's cost."""
+
+    def setUp(self):
+        self.base = harness.debug_options_signature(DBG_KERNEL)
+
+    def test_a_kernel_edit_leaves_it_alone(self):
+        same = DBG_KERNEL.replace(
+            "set_vec_tile_shapes(64, 128)", "set_vec_tile_shapes(32, 256)"
+        )
+        self.assertEqual(harness.debug_options_signature(same), self.base)
+
+    def test_dropping_it_changes_the_signature(self):
+        bare = DBG_KERNEL.replace(
+            ',\n                    debug_options={"runtime_debug_mode": 1}', ""
+        )
+        self.assertNotIn("debug_options", bare)
+        self.assertNotEqual(harness.debug_options_signature(bare), self.base)
+
+    def test_flipping_the_mode_changes_the_signature(self):
+        flipped = DBG_KERNEL.replace(
+            '"runtime_debug_mode": 1', '"runtime_debug_mode": 0'
+        )
+        self.assertNotEqual(harness.debug_options_signature(flipped), self.base)
+
+    def test_an_unparseable_candidate_is_not_silently_passed(self):
+        self.assertIsNone(harness.debug_options_signature("def (:"))
+
+
+class DebugOptionsGateTest(unittest.TestCase):
+    """The gates act on it through the same path as the wrapper freeze."""
+
+    def setUp(self):
+        self._tmp = tempfile.TemporaryDirectory()
+        self.op_dir = Path(self._tmp.name) / "demo"
+        self.op_dir.mkdir(parents=True)
+        self.op_file = self.op_dir / "demo_impl.py"
+        self.op_file.write_text(DBG_KERNEL, encoding="utf-8")
+        self.addCleanup(self._tmp.cleanup)
+        res, _ = run_cli(
+            "init",
+            "--op-dir",
+            str(self.op_dir),
+            "--op",
+            "demo",
+            "--p-ref",
+            "100",
+            "--preopt-p",
+            "500",
+            "--catalog",
+            str(CATALOG),
+            "--allow-unversioned",
+            "--op-file",
+            str(self.op_file),
+            *INIT_ARGS,
+        )
+        self.assertTrue(res["initialized"], res)
+
+    def test_init_records_the_baseline_debug_options(self):
+        self.assertTrue(read_state(self.op_dir)["debug_options_signature"])
+
+    def test_feasible_rejects_a_candidate_that_drops_them(self):
+        self.op_file.write_text(
+            DBG_KERNEL.replace(
+                ',\n                    debug_options={"runtime_debug_mode": 1}', ""
+            ),
+            encoding="utf-8",
+        )
+        res, _ = run_cli(
+            "feasible",
+            "--op-dir",
+            str(self.op_dir),
+            "--parent",
+            "u1",
+            "--op-file",
+            str(self.op_file),
+        )
+        self.assertFalse(res["feasible"])
+        self.assertIn("debug_options", res["reason"])
+
+    def test_record_discards_a_measurement_taken_under_another_mode(self):
+        self.op_file.write_text(
+            DBG_KERNEL.replace('"runtime_debug_mode": 1', '"runtime_debug_mode": 0'),
+            encoding="utf-8",
+        )
+        res, rc = run_cli(
+            "record",
+            "--op-dir",
+            str(self.op_dir),
+            "--parent",
+            "u1",
+            "--code-hash",
+            file_hash(self.op_file),
+            "--s",
+            "1",
+            "--p",
+            "10",
+        )
+        self.assertEqual(rc, 3)
+        self.assertIn("debug_options", res["reason"])
+        self.assertEqual(
+            read_state(self.op_dir)["progress"]["best_aicore_e2e_us"], 500.0
+        )
+
+
 class WrapperFreezeGateTest(unittest.TestCase):
     """The gates that act on it."""
 
@@ -146,7 +258,7 @@ class WrapperFreezeGateTest(unittest.TestCase):
         self.op_file = self.op_dir / "demo_impl.py"
         self.op_file.write_text(KERNEL, encoding="utf-8")
         self.addCleanup(self._tmp.cleanup)
-        res, rc = self._run(*init_argv(self.op_dir, self.op_file, *CHIP_ARGS))
+        res, rc = self._run(*init_argv(self.op_dir, self.op_file, *INIT_ARGS))
         self.assertTrue(res["initialized"], res)
 
     def test_init_records_the_baseline_wrapper(self):
@@ -184,7 +296,7 @@ class WrapperFreezeGateTest(unittest.TestCase):
         self.assertEqual(res["error"], "wrapper_drift")
         self.assertFalse(res["improved"])
         # A spectacular p must not have become the best.
-        self.assertEqual(self._state()["progress"]["best_latency_us"], 500.0)
+        self.assertEqual(self._state()["progress"]["best_aicore_e2e_us"], 500.0)
 
     def _run(self, *args):
         return run_cli(*args)
