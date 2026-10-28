@@ -1,2 +1,0 @@
-# Preserve upstream CRLF and required blank diff-context lines in recovery patches.
-docs/patches/*.patch -text whitespace=-blank-at-eol,cr-at-eol

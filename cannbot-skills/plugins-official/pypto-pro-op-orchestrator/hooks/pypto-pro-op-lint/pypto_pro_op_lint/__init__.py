@@ -11,7 +11,7 @@
 # -----------------------------------------------------------------------------------------------------------
 
 from . import checks  # noqa: F401
-from .cli import cmd_check_gate, cmd_check_module_gate, cmd_lint_golden, cmd_lint_test, main
+from .cli import cmd_lint_golden, cmd_lint_test, main
 from .core import (
     CheckContext,
     Finding,
@@ -19,7 +19,7 @@ from .core import (
     _run_checks,
     register,
 )
-from .hooks import hook_post_edit, hook_stop
+from .hooks import hook_post_edit
 from .infer import _build_context
 from .observability import LOGS_DIR, LOGS_EVENTS_FILE
 
@@ -31,12 +31,9 @@ __all__ = [
     "_build_context",
     "_has_error_fail",
     "_run_checks",
-    "cmd_check_gate",
-    "cmd_check_module_gate",
     "cmd_lint_golden",
     "cmd_lint_test",
     "hook_post_edit",
-    "hook_stop",
     "main",
     "register",
 ]

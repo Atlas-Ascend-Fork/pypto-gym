@@ -64,7 +64,7 @@ cannbot-skills/
 │   ├── pypto-api-explore/
 │   ├── pypto-op-design/
 │   ├── pypto-pro-op-develop/
-│   └── ...                   # 共 32 个顶层 Skill 子目录
+│   └── ...                   # 共 31 个顶层 Skill 子目录
 ├── model/                    # 模型适配与推理优化 Skills
 │   ├── hf-npu-e2e-workflow/
 │   ├── pypto-convert-model/
@@ -96,7 +96,6 @@ cannbot-skills/
 | 验证与调优类 | `pypto-golden-generate`、`pypto-precision-compare`、`pypto-precision-debug`、`pypto-op-verify`、`pypto-op-review`、`pypto-op-perf-tune`、`pypto-op-perf-panko-manual`、`pypto-kernel-validate` | Golden 生成、精度对比与排查、功能验证、代码检视、性能调优（分步骤 / PANKO 搜索式）、产物校验（反作弊 + 精度 + 性能） |
 | 监控与调试类 | `pypto-op-monitor`、`pypto-general-debug` | 任务监控、通用诊断 |
 | Pro 专属类 | `pypto-pro-intent-understand`、`pypto-pro-material-explore`、`pypto-pro-op-plan`、`pypto-pro-op-design`、`pypto-pro-op-develop`、`pypto-pro-op-perf-tune`、`pypto-pro-golden-generate`、`pypto-pro-environment-check`、`pypto-pro-precision-debug` | PyPTO-Pro 需求、开发、调优与调试 |
-| Scriptor 流程类 | `pypto-pro-scriptor-develop`、`pypto-pro-scriptor-optimize`、`pypto-pro-scriptor-verify` | 继承 Pro 原型与合同，复用固定 ascriptor 源码完成实现、优化与验收 |
 
 ### 模型适配（model/）
 
@@ -116,5 +115,6 @@ cannbot-skills/
 - `references/` — 可选，详细参考文档，按需引用的深度资料
 - `scripts/` — 可选，技能使用的自动化脚本
 - `templates/` — 可选，工程模板与配置样例
+- `examples/` — 可选，随 Skill 分发的可运行样例
 
 跨 Skill 引用必须指向本仓实际存在的目录，并使用目标工具可解析的相对路径；Plugin 只声明和安装自身工作流需要的 Skills 与 Agents。

@@ -15,9 +15,9 @@ CANNBot PyPTO Kernel Validator 用于校验一个声称由 PyPTO 开发的算子
 | 对比维度 | 本插件 | pypto-op-orchestrator / pypto-pro-op-orchestrator |
 |---------|--------|--------------------------------------------------|
 | 职责 | 校验已产出的算子产物（judge-only） | 从零开发算子 |
-| 形态 | 单 subagent + 单 skill | 多 subagent 团队 + 状态机 |
+| 形态 | 单 subagent + 单 skill | PyPTO 为多 subagent + 状态机；Pro 默认自主决定执行方式，可显式开启多 agent 模式 |
 | 典型调用方 | `benchmark/verifier_runner.py` 自动 spawn | 用户交互式发起 |
-| 产物 | `<output_dir>/skill_report.json` | `custom/<op>/` 下的算子工程 |
+| 产物 | `<output_dir>/skill_report.json` | 算子工程；目录示例为 `custom/<op>/` |
 
 ## 一、环境搭建
 

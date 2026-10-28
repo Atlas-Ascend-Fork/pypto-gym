@@ -28,10 +28,6 @@ INTENT = OPS_ROOT / "pypto-pro-intent-understand"
 MATERIAL = OPS_ROOT / "pypto-pro-material-explore"
 PLAN = OPS_ROOT / "pypto-pro-op-plan"
 KB = OPS_ROOT / "pypto-pro-op-kb"
-VERIFIER = (
-    OPS_ROOT.parent / "plugins-official" / "pypto-pro-op-orchestrator"
-    / "agents" / "pypto-pro-op-verifier.md"
-)
 
 
 def _read(path: Path) -> str:
@@ -129,7 +125,6 @@ class PlanContractTests(unittest.TestCase):
         selection_rule = json.loads(
             _read(KB / "topology-map.json")
         )["selection_rule"]
-        verifier = _read(VERIFIER)
 
         self.assertIn("Route zero or more topologies matched by the formula", router)
         self.assertIn("record `topologies: []` rather than force a best-fit category", router)
@@ -158,10 +153,6 @@ class PlanContractTests(unittest.TestCase):
         )
         self.assertIn("matched topologies and applicable property modifiers", selection_rule)
         self.assertIn("retain all and only candidates", selection_rule)
-        self.assertIn("零命中和多命中都是正常结果", verifier)
-        self.assertIn("若实际命中任何拓扑却写 `[]` 或遗漏，判 FAIL", verifier)
-        self.assertIn("适用 property modifier 路由结果的并集", verifier)
-        self.assertIn("拓扑数组为空时后三类仍须检查", verifier)
         self.assertIn("不能表示未知、未分析或跳过", plan)
         topology_map = json.loads(_read(KB / "topology-map.json"))
         self.assertTrue(topology_map["property_modifiers"]["is_list"]["patterns"])
@@ -176,8 +167,6 @@ class PlanContractTests(unittest.TestCase):
         self.assertIn("scripts/validate_plan.py", plan)
         self.assertIn("未指定时默认 A5", plan)
         self.assertNotIn("python -c '", plan)
-        planner = _read(VERIFIER.with_name("pypto-pro-op-planner.md"))
-        self.assertIn("validate_plan.py", planner)
 
     def test_kb_validator_accepts_flat_split_and_dynamic_topologies(self) -> None:
         validator = self._load_module(PLAN / "scripts/validate_plan.py")

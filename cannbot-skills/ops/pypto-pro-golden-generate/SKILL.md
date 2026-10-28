@@ -1,6 +1,6 @@
 ---
 name: pypto-pro-golden-generate
-description: 为 PyPTO-Pro 算子生成、规范化和验证 golden 参考实现。根据已校验 SPEC 产出 NPU torch/torch_npu `{op}_golden.py` 与 CPU `{op}_golden_cpu.py`；普通模式 CPU 返回 FP32，Scriptor 模式按 SPEC 输出 dtype 返回。仅在调用方显式传入 `collect_golden_perf=true` 时采集 NPU 性能。既可由编排器调用，也可直接响应自然语言或既有参考，适用于“生成 golden / 参考实现 / 验证基准 / golden.py / normalize PyTorch 或 NumPy reference”等请求；不用于架构设计、kernel 实现或性能调优。
+description: 为 PyPTO-Pro 算子生成、规范化和验证 golden 参考实现。根据已校验 SPEC 产出 NPU torch/torch_npu `{op}_golden.py` 与 CPU `{op}_golden_cpu.py`；CPU 浮点参考使用 FP32。仅在调用方显式传入 `collect_golden_perf=true` 时采集 NPU 性能。既可由编排器调用，也可直接响应自然语言或既有参考，适用于“生成 golden / 参考实现 / 验证基准 / golden.py / normalize PyTorch 或 NumPy reference”等请求；不用于架构设计、kernel 实现或性能调优。
 ---
 
 # PyPTO-Pro Golden 参考实现
@@ -34,7 +34,7 @@ Stage 2 必须交付并验证：
 | 文件 | 职责 |
 |---|---|
 | `<op-dir>/<op>_golden.py` | torch + torch_npu 的 NPU 数学参考、输入工厂和自验证 |
-| `<op-dir>/<op>_golden_cpu.py` | 纯 torch 的 CPU 参考和自验证；Scriptor 模式按 SPEC 输出 dtype 舍入 |
+| `<op-dir>/<op>_golden_cpu.py` | 纯 torch 的 CPU FP32 浮点参考和自验证 |
 | `<op-dir>/GOLDEN_VALIDATION.json` | 与 SPEC、两份 golden SHA-256 绑定的单次自验证回执 |
 
 `GOLDEN_PERF_REPORT.md` 仅在 `collect_golden_perf=true` 时交付。单独使用时，只有用户明确要求采集 NPU golden 性能才将该开关视为 `true`。开关缺失或为 `false` 时不得运行 profiling，也不得把报告列为门禁；SPEC 中存在性能 P0 或用户要求高性能实现本身不能开启该开关。
@@ -123,16 +123,7 @@ P1 或可选分支缺少可执行的已确认值时，先退回 `pypto-pro-inten
 
 ### 5. 生成并验证 CPU golden
 
-调用方传入 `workflow_mode=scriptor-bootstrap` 时，使用
-[templates/golden_cpu_scriptor_template.py.tmpl](templates/golden_cpu_scriptor_template.py.tmpl)
-作为 CPU 骨架。先在 FP32 下计算，再按每个 P0 的 SPEC `output_dtypes` 舍入一次，
-返回 dtype 必须与声明的输出完全一致；不可套用下面普通模式的“总是返回 FP32”规则。
-从 NPU golden 复制并适配 `_make_inputs(device)`，让它在 CPU 上按原 case 名返回
-全部 P0 的 `(case_name, args, kwargs)`，保留合法输入与 Inf/NaN；`_validate()`
-逐案核对输出 shape/dtype。Scriptor 的 `bootstrap-check` 还会独立调用这份 CPU
-Golden 的输入工厂与函数，对照 SPEC 逐案检查输入和输出，在原型前拦截错误。
-
-其他模式使用 [templates/golden_cpu_template.py.tmpl](templates/golden_cpu_template.py.tmpl)，
+使用 [templates/golden_cpu_template.py.tmpl](templates/golden_cpu_template.py.tmpl)，
 从已完成数学实现和自验证代码的 NPU golden 复制相同数学逻辑并进行以下适配：
 
 - 函数名为 `<op>_golden_cpu`，签名、参数语义和计算公式与 NPU golden 一致。
@@ -145,7 +136,7 @@ CPU 自验证至少覆盖 FP32/低精度浮点输入可运行、输出为 FP32�
 
 ### 6. 单次执行并生成回执
 
-两份文件完成后，只通过固定 runner 验证；mathematician 不直接执行任一 golden：
+两份文件完成后，只通过以下固定 runner 验证：
 
 ```bash
 TILE_FWK_DEVICE_ID=<id> python <skill-dir>/scripts/validate_golden_once.py --op-dir <op-dir> --spec <spec-path>

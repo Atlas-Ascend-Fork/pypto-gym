@@ -15,9 +15,9 @@ description: 设计 PyPTO-Pro 算子的 tile 级执行方案。当 SPEC、Golden
 
 ## 两条实现约束（设计阶段须落实）
 
-> 完整定义与证据门槛见`$CANNBOT_CONFIG_ROOT/references/performance-constraints.md`。进入 R0 前必须读取；设计阶段须在 R3（地址分配）和 R1（API 映射）中落实：
-> 1. 所有需要 buffer 切换/轮转的 tile 一律用 `make_tile_group` + `auto_mutex`，`make_tile` 仅限单次使用 scratch tile。手动同步的适用范围见 `pypto-pro-material-explore` SKILL「实现选择规则」节。R3 落实 buffer 管理方式，R6 落实 cross_core 同步方案。
-> 2. Vector 选择按该规范写入 DESIGN.md §1：已选 KB 模板明确要求当前步骤使用 `pl.*` 时按模板，否则使用 `vf.*`；本阶段不运行候选实验。
+> 本节定义本 Skill 的实现约束；`$CANNBOT_CONFIG_ROOT/references/performance-constraints.md` 提供同步与 VF 的 API 说明。进入 R0 前读取该说明，在 R3（地址分配）和 R1（API 映射）中落实以下约束：
+> 1. 所有需要 buffer 切换/轮转的 tile 一律用 `make_tile_group` + `auto_mutex`，`make_tile` 仅限单次使用 scratch tile。手动同步的适用范围见[跨核同步](references/cross_core_synchronization.md)。R3 落实 buffer 管理方式，R6 落实 cross_core 同步方案。
+> 2. Vector 选择按本节写入 DESIGN.md §1：已选 KB 模板明确要求当前步骤使用 `pl.*` 时按模板，否则使用 `vf.*`；本阶段不运行候选实验。仅展示 tile-op 写法、官方样例、同名 API 或性能猜测不构成例外。
 
 ## 性能原则（设计阶段须落实）
 

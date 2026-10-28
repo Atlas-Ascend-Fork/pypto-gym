@@ -15,9 +15,7 @@ description: 优化并验收已通过正确性验证的 PyPTO-Pro 单 kernel 实
 用户只要求采集、比较或诊断时，进入对应参考页；需要改码调优时执行下述闭环。
 命令中的 `PERF_SKILL_ROOT` 指本 Skill 的实际目录；算子目录示例可替换为项目实际路径。
 
-本 Skill 是 `$CANNBOT_CONFIG_ROOT/references/kernel-core-principles.md` 在 A5 上的具体化：
-通则给方向，本 Skill 的实测给数值。同一数值冲突时以实测为准，并按 `M5` 留痕。
-调优顺序遵循 `kernel-perf-pypto-pro-a5.md` §2 的排障顺序（`G1` → `G6`），且只优化 profile 确认的绑定资源（`B4`）。
+性能分析可参考 `$CANNBOT_CONFIG_ROOT/references/kernel-core-principles.md` 与 `kernel-perf-pypto-pro-a5.md`。按 `B4` 优先定位关键路径，用匹配设备、工作负载与测量口径的实测校准估计（`M5`）；`G1`–`G6` 仅作诊断参考，按观测瓶颈选择检查项，不作为验收或停止调优的依据。
 
 ## 1. 目标与边界
 
@@ -203,11 +201,9 @@ general knowledge 本身不是优化项来源，假设必须先按前述证据�
 
 ## 5. 交付物
 
-独立调用本 Skill 时，`PERFORMANCE_REPORT.md` 和账本必须以真实评分后最终选定的 DSL/导出为终态。
+独立调用本 Skill 时，`PERFORMANCE_REPORT.md` 和账本必须对应真实评分后最终选定的 PyPTO-Pro 实现。
 实验若被完整正确性或用户评分否决，应标为 reject 并记录回退身份，不能让旧的
-KEEP/final 文字与实际交付源码相反。主 agent 随后按 `scriptor-mode.md` 整理同根
-`custom/<op>/` 的 Ascriptor 交付视图和 `REPORT.md`，执行 `delivery-check`；
-此段不减免下表的正式性能证据。
+KEEP/final 文字与实际交付源码相反。按下表交付最终实现和正式性能证据。
 
 | 交付 | 要求 |
 |---|---|

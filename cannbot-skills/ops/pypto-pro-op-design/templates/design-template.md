@@ -9,7 +9,7 @@
 
 ## Knowledge Bindings
 
-> 完整、机器可读的 requirement 清单见 [`DESIGN_BINDINGS.json`](DESIGN_BINDINGS.json)。
+> 完整、机器可读的 requirement 清单保存在生成后与本文同目录的 `DESIGN_BINDINGS.json`。
 > 本文只记录 R0–R8 的实际设计决策；每条活动 requirement 的 `planned_location` 必须准确指向
 > 对应决策及最终 `test_<op>.py` file/symbol，不复制 Binding 分组或 requirement 表格。
 
@@ -63,7 +63,7 @@
 
 ## §1 API 映射（R1 输出）
 
-> 按`$CANNBOT_CONFIG_ROOT/references/performance-constraints.md`中的“强制2：Vector默认使用VF”填写。每个Vector步骤冻结唯一实现：
+> 按[本 Skill](../SKILL.md)的“两条实现约束”填写。每个 Vector 步骤冻结唯一实现：
 >
 > ```
 > vector_selection:

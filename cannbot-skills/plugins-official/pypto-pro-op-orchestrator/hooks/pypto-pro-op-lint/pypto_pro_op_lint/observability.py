@@ -183,21 +183,3 @@ def _emit_summary_event(ctx: CheckContext, findings: list[Finding],
         )
     except OSError:
         pass
-
-
-def _emit_gate_event(ctx: CheckContext, blocked: bool, blocking_rules: list[str],
-                     invocation_id: str = "") -> None:
-    try:
-        event = {
-            "ts": int(time.time()),
-            "invocation_id": invocation_id,
-            "op_dir": ctx.op_dir,
-            "stage": ctx.stage,
-            "mode": "stop",
-            "event_type": "gate_decision",
-            "blocked": blocked,
-            "blocking_rules": blocking_rules,
-        }
-        _append_jsonl(LOGS_EVENTS_FILE, event)
-    except OSError:
-        pass

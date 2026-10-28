@@ -28,7 +28,7 @@ def _scan_golden_files(ctx: CheckContext) -> list[tuple[str, str]]:
     """List (relative_filename, abs_path) of golden files to scan.
 
     In post-edit mode (file_scope set), only the edited file.
-    Otherwise (gate:S2 / gate:S4), all golden files in op_dir + modules/.
+    Otherwise, scan top-level Golden files, plus modules/ in static context 4.
     """
     if ctx.file_scope:
         basename = os.path.basename(ctx.file_scope)
@@ -41,8 +41,7 @@ def _scan_golden_files(ctx: CheckContext) -> list[tuple[str, str]]:
         if ctx.file_exists(fname):
             results.append((fname, ctx.file_path(fname)))
 
-    # Stage 2 precedes module development. Files left under modules/ after a
-    # workflow rollback belong to Stage 4 and must not affect the Stage 2 gate.
+    # Only static context 4 includes module Golden files.
     if ctx.stage != 4:
         return results
 
@@ -104,7 +103,7 @@ def check_pl13(ctx: CheckContext) -> Finding:
     modules_dir = os.path.join(ctx.op_dir, "modules")
     if not stage_files and not os.path.isdir(modules_dir):
         return ctx.make_finding(
-            "PL13", "SKIP", "modules/ directory does not exist (produced only at L1 path Stage 4)"
+            "PL13", "SKIP", "modules/ directory does not exist"
         )
 
     op_name = ctx.op_name

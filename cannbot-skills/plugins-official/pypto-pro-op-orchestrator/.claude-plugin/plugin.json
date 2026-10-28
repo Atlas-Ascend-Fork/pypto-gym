@@ -1,19 +1,19 @@
 {
   "name": "pypto-pro-op-orchestrator",
-  "description": "PyPTO-Pro 算子 Stage 1-5 多智能体开发与性能优化工作流。",
-  "version": "2.0.0",
+  "description": "PyPTO-Pro 算子开发与性能优化工作流。",
+  "version": "3.0.0",
   "author": {
     "name": "CANNBot"
   },
-  "homepage": "https://gitcode.com/cann/cannbot-skills",
-  "repository": "https://gitcode.com/cann/cannbot-skills",
+  "homepage": "https://gitcode.com/cann/pypto-gym/tree/master/cannbot-skills/plugins-official/pypto-pro-op-orchestrator",
+  "repository": "https://gitcode.com/cann/pypto-gym",
   "license": "CANN-2.0",
   "agents": [
     "./agents/pypto-pro-op-planner.md",
-    "./agents/pypto-pro-op-mathematician.md",
-    "./agents/pypto-pro-op-architect.md",
     "./agents/pypto-pro-op-coder.md",
+    "./agents/pypto-pro-op-debugger.md",
+    "./agents/pypto-pro-op-verifier.md",
     "./agents/pypto-pro-op-optimizer.md",
-    "./agents/pypto-pro-op-verifier.md"
+    "./agents/pypto-pro-op-tool.md"
   ]
 }

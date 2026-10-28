@@ -13,7 +13,7 @@ then emits `<op>_golden.py` with the *deterministic* parts filled in:
   - `_validate()` harness iterating single- and multi-case factory formats
 
 The op-specific math body, value/structure-constrained inputs, and op-specific
-property checks stay as `# TODO:` markers for the mathematician (LLM) to fill.
+property checks stay as `# TODO:` markers for the implementing agent to fill.
 
 Pure standard library. No torch, no NPU — runs anywhere.
 """

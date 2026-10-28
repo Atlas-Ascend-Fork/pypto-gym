@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import select
 import sys
 from typing import Any, Optional
@@ -21,40 +22,34 @@ from typing import Any, Optional
 from .core import (
     CheckContext,
     HOOK_INPUT_ENV,
-    STATE_FILE,
+    LintConfigurationError,
     _load_rules,
 )
 
 
-def _infer_op_dir(file_path: str) -> Optional[str]:
-    """Resolve the operator directory that owns ``file_path``.
-
-    Covers three layouts:
-    * Standard: ``<op_dir>/test_{op}.py`` → ``<op_dir>``
-    * Module dev (L1): ``<op_dir>/modules/test_{op}_module*.py`` → ``<op_dir>``
-    * Stateless: no ``.orchestrator_state.json``, heuristic match.
-    """
+def _infer_op_dir(file_path: str, op_name: Optional[str] = None) -> Optional[str]:
+    """Resolve operator artifacts without consulting a workflow ledger."""
     if not file_path:
         return None
-    op_dir = os.path.dirname(os.path.abspath(file_path))
-    if os.path.isfile(os.path.join(op_dir, STATE_FILE)):
-        return op_dir
-    # modules/ subdirectory → walk up to operator main directory
-    if os.path.basename(op_dir) == "modules":
-        parent = os.path.dirname(op_dir)
-        if parent and os.path.isfile(os.path.join(parent, STATE_FILE)):
+    directory = os.path.dirname(os.path.abspath(file_path))
+    if op_name is None:
+        op_name = _infer_op_name_from_filename(
+            os.path.basename(file_path), staged=os.path.basename(directory) == "modules"
+        )
+    if os.path.basename(directory) == "modules":
+        parent = os.path.dirname(directory)
+        if op_name and _looks_like_stateless_op_dir(parent, op_name):
             return parent
-        parent_basename = os.path.basename(parent)
-        if parent_basename and _looks_like_stateless_op_dir(parent, parent_basename):
-            return parent
-    basename = os.path.basename(file_path)
-    inferred_op_name = _infer_op_name_from_filename(basename)
-    if inferred_op_name and _looks_like_stateless_op_dir(op_dir, inferred_op_name):
-        return op_dir
+    if op_name and _looks_like_stateless_op_dir(directory, op_name):
+        return directory
     return None
 
 
-def _infer_op_name_from_filename(filename: str) -> str:
+def _infer_op_name_from_filename(filename: str, *, staged: bool = False) -> str:
+    if staged:
+        match = re.fullmatch(r"(?:test_(.+)_module|(.+)_golden_stage).*\.py", filename)
+        if match:
+            return match.group(1) or match.group(2)
     if filename.startswith("test_") and filename.endswith(".py"):
         return filename[len("test_"):-len(".py")]
     if filename.endswith("_golden.py"):
@@ -81,38 +76,42 @@ def _looks_like_stateless_op_dir(op_dir: str, op_name: str) -> bool:
     return len(files & expected) >= 2
 
 
-def _load_state_json(state_path: str) -> dict:
-    try:
-        with open(state_path, "r", encoding="utf-8") as f:
-            return json.load(f)
-    except (ValueError, OSError):
-        return {}
-
-
-def _get_current_stage(op_dir: str) -> int:
-    state_path = os.path.join(op_dir, STATE_FILE)
-    if not os.path.isfile(state_path):
-        return 0
-    data = _load_state_json(state_path)
-    return int(data.get("current_stage", 0))
-
-
 def _get_op_name(op_dir: str) -> str:
-    state_path = os.path.join(op_dir, STATE_FILE)
-    if not os.path.isfile(state_path):
-        return os.path.basename(op_dir)
-    data = _load_state_json(state_path)
-    name = data.get("operator_name", "")
-    return name if name else os.path.basename(op_dir)
+    filenames = os.listdir(op_dir)
+    names = {_infer_op_name_from_filename(filename) for filename in filenames} - {""}
+    directory_name = os.path.basename(op_dir)
+    directory_goldens = {f"{directory_name}_golden.py", f"{directory_name}_golden_cpu.py"}
+    if directory_name in names or not names or directory_goldens.intersection(filenames):
+        return directory_name
+    modules_dir = os.path.join(op_dir, "modules")
+    if os.path.isdir(modules_dir) and any(
+        filename.startswith((f"test_{directory_name}_module", f"{directory_name}_golden_stage"))
+        and filename.endswith(".py") for filename in os.listdir(modules_dir)
+    ):
+        return directory_name
+    paired_names = {
+        name for name in names if f"test_{name}.py" in filenames
+        and any(f"{name}{suffix}" in filenames for suffix in ("_golden.py", "_golden_cpu.py"))
+    }
+    if paired_names:
+        names = paired_names
+    else:
+        golden_names = {
+            _infer_op_name_from_filename(filename) for filename in filenames
+            if filename.endswith(("_golden.py", "_golden_cpu.py"))
+        }
+        if len(golden_names) == 1:
+            return golden_names.pop()
+    if len(names) == 1:
+        return names.pop()
+    raise LintConfigurationError(f"Ambiguous operator names in {op_dir}: {', '.join(sorted(names))}")
 
 
-def _build_context(op_dir: str, stage: Optional[int] = None) -> CheckContext:
+def _build_context(op_dir: str, stage: Optional[int] = None, *, op_name: Optional[str] = None) -> CheckContext:
     rules = _load_rules()
     op_dir = os.path.abspath(op_dir)
-    if stage is None:
-        stage = _get_current_stage(op_dir)
-    op_name = _get_op_name(op_dir)
-    return CheckContext(op_dir=op_dir, op_name=op_name, stage=stage, rules=rules)
+    return CheckContext(op_dir=op_dir, op_name=_get_op_name(op_dir) if op_name is None else op_name,
+                        stage=4 if stage is None else stage, rules=rules)
 
 
 def _load_hook_input() -> dict[str, Any]:
@@ -158,7 +157,7 @@ def _rule_ids_for_filename(filename: str) -> list[str]:
     """Return rule IDs for post-edit checks on a single file.
 
     Only includes rules that validate the edited file itself. Cross-file
-    rules (gate class) are deferred to the gate check.
+    rules remain available through explicit standalone checks.
     """
     from .core import POST_EDIT_GOLDEN_RULES, POST_EDIT_TEST_RULES
 
@@ -167,62 +166,3 @@ def _rule_ids_for_filename(filename: str) -> list[str]:
     if _is_golden_file(filename):
         return POST_EDIT_GOLDEN_RULES
     return []
-
-
-def _module_staged_filename(op_name: str, module_suffix: str) -> str:
-    """Return the relative path of a module's staged impl file.
-
-    module_suffix is the cumulative suffix, e.g. "1", "12", "123".
-    """
-    return os.path.join("modules", f"test_{op_name}_module{module_suffix}.py")
-
-
-_MAX_OP_DIR_SEARCH_DEPTH = 8
-
-
-def _find_nearest_op_dir(cwd: str) -> Optional[str]:
-    """Walk up from cwd to find the owning operator directory."""
-    abs_cwd = os.path.abspath(cwd)
-    current = abs_cwd
-    for _ in range(_MAX_OP_DIR_SEARCH_DEPTH):
-        if os.path.isfile(os.path.join(current, STATE_FILE)):
-            return current
-        if _looks_like_stateless_op_dir(current, os.path.basename(current)):
-            return current
-        parent = os.path.dirname(current)
-        if parent == current:
-            break
-        current = parent
-    return None
-
-
-def _resolve_module_suffix(op_dir: str, module: str) -> Optional[str]:
-    """Compute the cumulative suffix for a given module number.
-
-    Module 1 → "1", Module 2 → "12", Module 3 → "123", etc.
-    Reads module_count from state to validate the module number.
-    """
-    state_path = os.path.join(op_dir, STATE_FILE)
-    if not os.path.isfile(state_path):
-        return None
-    try:
-        with open(state_path, "r", encoding="utf-8") as f:
-            state = json.load(f)
-    except (OSError, ValueError):
-        return None
-    stage4_modules = state.get("stage4_modules")
-    if not isinstance(stage4_modules, dict):
-        return None
-    module_count = stage4_modules.get("module_count", 0)
-    if not isinstance(module_count, int):
-        return None
-    try:
-        module_num = int(module)
-    except (TypeError, ValueError):
-        return None
-    if module_num < 1 or module_num > module_count:
-        return None
-    suffix = ""
-    for i in range(1, module_num + 1):
-        suffix += str(i)
-    return suffix

@@ -10,7 +10,7 @@
 # See LICENSE in the root of the software repository for the full text of the License.
 # -----------------------------------------------------------------------------------------------------------
 
-"""Regression tests for AST checks and fail-closed hard-gate behavior."""
+"""Regression tests for standalone AST checks and invalid configurations."""
 
 from __future__ import annotations
 
@@ -27,14 +27,14 @@ if str(LINT_ROOT) not in sys.path:
 from pypto_pro_op_lint import core  # noqa: E402
 from pypto_pro_op_lint import observability  # noqa: E402
 from pypto_pro_op_lint.checks import d2_artifact  # noqa: E402
-from pypto_pro_op_lint.cli import cmd_check_gate, cmd_check_module_gate  # noqa: E402
+from pypto_pro_op_lint.cli import cmd_lint_test, cmd_lint_golden, _build_parser, main  # noqa: E402
 from pypto_pro_op_lint.core import (  # noqa: E402
     HOOK_INPUT_ENV,
     CheckContext,
     _load_rules,
     _run_checks,
 )
-from pypto_pro_op_lint.hooks import hook_post_edit, hook_stop  # noqa: E402
+from pypto_pro_op_lint.hooks import hook_post_edit  # noqa: E402
 
 
 @pytest.fixture(autouse=True)
@@ -69,22 +69,6 @@ def _python_comment(content: str) -> str:
     return f"# {content}"
 
 
-def _write_state(
-    op_dir: Path,
-    stage: int = 4,
-    module_count: int | None = None,
-    max_stage: int = 5,
-) -> None:
-    state: dict[str, object] = {
-        "operator_name": "demo",
-        "max_stage": max_stage,
-        "current_stage": stage,
-    }
-    if module_count is not None:
-        state["stage4_modules"] = {"module_count": module_count}
-    _write(op_dir / ".orchestrator_state.json", json.dumps(state))
-
-
 def _valid_spec(op_name: str = "demo") -> str:
     return f'''```json machine-contract
 {{
@@ -108,7 +92,6 @@ y = x
 
 
 def _build_valid_operator(op_dir: Path) -> None:
-    _write_state(op_dir)
     _write(op_dir / "SPEC.md", _valid_spec())
     _write(op_dir / "DESIGN.md", "# DESIGN\n")
     _write(op_dir / "module_interfaces.yaml", "is_fusion: false\n")
@@ -185,24 +168,6 @@ def test_pl03_fails_closed_when_canonical_validator_is_missing(
     finding = _run(tmp_path, "PL03", stage=1)
     assert finding.status == "FAIL"
     assert "canonical SPEC validator" in finding.message
-
-
-def test_pl10_accepts_max_stage_five(tmp_path: Path) -> None:
-    _write_state(tmp_path, max_stage=5)
-    finding = _run(tmp_path, "PL10")
-    assert finding.status == "PASS"
-    assert "max_stage=5" in finding.message
-
-
-@pytest.mark.parametrize("max_stage", [3, 6, None, "5"])
-def test_pl10_rejects_invalid_max_stage(
-    tmp_path: Path, max_stage: object,
-) -> None:
-    _write(
-        tmp_path / ".orchestrator_state.json",
-        json.dumps({"operator_name": "demo", "max_stage": max_stage}),
-    )
-    assert _run(tmp_path, "PL10").status == "FAIL"
 
 
 def test_pl01_rejects_from_import_of_classic_pypto(tmp_path: Path) -> None:
@@ -315,7 +280,7 @@ def test_pl13_post_edit_only_checks_current_golden_stage(tmp_path: Path) -> None
     assert findings[0].status == "PASS"
 
 
-def test_stage2_golden_rules_ignore_downstream_stage_files(tmp_path: Path) -> None:
+def test_static_golden_scope_excludes_modules_outside_context4(tmp_path: Path) -> None:
     _write(tmp_path / "demo_golden.py", "import torch\n")
     _write(tmp_path / "demo_golden_cpu.py", "import torch\n")
     _write(
@@ -356,6 +321,21 @@ def test_missing_checker_is_s0_failure(tmp_path: Path, monkeypatch: pytest.Monke
     assert finding.severity == "S0"
 
 
+def test_checker_exception_is_s0_failure(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    ctx = _context(tmp_path)
+
+    def broken_checker(_ctx):
+        raise RuntimeError("simulated checker failure")
+
+    monkeypatch.setitem(core.CHECKERS, "PL01", broken_checker)
+    findings, _ = _run_checks(ctx, ["PL01"])
+    assert findings[0].status == "FAIL"
+    assert findings[0].severity == "S0"
+    assert "simulated checker failure" in findings[0].message
+
+
 def test_rules_checker_drift_is_rejected(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -367,7 +347,41 @@ def test_rules_checker_drift_is_rejected(
         _load_rules()
 
 
-def test_missing_gate_trigger_is_rejected(
+def test_static_group_with_undefined_rule_is_rejected(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(core, "TEST_RULE_IDS", ["MISSING"])
+    with pytest.raises(core.LintConfigurationError, match="静态检查组引用了未定义规则"):
+        _load_rules()
+
+
+@pytest.mark.parametrize("stages", [[], [0], [True], [5]])
+def test_invalid_static_context_is_rejected(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, stages: list,
+) -> None:
+    rules = _load_rules()
+    rules[0]["stages"] = stages
+    _write(tmp_path / "rules.json", json.dumps({"rules": rules}))
+    monkeypatch.setattr(core, "SCRIPT_DIR", str(tmp_path))
+    with pytest.raises(core.LintConfigurationError, match="非法 stages"):
+        _load_rules()
+
+
+@pytest.mark.parametrize("rule_id", ["PL01", "PL11"])
+def test_static_group_cannot_skip_default_context(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, rule_id: str,
+) -> None:
+    rules = _load_rules()
+    for rule in rules:
+        if rule["id"] == rule_id:
+            rule["stages"] = [1]
+    _write(tmp_path / "rules.json", json.dumps({"rules": rules}))
+    monkeypatch.setattr(core, "SCRIPT_DIR", str(tmp_path))
+    with pytest.raises(core.LintConfigurationError, match="不适用于默认静态范围"):
+        _load_rules()
+
+
+def test_empty_triggers_are_rejected(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     rules = _load_rules()
@@ -380,17 +394,46 @@ def test_missing_gate_trigger_is_rejected(
         _load_rules()
 
 
-def test_unmapped_declared_gate_trigger_is_rejected(
+@pytest.mark.parametrize(
+    ("rule_id", "trigger"),
+    [("PL01", "lint-test"), ("PL11", "lint-golden"), ("PL02", "post-edit")],
+)
+def test_missing_static_group_trigger_is_rejected(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+    rule_id: str, trigger: str,
+) -> None:
+    rules = _load_rules()
+    for rule in rules:
+        if rule["id"] == rule_id:
+            rule["triggers"].remove(trigger)
+    _write(tmp_path / "rules.json", json.dumps({"rules": rules}))
+    monkeypatch.setattr(core, "SCRIPT_DIR", str(tmp_path))
+    with pytest.raises(core.LintConfigurationError, match=f"缺少 {trigger} trigger"):
+        _load_rules()
+
+
+def test_unmapped_declared_static_trigger_is_rejected(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     rules = _load_rules()
     for rule in rules:
         if rule["id"] == "PL03":
-            rule["stages"].append(2)
-            rule["triggers"].append("gate:S2")
+            rule["triggers"].append("lint-test")
     _write(tmp_path / "rules.json", json.dumps({"rules": rules}))
     monkeypatch.setattr(core, "SCRIPT_DIR", str(tmp_path))
-    with pytest.raises(core.LintConfigurationError, match="未进入对应 Stage 门禁"):
+    with pytest.raises(core.LintConfigurationError, match="未进入对应静态检查组"):
+        _load_rules()
+
+
+@pytest.mark.parametrize("trigger", ["gate:S2", "gate:M", "unknown"])
+def test_unknown_trigger_is_rejected(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, trigger: str,
+) -> None:
+    rules = _load_rules()
+    rules[0]["triggers"].append(trigger)
+    _write(tmp_path / "rules.json", json.dumps({"rules": rules}))
+    monkeypatch.setattr(core, "SCRIPT_DIR", str(tmp_path))
+    with pytest.raises(core.LintConfigurationError, match="未知 trigger"):
         _load_rules()
 
 
@@ -419,93 +462,39 @@ def test_empty_rules_are_rejected(
         _load_rules()
 
 
-def test_module_resolution_failure_blocks(tmp_path: Path) -> None:
-    assert cmd_check_module_gate(str(tmp_path), "1") == 2
-
-
-def test_module_gate_rejects_wrong_stage(tmp_path: Path) -> None:
-    assert cmd_check_module_gate(str(tmp_path), "1", stage=3) == 2
-
-
-def test_module_gate_rejects_missing_staged_file(tmp_path: Path) -> None:
-    _write(
-        tmp_path / ".orchestrator_state.json",
-        json.dumps({
-            "operator_name": "demo",
-            "stage4_modules": {"module_count": 1},
-        }),
-    )
-    assert cmd_check_module_gate(str(tmp_path), "1") == 2
-
-
-def test_unknown_stage_gate_blocks(tmp_path: Path) -> None:
-    assert cmd_check_gate(str(tmp_path), 99) == 2
-
-
-def test_stage4_golden_rules_are_enabled() -> None:
-    rule_by_id = {rule["id"]: rule for rule in _load_rules()}
-    assert 4 in rule_by_id["PL04"]["stages"]
-    assert 4 in rule_by_id["PL05"]["stages"]
-    assert 4 in rule_by_id["PL11"]["stages"]
-    assert 4 in rule_by_id["PL13"]["stages"]
-    assert "PL04" in core.GATE_RULES_BY_STAGE[4]
-    assert "PL05" in core.GATE_RULES_BY_STAGE[4]
-    assert "PL11" in core.GATE_RULES_BY_STAGE[4]
-    assert "PL13" in core.GATE_RULES_BY_STAGE[4]
-
-
-@pytest.mark.parametrize("missing", ["demo_golden.py", "demo_golden_cpu.py"])
-def test_stage4_gate_rejects_deleted_required_golden(
-    tmp_path: Path, missing: str,
-) -> None:
-    _build_valid_operator(tmp_path)
-    (tmp_path / missing).unlink()
-    assert cmd_check_gate(str(tmp_path), 4) == 2
+def test_empty_check_selection_is_s0_failure(tmp_path: Path) -> None:
+    findings, _ = _run_checks(_context(tmp_path), [])
+    assert len(findings) == 1
+    assert findings[0].status == "FAIL"
+    assert findings[0].severity == "S0"
 
 
 def test_removed_rules_are_not_registered_or_referenced() -> None:
-    removed = {"PL06", "PL12", "PL14", "PL17"}
+    removed = {"PL06", "PL10", "PL12", "PL14", "PL17"}
     rule_ids = {rule["id"] for rule in _load_rules()}
     referenced = set(
         core.TEST_RULE_IDS
         + core.GOLDEN_RULE_IDS
-        + core.MODULE_GATE_RULE_IDS
         + core.POST_EDIT_TEST_RULES
         + core.POST_EDIT_GOLDEN_RULES
     )
-    for stage_rules in core.GATE_RULES_BY_STAGE.values():
-        referenced.update(stage_rules)
     assert removed.isdisjoint(rule_ids)
     assert removed.isdisjoint(core.CHECKERS)
     assert removed.isdisjoint(referenced)
 
 
-def test_all_rules_have_registered_checkers_and_consistent_gate_triggers() -> None:
+def test_all_rules_have_registered_checkers_and_static_group_triggers() -> None:
     rules = _load_rules()
     rule_by_id = {rule["id"]: rule for rule in rules}
     assert set(rule_by_id) == set(core.CHECKERS)
-    for stage, rule_ids in core.GATE_RULES_BY_STAGE.items():
+    groups = {
+        "lint-test": core.TEST_RULE_IDS,
+        "lint-golden": core.GOLDEN_RULE_IDS,
+        "post-edit": core.POST_EDIT_TEST_RULES + core.POST_EDIT_GOLDEN_RULES,
+    }
+    for trigger, rule_ids in groups.items():
         for rule_id in rule_ids:
-            assert stage in rule_by_id[rule_id]["stages"]
-            assert f"gate:S{stage}" in rule_by_id[rule_id]["triggers"]
-    for rule_id in core.MODULE_GATE_RULE_IDS:
-        assert "gate:M" in rule_by_id[rule_id]["triggers"]
-    for rule_id in core.POST_EDIT_TEST_RULES + core.POST_EDIT_GOLDEN_RULES:
-        assert "post-edit" in rule_by_id[rule_id]["triggers"]
-
-
-@pytest.mark.parametrize("stage", [1, 2, 3, 4])
-def test_complete_stage_gate_passes_valid_operator(tmp_path: Path, stage: int) -> None:
-    _build_valid_operator(tmp_path)
-    assert cmd_check_gate(str(tmp_path), stage) == 0
-
-
-def test_stage2_gate_does_not_require_optional_performance_report(
-    tmp_path: Path,
-) -> None:
-    _build_valid_operator(tmp_path)
-    assert not (tmp_path / "GOLDEN_PERF_REPORT.md").exists()
-    assert cmd_check_gate(str(tmp_path), 2) == 0
+            assert trigger in rule_by_id[rule_id]["triggers"]
 
 
 def _post_edit_output(
@@ -514,7 +503,7 @@ def _post_edit_output(
     monkeypatch: pytest.MonkeyPatch,
     capfd: pytest.CaptureFixture[str],
 ) -> dict:
-    _write_state(tmp_path)
+    _write(tmp_path / "SPEC.md", _valid_spec())
     test_file = tmp_path / "test_demo.py"
     _write(test_file, source)
     payload = {"tool_input": {"file_path": str(test_file)}}
@@ -557,12 +546,165 @@ def test_post_edit_hook_returns_expected_decision(
     assert "test_demo.py test_demo.py:" not in output["hookSpecificOutput"]["reason"]
 
 
-def test_stop_hook_passes_valid_stage4_operator(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
+def test_standalone_checks_do_not_need_or_consult_workflow_state(tmp_path: Path) -> None:
+    from pypto_pro_op_lint.infer import _build_context
+    _build_valid_operator(tmp_path)
+    assert cmd_lint_test(str(tmp_path), 4) == 0
+    assert cmd_lint_golden(str(tmp_path), 4) == 0
+    state = tmp_path / ".orchestrator_state.json"
+    original = '{"operator_name":"wrong","current_stage":99}'
+    state.write_text(original, encoding="utf-8")
+    context = _build_context(str(tmp_path))
+    assert context.op_name == "demo"
+    assert context.stage == 4
+    assert cmd_lint_test(str(tmp_path), 4) == 0
+    assert cmd_lint_golden(str(tmp_path), 4) == 0
+    assert state.read_text(encoding="utf-8") == original
+
+
+@pytest.mark.parametrize(
+    ("command", "filename", "source"),
+    [
+        (cmd_lint_test, "test_demo.py", "import pypto\n"),
+        (cmd_lint_golden, "demo_golden.py", "import pypto_pro\n"),
+    ],
+)
+def test_standalone_cli_reports_actual_static_failure(
+    tmp_path: Path, command, filename: str, source: str,
     capfd: pytest.CaptureFixture[str],
 ) -> None:
     _build_valid_operator(tmp_path)
-    monkeypatch.setenv(HOOK_INPUT_ENV, json.dumps({"cwd": str(tmp_path)}))
-    assert hook_stop() == 0
-    assert capfd.readouterr().out == ""
+    _write(tmp_path / filename, source)
+    assert command(str(tmp_path), 4) == 2
+    result = json.loads(capfd.readouterr().out)
+    assert result["summary"]["has_error_fail"] is True
+    assert any(finding["status"] == "FAIL" for finding in result["findings"])
+
+
+def test_cli_has_no_workflow_transition_or_stop_gate_entry() -> None:
+    parser = _build_parser()
+    options = parser._option_string_actions
+    assert "--check-gate" not in options
+    assert "--check-module-gate" not in options
+    assert options["--hook"].choices == ["post-edit"]
+
+
+@pytest.mark.parametrize("directory", ["where", "output"])
+@pytest.mark.parametrize("command", [cmd_lint_test, cmd_lint_golden])
+def test_ancillary_test_does_not_redirect_operator_checks(tmp_path: Path, directory, command, capfd) -> None:
+    op_dir = tmp_path / directory
+    _write(op_dir / "test_where.py", "import pypto\n")
+    _write(op_dir / "where_golden_cpu.py", "import pypto_pro\n")
+    _write(op_dir / "test_accuracy.py", "def test_accuracy(): pass\n")
+    assert command(str(op_dir), 4) == 2
+    result = json.loads(capfd.readouterr().out)
+    assert any(item["status"] == "FAIL" and "where" in (item["file"] or "")
+               for item in result["findings"])
+
+
+def test_ambiguous_operator_checks_do_not_silently_pass(tmp_path: Path) -> None:
+    _write(tmp_path / "test_where.py", "import pypto\n")
+    _write(tmp_path / "test_accuracy.py", "def test_accuracy(): pass\n")
+    with pytest.raises(core.LintConfigurationError, match="Ambiguous operator names.*accuracy, where"):
+        cmd_lint_test(str(tmp_path), 4)
+
+
+@pytest.mark.parametrize("op_name", ["test_shift", "foo_golden_cpu"])
+@pytest.mark.parametrize("suffix", ["_golden.py", "_golden_cpu.py"])
+def test_canonical_golden_check_does_not_require_implementation_test(tmp_path: Path, op_name, suffix, capfd) -> None:
+    op_dir = tmp_path / op_name
+    filename = f"{op_name}{suffix}"
+    _write(op_dir / filename, "import pypto_pro\n")
+    assert cmd_lint_golden(str(op_dir), 4) == 2
+    result = json.loads(capfd.readouterr().out)
+    assert any(item["rule_id"] == "PL11" and item["status"] == "FAIL" and item["file"] == filename
+               for item in result["findings"])
+
+
+def test_arbitrary_output_keeps_golden_like_operator_test_identity(tmp_path: Path, capfd) -> None:
+    _write(tmp_path / "test_foo_golden_cpu.py", "import pypto\n")
+    assert cmd_lint_test(str(tmp_path), 4) == 2
+    result = json.loads(capfd.readouterr().out)
+    assert any(item["rule_id"] == "PL01" and item["status"] == "FAIL"
+               for item in result["findings"])
+
+
+@pytest.mark.parametrize("suffix", ["12", "X", ""])
+@pytest.mark.parametrize("golden", [False, True])
+def test_staged_only_operator_is_not_redirected_by_ancillary_test(tmp_path: Path, suffix, golden, capfd) -> None:
+    op_dir = tmp_path / "where"
+    filename = f"where_golden_stage{suffix}.py" if golden else f"test_where_module{suffix}.py"
+    source = f"from modules.test_where_module{suffix} import kernel\n" if golden else "import pypto\n"
+    _write(op_dir / "modules" / filename, source)
+    _write(op_dir / "test_accuracy.py", "def test_accuracy(): pass\n")
+    command, rule = (cmd_lint_golden, "PL13") if golden else (cmd_lint_test, "PL01")
+    assert command(str(op_dir), 4) == 2
+    result = json.loads(capfd.readouterr().out)
+    assert any(item["rule_id"] == rule and item["status"] == "FAIL" and filename in item["file"]
+               for item in result["findings"])
+
+
+@pytest.mark.parametrize("op_name", ["test_shift", "foo_golden_cpu"])
+@pytest.mark.parametrize("suffixes", [("_golden.py",), ("_golden_cpu.py",), ("_golden.py", "_golden_cpu.py")])
+@pytest.mark.parametrize("golden", [False, True])
+def test_paired_artifacts_keep_identity_in_arbitrary_output(tmp_path: Path, op_name, suffixes, golden, capfd) -> None:
+    _write(tmp_path / f"test_{op_name}.py", "import pypto\n")
+    for suffix in suffixes:
+        _write(tmp_path / f"{op_name}{suffix}", "import pypto_pro\n")
+    command, rule = (cmd_lint_golden, "PL11") if golden else (cmd_lint_test, "PL01")
+    assert command(str(tmp_path), 4) == 2
+    result = json.loads(capfd.readouterr().out)
+    expected = f"{op_name}{suffixes[0]}" if golden else f"test_{op_name}.py"
+    assert any(item["rule_id"] == rule and item["status"] == "FAIL" and item["file"] == expected
+               for item in result["findings"])
+
+
+def test_multiple_pairs_remain_ambiguous_when_generic_golden_names_overlap(tmp_path: Path) -> None:
+    for filename in ("test_test_foo.py", "test_foo_golden_cpu.py", "foo_golden_cpu_golden_cpu.py"):
+        _write(tmp_path / filename, "# Ambiguous artifact roles\n")
+    with pytest.raises(core.LintConfigurationError, match="Ambiguous operator names"):
+        cmd_lint_golden(str(tmp_path), 4)
+
+
+@pytest.mark.parametrize(
+    ("relative", "source", "blocking_rule"),
+    [
+        ("test_where.py", "import pypto_pro.language as pl\n@pl.jit\ndef kernel(): pass\n", None),
+        ("test_where.py", "import pypto\n", "PL01"),
+        ("where_golden_cpu.py", "import torch\n", None),
+        ("where_golden_cpu.py", "import pypto_pro\n", "PL11"),
+        ("modules/test_where_module12.py", "import pypto_pro.language as pl\n@pl.jit\ndef kernel(): pass\n", None),
+        ("modules/test_where_module12.py", "import pypto\n", "PL01"),
+        ("modules/where_golden_stage12.py", "import torch\n", None),
+        ("modules/where_golden_stage12.py", "from modules.test_where_module12 import kernel\n", "PL13"),
+        ("modules/test_where_moduleX.py", "import pypto_pro.language as pl\n@pl.jit\ndef kernel(): pass\n", None),
+        ("modules/test_where_moduleX.py", "import pypto\n", "PL01"),
+        ("modules/where_golden_stageX.py", "import torch\n", None),
+        ("modules/where_golden_stageX.py", "from modules.test_where_moduleX import kernel\n", "PL13"),
+        ("modules/test_where_module.py", "import pypto_pro.language as pl\n@pl.jit\ndef kernel(): pass\n", None),
+        ("modules/test_where_module.py", "import pypto\n", "PL01"),
+        ("modules/where_golden_stage.py", "import torch\n", None),
+        ("modules/where_golden_stage.py", "from modules.test_where_module import kernel\n", "PL13"),
+    ],
+)
+def test_post_edit_uses_selected_artifact_amid_ambiguous_siblings(
+    tmp_path: Path, relative: str, source: str, blocking_rule: str | None,
+    monkeypatch: pytest.MonkeyPatch, capfd: pytest.CaptureFixture[str],
+) -> None:
+    op_dir = tmp_path / "chosen-output"
+    _write(op_dir / "SPEC.md", _valid_spec("where"))
+    _write(op_dir / "DESIGN.md", "# DESIGN\n")
+    _write(op_dir / "test_where.py", "import pypto\n")
+    _write(op_dir / "test_accuracy.py", "def test_accuracy(): pass\n")
+    if relative == "where_golden_cpu.py":
+        _write(op_dir / "other_golden_cpu.py", "import torch\n")
+    target = op_dir / relative
+    _write(target, source)
+    monkeypatch.setenv(HOOK_INPUT_ENV, json.dumps({"tool_input": {"file_path": str(target)}}))
+    monkeypatch.setenv(core.POST_EDIT_BLOCK_ENV, "1")
+    monkeypatch.setattr(sys, "argv", ["pypto-pro-op-lint", "--hook", "post-edit"])
+    assert main() == 0
+    output = json.loads(capfd.readouterr().out)["hookSpecificOutput"]
+    assert output["decision"] == ("block" if blocking_rule else "allow")
+    if blocking_rule:
+        assert f"[{blocking_rule}]" in output["reason"]

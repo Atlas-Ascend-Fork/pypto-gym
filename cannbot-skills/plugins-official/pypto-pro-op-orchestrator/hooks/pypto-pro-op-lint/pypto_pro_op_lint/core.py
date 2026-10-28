@@ -34,7 +34,6 @@ SCRIPT_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 SPEC_FILE = "SPEC.md"
 DESIGN_FILE = "DESIGN.md"
 MODULE_INTERFACES_FILE = "module_interfaces.yaml"
-STATE_FILE = ".orchestrator_state.json"
 
 MODE_ENV = "PYPTO_PRO_OP_LINT_MODE"
 HOOK_INPUT_ENV = "PYPTO_PRO_OP_LINT_HOOK_INPUT"
@@ -42,18 +41,6 @@ POST_EDIT_BLOCK_ENV = "PYPTO_PRO_OP_LINT_POST_EDIT_BLOCK"
 
 TEST_RULE_IDS = ["PL01", "PL02", "PL15", "PL16"]
 GOLDEN_RULE_IDS = ["PL11", "PL13"]
-GATE_RULES_BY_STAGE: dict[int, list[str]] = {
-    1: ["PL03", "PL10"],
-    2: ["PL04", "PL05", "PL10", "PL11"],
-    3: ["PL07", "PL08", "PL10"],
-    4: [
-        "PL01", "PL02", "PL04", "PL05", "PL09", "PL10", "PL11", "PL13",
-        "PL15", "PL16",
-    ],
-}
-
-MODULE_GATE_RULE_IDS = ["PL01", "PL02"]
-
 POST_EDIT_TEST_RULES = ["PL01", "PL02"]
 POST_EDIT_GOLDEN_RULES = ["PL11", "PL13"]
 
@@ -122,7 +109,7 @@ CHECKERS: dict[str, Callable[[CheckContext], Finding]] = {}
 
 
 class LintConfigurationError(RuntimeError):
-    """Raised when the lint configuration cannot safely drive a hard gate."""
+    """Raised when the static-check configuration is inconsistent."""
 
 
 def register(rule_id: str):
@@ -160,7 +147,7 @@ def _validate_rule(rule: Any, index: int) -> str:
             f"[pypto-pro-op-lint FATAL] {rule_id} 缺少 stages 数组"
         )
     invalid_stage = any(
-        not isinstance(stage, int) or stage not in GATE_RULES_BY_STAGE
+        type(stage) is not int or stage not in (1, 2, 3, 4)
         for stage in rule["stages"]
     )
     if not rule["stages"] or invalid_stage:
@@ -211,10 +198,7 @@ def _validate_rule_schema(rules: list[dict[str, Any]]) -> dict[str, dict[str, An
 
 def _referenced_rule_ids() -> set[str]:
     referenced_ids = set(TEST_RULE_IDS + GOLDEN_RULE_IDS)
-    referenced_ids.update(MODULE_GATE_RULE_IDS)
     referenced_ids.update(POST_EDIT_TEST_RULES + POST_EDIT_GOLDEN_RULES)
-    for gate_rule_ids in GATE_RULES_BY_STAGE.values():
-        referenced_ids.update(gate_rule_ids)
     return referenced_ids
 
 
@@ -223,7 +207,7 @@ def _validate_referenced_rule_ids(rule_by_id: dict[str, dict[str, Any]]) -> None
     missing_ids = sorted(referenced_ids - set(rule_by_id))
     if missing_ids:
         raise LintConfigurationError(
-            "[pypto-pro-op-lint FATAL] 门禁引用了未定义规则: "
+            "[pypto-pro-op-lint FATAL] 静态检查组引用了未定义规则: "
             + ", ".join(missing_ids)
         )
 
@@ -244,47 +228,21 @@ def _validate_checker_coverage(rule_by_id: dict[str, dict[str, Any]]) -> None:
         )
 
 
-def _validate_stage_gate_mapping(
-    stage: int,
-    gate_rule_ids: list[str],
-    rule_by_id: dict[str, dict[str, Any]],
-) -> None:
-    mismatched = [
-        rule_id
-        for rule_id in gate_rule_ids
-        if stage not in rule_by_id[rule_id]["stages"]
-    ]
-    if mismatched:
-        raise LintConfigurationError(
-            f"[pypto-pro-op-lint FATAL] Stage {stage} 门禁规则阶段不匹配: "
-            + ", ".join(mismatched)
-        )
-
-    expected_trigger = f"gate:S{stage}"
-    missing_triggers = [
-        rule_id
-        for rule_id in gate_rule_ids
-        if expected_trigger not in rule_by_id[rule_id].get("triggers", [])
-    ]
-    if missing_triggers:
-        raise LintConfigurationError(
-            f"[pypto-pro-op-lint FATAL] Stage {stage} 门禁规则缺少 trigger: "
-            + ", ".join(missing_triggers)
-        )
-
-
-def _validate_stage_gate_mappings(
-    rule_by_id: dict[str, dict[str, Any]],
-) -> None:
-    for stage, gate_rule_ids in GATE_RULES_BY_STAGE.items():
-        _validate_stage_gate_mapping(stage, gate_rule_ids, rule_by_id)
-
-
 def _validate_required_trigger_group(
     rule_ids: list[str],
     expected_trigger: str,
     rule_by_id: dict[str, dict[str, Any]],
 ) -> None:
+    # Standalone commands and post-edit use static context 4 by default.
+    inapplicable = [
+        rule_id for rule_id in rule_ids
+        if 4 not in rule_by_id[rule_id]["stages"]
+    ]
+    if inapplicable:
+        raise LintConfigurationError(
+            f"[pypto-pro-op-lint FATAL] {expected_trigger} 规则不适用于默认静态范围: "
+            + ", ".join(inapplicable)
+        )
     missing_triggers = [
         rule_id
         for rule_id in rule_ids
@@ -297,79 +255,29 @@ def _validate_required_trigger_group(
         )
 
 
-def _parse_stage_trigger(rule_id: str, trigger: str) -> int:
-    try:
-        stage = int(trigger.removeprefix("gate:S"))
-    except ValueError as error:
-        raise LintConfigurationError(
-            f"[pypto-pro-op-lint FATAL] {rule_id} 含非法 trigger: {trigger}"
-        ) from error
-    if stage not in GATE_RULES_BY_STAGE:
-        raise LintConfigurationError(
-            f"[pypto-pro-op-lint FATAL] {rule_id} 含非法 trigger: {trigger}"
-        )
-    return stage
-
-
-def _validate_declared_trigger(
-    rule_id: str,
-    trigger: str,
-    post_edit_ids: set[str],
-) -> None:
-    if trigger.startswith("gate:S"):
-        stage = _parse_stage_trigger(rule_id, trigger)
-        if rule_id not in GATE_RULES_BY_STAGE[stage]:
-            raise LintConfigurationError(
-                f"[pypto-pro-op-lint FATAL] {rule_id} 声明了 {trigger} "
-                "但未进入对应 Stage 门禁"
-            )
-        return
-
-    if trigger == "gate:M":
-        if rule_id not in MODULE_GATE_RULE_IDS:
-            raise LintConfigurationError(
-                f"[pypto-pro-op-lint FATAL] {rule_id} 声明了 gate:M "
-                "但未进入 Module 门禁"
-            )
-        return
-
-    if trigger == "post-edit":
-        if rule_id not in post_edit_ids:
-            raise LintConfigurationError(
-                f"[pypto-pro-op-lint FATAL] {rule_id} 声明了 post-edit "
-                "但未进入 post-edit 门禁"
-            )
-        return
-
-    raise LintConfigurationError(
-        f"[pypto-pro-op-lint FATAL] {rule_id} 含未知 trigger: {trigger}"
-    )
-
-
-def _validate_declared_triggers(
-    rule_by_id: dict[str, dict[str, Any]],
-) -> None:
-    post_edit_ids = set(POST_EDIT_TEST_RULES + POST_EDIT_GOLDEN_RULES)
-    for rule_id, rule in rule_by_id.items():
-        for trigger in rule["triggers"]:
-            _validate_declared_trigger(rule_id, trigger, post_edit_ids)
-
-
 def _validate_rule_references(rule_by_id: dict[str, dict[str, Any]]) -> None:
     _validate_referenced_rule_ids(rule_by_id)
     _validate_checker_coverage(rule_by_id)
-    _validate_stage_gate_mappings(rule_by_id)
-    _validate_required_trigger_group(
-        MODULE_GATE_RULE_IDS,
-        "gate:M",
-        rule_by_id,
-    )
-    _validate_required_trigger_group(
-        POST_EDIT_TEST_RULES + POST_EDIT_GOLDEN_RULES,
-        "post-edit",
-        rule_by_id,
-    )
-    _validate_declared_triggers(rule_by_id)
+    groups = {
+        "lint-test": TEST_RULE_IDS,
+        "lint-golden": GOLDEN_RULE_IDS,
+        "post-edit": POST_EDIT_TEST_RULES + POST_EDIT_GOLDEN_RULES,
+    }
+    for trigger, rule_ids in groups.items():
+        _validate_required_trigger_group(rule_ids, trigger, rule_by_id)
+    for rule_id, rule in rule_by_id.items():
+        for trigger in rule["triggers"]:
+            if trigger == "manual":
+                continue
+            if trigger not in groups:
+                raise LintConfigurationError(
+                    f"[pypto-pro-op-lint FATAL] {rule_id} 含未知 trigger: {trigger}"
+                )
+            if rule_id not in groups[trigger]:
+                raise LintConfigurationError(
+                    f"[pypto-pro-op-lint FATAL] {rule_id} 声明了 {trigger} "
+                    "但未进入对应静态检查组"
+                )
 
 
 def _load_rules() -> list[dict[str, Any]]:
@@ -402,7 +310,7 @@ def _run_single_check(ctx: CheckContext, rule_id: str) -> Finding:
         return _system_failure(rule_id, f"Checker function for rule {rule_id} is not registered")
     try:
         return checker(ctx)
-    except Exception as error:  # hard gates must fail closed
+    except Exception as error:  # Invalid checks must fail closed.
         return _system_failure(
             rule_id,
             f"Checker for rule {rule_id} raised an exception: {type(error).__name__}: {error}",
@@ -419,7 +327,7 @@ def _run_checks(ctx: CheckContext, rule_ids: list[str]) -> tuple[list[Finding], 
     total_duration_ms = 0.0
     try:
         if not rule_ids:
-            finding = _system_failure("LINT_CONFIG", "No check rules selected, gate refused to pass")
+            finding = _system_failure("LINT_CONFIG", "No check rules selected")
             findings.append(finding)
             _emit_metric_event_buffered(ctx, finding, run_meta, 0.0)
         for rule_id in rule_ids:

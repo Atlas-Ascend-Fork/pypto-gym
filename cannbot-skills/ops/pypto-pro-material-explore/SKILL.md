@@ -30,9 +30,9 @@ KB 路由由 plan 负责，最终 Module/tile/同步方案由 Stage 3 决定。
 
 API 签名、平台常量和能力边界以前三项为准。KB 或模型记忆不能覆盖目标版本事实。
 
-共享的 buffer/Vector 性能规则只读取
-`$CANNBOT_CONFIG_ROOT/references/performance-constraints.md`；本 skill 不复制或重新解释
-完整规则，只为每个相关步骤记录目标版本证据，供 Stage 3 裁定。
+同步与 VF 的 API 说明见 `$CANNBOT_CONFIG_ROOT/references/performance-constraints.md`。
+最终实现选择由 [Design Skill](../pypto-pro-op-design/SKILL.md)的“两条实现约束”判定；
+本 skill 只为每个相关步骤记录目标版本证据，供 Stage 3 裁定。
 
 ## 工作流
 

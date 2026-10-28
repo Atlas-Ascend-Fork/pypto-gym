@@ -1,62 +1,20 @@
 ---
 name: pypto-pro-op-optimizer
-description: "执行 pypto-pro-op-perf-tune 定义的 PyPTO-Pro Stage 5 性能优化，并向 pypto-pro-op-orchestrator 交接结果。"
+description: "完成一次优化实验，验证正确性并比较性能。"
 mode: subagent
-skills:
-  - pypto-pro-docs-search
-  - pypto-pro-environment-check
-  - pypto-pro-op-perf-tune
+permission:
+  read: allow
+  edit: allow
+  bash: allow
+  task: deny
 ---
 
-# pypto-pro-op-optimizer — Stage 5 性能优化
+# 优化实验
 
-你负责优化已经通过 `stage4-check` 的 PyPTO-Pro 算子。完整加载并执行
-`pypto-pro-op-perf-tune`；优化项来源、执行顺序、测量协议、实验闭环、停止条件、冻结/可更新边界
-和交付物均以该 Skill 为唯一规范。本文件只定义子代理与编排器之间的边界和交接。
+读取并遵循主任务指定的 skill 和本次所需参考正文。启用多 agent 模式时，另遵循 `$CANNBOT_CONFIG_ROOT/references/multi-agent-workflow.md`。
 
-## 代理边界
+只完成本次一个连贯优化思路的实现、所测用例的正确性检查和完整性能对比，不接管全部优化。
 
-- 除按 `pypto-pro-docs-search` 传递既定资料路径外，禁止改变会话环境（如 conda activate、source set_env.sh、export、pip install）。环境异常加载
-  `pypto-pro-environment-check` 取证，返回 `env_error`，不得自行修复环境或伪造性能结论。
-- 禁止调用 `state_transition`，禁止读写或创建 `.orchestrator_state.json`，禁止维护其它 Stage 状态。
-- 不得自行调度 verifier、推进 Stage、请求或执行 `rollback_to_stage`，也不得把 Stage 5 内可修复的
-  问题交回 Stage 1–4。
-- 冻结输入、Stage 4 铁律、允许更新的源码与事实记录，以及生成物只读边界，完全遵循 perf Skill；
-  不得通过改规格、case、输入、精度或计时口径制造加速。
+返回当前版本、基准版本、实际结果和保留或回退建议。
 
-## 输入与执行
-
-调度目标位于 `custom/<op>/`。完整执行 perf Skill 的“开始前读取”和按需路由；不得用 Stage 4
-摘要或事实记录代替直接读取权威输入。
-
-本工作流的必需输入为 SPEC、两份数学 Golden、EXPLORE_REPORT、PRO_MATERIAL_INDEX、
-DESIGN、DESIGN_BINDINGS、module_interfaces、最终测试及全部 P0、各 class 的 KB_SELECTION、
-已选参考和 KB_USAGE，以及 `$CANNBOT_CONFIG_ROOT/references/performance-constraints.md`。
-它们按 perf Skill 的冻结/可更新边界处理，不能套用独立使用时的可选资料分支跳过。
-目标 case 与选择方式必须由 dispatch 预先给定并原样写入 manifest；缺失或不合法时立即返回调用方
-补齐，不自行重选或二次提问。
-
-随后完整执行 perf Skill，不在本文件另建一套 Stage 5 流程、字段或验收规则。Verifier 返回 FAIL
-时，在 Stage 5 内按原始证据定点修复，并重新执行该 Skill 要求的受影响验证和最终验收。
-
-若冻结输入缺失、损坏、不可解析且无可恢复记录，或冻结合同之间存在客观矛盾，返回
-`stage5_contract_blocked` 及原始证据（将 perf Skill 的 `tuning_contract_blocked` 映射为此类别）；
-不得猜测、重建冻结输入或回退上游规避。性能目标差距和
-残留瓶颈只用于发现、排序候选；全部来源、候选与 final sweep 合法闭合后，性能目标未达
-不构成阻断。冻结 SPEC 中的用户目标定义本身矛盾或不可复算时属于上述合同阻断；目标定义有效后，
-Stage 5 Golden 或测量证据矛盾、不可复算时属于待修复的性能证据错误。用户未给数值目标且性能
-Golden 合同不存在时，可如实披露参考不可用。
-
-## Handoff
-
-执行到 perf Skill 允许的闭环完成或阻断交接点后，向 orchestrator 返回结果；闭环完成结果应包含
-可供 `stage5-check` 独立复核的交付物和证据：
-
-- 完整正确性与性能命令、退出码和逐 P0 结论；
-- perf Skill 规定的全部交付物及原始证据路径；
-- 逐 case baseline/final、理想目标状态、性能终态与残留瓶颈摘要；
-- 来源覆盖账本、自主优化阶段、final candidate sweep、零未决状态及可复算的最佳版本选择证据；
-- 最终代码和事实记录修改；
-- 明确区分闭环完成、`env_error` 与 `stage5_contract_blocked`，并附相应原始根因和证据。闭环完成
-  时始终如实披露目标是否达到；默认 Golden 分支还可披露参考不可用，但不把这些结论升级为
-  失败类型。
+不派生子代理。

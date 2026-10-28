@@ -9,13 +9,11 @@
 # INCLUDING BUT NOT LIMITED TO NON-INFRINGEMENT, MERCHANTABILITY, OR FITNESS FOR A PARTICULAR PURPOSE.
 # See LICENSE in the root of the software repository for the full text of the License.
 # -----------------------------------------------------------------------------------------------------------
-"""D2 工件完整性: PL03-PL10."""
+"""D2 工件完整性: PL03-PL09."""
 
 from __future__ import annotations
 
 import importlib.util
-import json
-import os
 from pathlib import Path
 
 from ..core import (
@@ -24,7 +22,6 @@ from ..core import (
     Finding,
     MODULE_INTERFACES_FILE,
     SPEC_FILE,
-    STATE_FILE,
     register,
 )
 
@@ -36,7 +33,7 @@ _SPEC_VALIDATOR_RELATIVE_PATHS = (
 
 
 def _load_spec_contract_text(content: str):
-    """Load the canonical Stage-1 parser from an installed or source layout."""
+    """Load the canonical SPEC parser from an installed or source layout."""
     validator_path = None
     for ancestor in Path(__file__).resolve().parents:
         for relative in _SPEC_VALIDATOR_RELATIVE_PATHS:
@@ -74,7 +71,7 @@ def _check_file_exists(ctx: CheckContext, rule_id: str, filename: str) -> Findin
 
 @register("PL03")
 def check_pl03(ctx: CheckContext) -> Finding:
-    """SPEC.md satisfies the canonical Stage-1 JSON contract."""
+    """SPEC.md satisfies the canonical JSON contract."""
     if not ctx.file_exists(SPEC_FILE):
         return ctx.make_finding("PL03", "FAIL", f"{SPEC_FILE} does not exist", file=SPEC_FILE)
     content = ctx.read_file(SPEC_FILE)
@@ -128,30 +125,3 @@ def check_pl09(ctx: CheckContext) -> Finding:
     """test_{op}.py 存在."""
     filename = f"test_{ctx.op_name}.py"
     return _check_file_exists(ctx, "PL09", filename)
-
-
-@register("PL10")
-def check_pl10(ctx: CheckContext) -> Finding:
-    """orchestrator_state.json 是合法 JSON，且 max_stage 是严格整数 5."""
-    state_path = ctx.file_path(STATE_FILE)
-    if not os.path.isfile(state_path):
-        return ctx.make_finding(
-            "PL10", "FAIL", f"{STATE_FILE} does not exist", file=STATE_FILE
-        )
-    try:
-        with open(state_path, "r", encoding="utf-8") as f:
-            data = json.load(f)
-    except (json.JSONDecodeError, OSError) as e:
-        return ctx.make_finding(
-            "PL10", "FAIL", f"{STATE_FILE} is not valid JSON: {e}", file=STATE_FILE
-        )
-    max_stage = data.get("max_stage")
-    if type(max_stage) is not int or max_stage != 5:
-        return ctx.make_finding(
-            "PL10", "FAIL",
-            f"{STATE_FILE} max_stage={max_stage} (expected exactly integer 5)",
-            file=STATE_FILE
-        )
-    return ctx.make_finding(
-        "PL10", "PASS", f"{STATE_FILE} is valid, max_stage={max_stage}", file=STATE_FILE
-    )

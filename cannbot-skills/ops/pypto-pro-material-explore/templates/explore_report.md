@@ -26,7 +26,7 @@ feasibility: {feasibility}
 ### 1.3 可能会涉及的 API 类别
 
 > 以下为常见类别提示，实际 API 以本次 PRO_MATERIAL_INDEX §A 扫描结果为准。
-> Vector 规则见 [Vector 选择规范](../../../plugins-official/pypto-pro-op-orchestrator/references/performance-constraints.md#强制-2vector-数值计算用-vf-手写)；本阶段记录默认 VF 映射，KB 模板例外交 Stage 3 裁定。
+> Vector 规则见 [Design Skill](../../pypto-pro-op-design/SKILL.md)的“两条实现约束”；本阶段记录默认 VF 映射，KB 模板例外交 Stage 3 裁定。
 
 | 类别 | 是否涉及 | 关键 API | 指定算子是否覆盖 |
 |------|---------|----------|------------------|

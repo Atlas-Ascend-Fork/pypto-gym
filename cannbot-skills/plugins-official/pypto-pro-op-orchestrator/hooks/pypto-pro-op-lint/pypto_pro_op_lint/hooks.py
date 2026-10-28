@@ -25,11 +25,11 @@ from .core import (
 from .infer import (
     _build_context,
     _infer_op_dir,
+    _infer_op_name_from_filename,
     _load_hook_input,
     _rule_ids_for_filename,
 )
 from .observability import (
-    _emit_gate_event,
     _output_hook_json,
 )
 
@@ -42,12 +42,16 @@ def _post_edit_target(data: dict) -> tuple[CheckContext, str] | None:
     file_path = data.get("tool_input", {}).get("file_path", "")
     if not file_path:
         return None
-    op_dir = _infer_op_dir(file_path)
+    file_path = os.path.abspath(file_path)
+    basename = os.path.basename(file_path)
+    op_name = _infer_op_name_from_filename(
+        basename, staged=os.path.basename(os.path.dirname(file_path)) == "modules"
+    )
+    op_dir = _infer_op_dir(file_path, op_name)
     if not op_dir:
         return None
-    basename = os.path.basename(file_path)
-    ctx = _build_context(op_dir)
-    ctx.file_scope = os.path.abspath(file_path)
+    ctx = _build_context(op_dir, op_name=op_name)
+    ctx.file_scope = file_path
     return ctx, basename
 
 
@@ -98,7 +102,7 @@ def _finding_context(
         lines = [_format_finding(f) for f in infos]
         sections.append(
             "[pypto-pro-op-lint] The following messages are for information "
-            "(does not affect the gate):\n" + "\n".join(lines)
+            "(does not affect the result):\n" + "\n".join(lines)
         )
     return "\n\n".join(sections)
 
@@ -116,11 +120,10 @@ def _blocking_reason(error_fails: list[Finding], ctx: object) -> str:
     ]
     blocking_rules = sorted({f.rule_id for f in error_fails})
     footer = (
-        "\n\n**⛔ Fix workflow: read the fix_hints above → fix the violations pointed out by file → "
-        "re-execute Write/Edit on the [same file]. Do not use bash to bypass lint.**"
+        "\n\nFix the reported violations using the hints above, then rerun this check."
     )
     return (
-        "[pypto-pro-op-lint] Immediate gate after artifact write failed (S0/S1):\n"
+        "[pypto-pro-op-lint] Post-edit checks failed (S0/S1):\n"
         + "\n".join(lines)
         + "\n\nblocking_rules: "
         + ", ".join(blocking_rules)
@@ -131,11 +134,7 @@ def _blocking_reason(error_fails: list[Finding], ctx: object) -> str:
 
 
 def hook_post_edit() -> int:
-    """PostToolUse[Write|Edit] — 按文件类型 lint.
-
-    S0/S1 FAIL returns decision=block; the plugin layer throws to abort
-    the tool call. S2+ only appends additionalContext.
-    """
+    """按文件类型检查，输出 decision/context JSON，由调用方处理。"""
     os.environ[MODE_ENV] = "post-edit"
     target = _post_edit_target(_load_hook_input())
     if target is None:
@@ -180,48 +179,4 @@ def hook_post_edit() -> int:
     _output_hook_json(
         "PostToolUse", decision="allow", reason="", additionalContext=context_msg
     )
-    return 0
-
-
-def hook_stop() -> int:
-    """Stop — agent 结束前交付门禁."""
-    os.environ[MODE_ENV] = "stop"
-    data = _load_hook_input()
-    cwd = data.get("cwd", os.getcwd())
-
-    from .infer import _find_nearest_op_dir
-    op_dir = _find_nearest_op_dir(cwd)
-    if not op_dir:
-        return 0
-
-    ctx = _build_context(op_dir)
-    applicable = [r["id"] for r in ctx.rules if ctx.stage in r.get("stages", [])]
-    findings, invocation_id = _run_checks(ctx, applicable)
-    error_fails = [
-        f for f in findings
-        if f.status == "FAIL" and f.severity in ("S0", "S1")
-    ]
-
-    if error_fails:
-        blocking_rules = [f.rule_id for f in error_fails]
-        lines = [_format_finding(f) for f in error_fails]
-        hint_lines = [
-            f"  - {f.rule_id}: {_rule_fix_hint(f.rule_id, ctx)}"
-            for f in error_fails
-        ]
-        _emit_gate_event(ctx, blocked=True, blocking_rules=blocking_rules,
-                         invocation_id=invocation_id)
-        _output_hook_json(
-            "Stop",
-            decision="block",
-            reason="[pypto-pro-op-lint] Delivery gate failed, ERROR (S0/S1) level violations exist:\n"
-            + "\n".join(lines)
-            + "\n\nblocking_rules: "
-            + ", ".join(blocking_rules)
-            + "\nfix_hints:\n"
-            + "\n".join(hint_lines)
-            + "\n\n**⛔ Gate blocked: fix the ERROR-level violations above first, then continue.**",
-        )
-        return 2
-    _emit_gate_event(ctx, blocked=False, blocking_rules=[], invocation_id=invocation_id)
     return 0

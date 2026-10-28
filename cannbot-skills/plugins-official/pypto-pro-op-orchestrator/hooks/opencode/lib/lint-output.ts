@@ -47,42 +47,6 @@ export type ParsedHookOutput = {
   reason: string;
 };
 
-const STATE_FILE = ".orchestrator_state.json";
-const SIMPLE_READ_ONLY = new Set([
-  "cat", "ls", "stat", "test", "head", "tail", "grep", "rg", "wc",
-  "file", "jq", "diff", "cmp", "sha256sum", "md5sum", "basename",
-  "dirname", "realpath", "readlink", "echo", "printf",
-]);
-const GIT_READ_ONLY = /^git\s+(diff|status|show|log|ls-files)\b/;
-const STATE_OUTPUT_REDIRECT = /\d*>>?\s*["']?[^\s;|&]*\.orchestrator_state\.json\b/;
-const GIT_STATE_OUTPUT = /--output(?:=|\s+)["']?[^\s]*\.orchestrator_state\.json\b/;
-
-function isReadOnlyStateSegment(rawSegment: string): boolean {
-  const segment = rawSegment.trim().replace(/^sudo\s+/, "");
-  if (!segment) return true;
-
-  // Reject writes targeting the state file, command substitution and process
-  // substitution. Redirecting read output elsewhere remains safe for the state.
-  if (STATE_OUTPUT_REDIRECT.test(segment) || /\$\(|`|[<>]\(/.test(segment)) {
-    return false;
-  }
-
-  const commandName = segment.match(/^([^\s]+)/)?.[1];
-  if (commandName && SIMPLE_READ_ONLY.has(commandName)) return true;
-  if (GIT_READ_ONLY.test(segment) && !GIT_STATE_OUTPUT.test(segment)) return true;
-  return false;
-}
-
-export function isStateWriteCommand(command: string): boolean {
-  if (!command.includes(STATE_FILE)) return false;
-
-  // Every command segment must be demonstrably read-only. Checking all segments,
-  // rather than only the one containing the literal path, prevents chains such as
-  // `cat state && rm state` and `printf state | xargs rm` from being treated as reads.
-  const segments = command.split(/&&|\|\||[;|\n]|&(?!&)/);
-  return !segments.every(isReadOnlyStateSegment);
-}
-
 export function formatPluginError(scope: string, error: unknown): string {
   const detail = error instanceof Error ? error.message : String(error);
   return `[pypto-pro-op-lint plugin-error] ${scope} auto-check failed: ${detail}`;

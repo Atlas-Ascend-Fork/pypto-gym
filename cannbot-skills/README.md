@@ -9,7 +9,7 @@
 
 ## 📢 项目概述
 
-**CANNBot Skills — PyPTO-Gym** 是面向 PyPTO 与 PyPTO-Pro Tile 算子开发、大模型适配和模型治理的 CANNBot Agent Skills 模块，提供 35 个顶层技能与 4 个开发路径插件。
+**CANNBot Skills — PyPTO-Gym** 是面向 PyPTO 与 PyPTO-Pro Tile 算子开发、大模型适配和模型治理的 CANNBot Agent Skills 模块，提供 34 个顶层技能与 4 个开发路径插件。
 
 **面向用户**：基于 PyPTO 编程框架的昇腾 NPU 算子开发者、模型适配工程师。
 
@@ -34,6 +34,19 @@ opencode
 
 其他场景的安装方式见页面顶部对应的快速上手指南。
 
+### 独立 PyPTO-Pro Kernel Skill
+
+实验性、非正式的 [pypto-pro-kernel](ops/pypto-pro-kernel/SKILL.md) 提供原生 PyPTO-Pro kernel 开发、验证、调试和优化流程，目录内包含 `references/`、`scripts/` 与 `examples/`。可按 [PyPTO-Pro quickstart](plugins-official/pypto-pro-op-orchestrator/quickstart.md) 初始化插件，或在提示词中指定其 `SKILL.md`、将整个目录复制到目标工具的 skill 目录。流程由该 skill 决定。插件入口默认由主代理自主决定执行方式，可按需调用子代理；用户明确开启多 agent 模式后，才遵循该模式的协作规则。静态检查、样例覆盖和目录一致性检查可从 skill 根目录运行：
+
+```bash
+cd /path/to/pypto-gym-toolkit/cannbot-skills/ops/pypto-pro-kernel
+python scripts/check.py
+```
+
+需要核对 PyPTO API 时，用 `PYPTO_SRC` 或 `--pypto-root` 指定匹配目标安装版本的外部源码树。上板样例需要对应的 PyPTO、PyTorch、torch_npu 和 Ascend NPU 环境；该 skill 不包含仿真器。
+
+`scripts/check.py links` 检查内置 Markdown 链接与标题引用，`explain` 分析候选源码的契约和工作量变化。可选的词法名称检查依赖 `scripts/requirements-checks.txt` 中固定版本的 Pyflakes。样例统一以 `kernel.py`、`reference.py`、`test.py` 为公开入口；Sparse Attention 的原始评估器对照额外需要 `CANN_BENCH_ROOT` 和可导入的 `kernel_eval`。
+
 ### 安装后使用
 
 启动 OpenCode，直接以自然语言描述需求：
@@ -48,14 +61,13 @@ opencode
 | 领域 / 路径 | 适用场景 | 入口插件 |
 |------------|---------|---------|
 | **PyPTO 算子开发** | Stage 1–7 全流程融合算子开发与调优 | [pypto-op-orchestrator](plugins-official/pypto-op-orchestrator/AGENTS.md) |
-| **PyPTO-Pro 算子开发** | Stage 1–5 精简流程算子开发与性能优化 | [pypto-pro-op-orchestrator](plugins-official/pypto-pro-op-orchestrator/AGENTS.md) |
-| **Scriptor 模式** | Pro 可上板原型（精度最多修复 3 轮）→ DSL 实现 → 可选优化 → 独立验收；附固定 ascriptor 包 | [Pro 入口的 scriptor 模式](plugins-official/pypto-pro-op-orchestrator/references/scriptor-mode.md) |
+| **PyPTO-Pro 算子开发** | 算子开发、验证与性能优化 | [pypto-pro-op-orchestrator](plugins-official/pypto-pro-op-orchestrator/AGENTS.md) |
 | **模型适配** | HF 模型上 NPU、融合算子整网集成、模型格式转换 | [pypto-model-tools](plugins-official/pypto-model-tools/AGENTS.md) |
 | **算子产物校验** | KernelBench 评测把关：反作弊 + 精度 + 性能统一校验 | [pypto-kernel-validator](plugins-official/pypto-kernel-validator/AGENTS.md) |
 
 ### 技能清单
 
-**算子开发**（ops/，共 32 个顶层技能）
+**算子开发**（ops/，共 31 个顶层技能）
 
 | 类别 | 技能 | 说明 |
 |------|------|------|
@@ -70,7 +82,7 @@ opencode
 | 性能调优 | `pypto-op-perf-panko-manual` | PANKO 搜索式自动调优的 world model + evaluator 契约（由 `pypto-op-auto-tuner-panko` 读取） |
 | 监控与调试 | `pypto-op-monitor`、`pypto-general-debug` | 任务进度监控与通用问题诊断 |
 | **Pro 专属** | `pypto-pro-intent-understand`、`pypto-pro-material-explore`、`pypto-pro-op-plan`、`pypto-pro-op-design`、`pypto-pro-op-develop`、`pypto-pro-op-perf-tune`、`pypto-pro-golden-generate`、`pypto-pro-environment-check`、`pypto-pro-precision-debug` | PyPTO-Pro 开发与精度诊断 |
-| **Scriptor** | `pypto-pro-scriptor-develop`、`pypto-pro-scriptor-optimize`、`pypto-pro-scriptor-verify` | 继承 Pro 数学合同与原型、按安装版指南开发、可配置预算与准出、独立验收 |
+| **Pro 独立技能（实验）** | [pypto-pro-kernel](ops/pypto-pro-kernel/SKILL.md) | 原生 kernel 开发、验证、调试与优化，内含参考资料、检查工具和样例 |
 
 **模型适配**（model/，共 3 个）
 
@@ -92,7 +104,7 @@ cannbot-skills/
 ├── model/                # 模型适配与推理优化 Skills
 └── plugins-official/     # 官方 Plugins（开发路径入口，含 Agents）
     ├── pypto-op-orchestrator/      # PyPTO classic 算子开发（8 Subagent + 状态机）
-    ├── pypto-pro-op-orchestrator/  # PyPTO-Pro 算子开发及 Scriptor 模式（8 Subagent）
+    ├── pypto-pro-op-orchestrator/  # PyPTO-Pro 算子开发
     ├── pypto-model-tools/          # 模型适配工具集（安装时附带 8 个算子支撑 skill）
     └── pypto-kernel-validator/     # 算子产物校验（反作弊 + 精度 + 性能，单 Subagent）
 ```

@@ -1,6 +1,5 @@
 {
-  "//": "Type-check the transition logic. There is deliberately no package.json and no install step here (see __tests__/state-transition-core.test.ts); this file exists so editors and any CI that already has tsc will catch reads of undeclared properties -- the defect class that let `phases.status` (TS2339) ship and freeze every L1 delivery at Stage 4. Run: tsc --noEmit -p <this dir>",
-  "//include": "lib only, NOT __tests__. The tests import node:test and node:assert/strict, and with no @types/node vendored those are unresolvable -- including them made the documented command report TS2307 on every run regardless of whether the code was correct, and a gate that is red by construction does not get adopted.",
+  "//": "Type-check lib/ with an available compiler: tsc --noEmit -p <this dir>.",
   "compilerOptions": {
     "target": "ES2022",
     "module": "ESNext",

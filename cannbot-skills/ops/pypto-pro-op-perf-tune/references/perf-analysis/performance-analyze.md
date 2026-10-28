@@ -30,14 +30,11 @@
 4. PyPTO-Pro 已核实的官方入口是 `msprof python3 test_{op}.py`；`msprof op` 仅在当前 CANN 明确
    支持 Python runner 时使用，环境不支持时回到 msprof 指南，不套用 AscendC 可执行文件流程。
 5. 需要跨 Skill 的采集辅助、加速比对比或交互式 HTML 报告时，按
-   [ops-profiling Skill](../../../ops-profiling/SKILL.md) 与其
-   [msopprof-visualization](../../../ops-profiling/msopprof-visualization/SKILL.md) 子技能执行；
+   [ops-profiling Skill](https://gitcode.com/cann/cannbot-skills/blob/master/ops/ops-profiling/SKILL.md) 与其
+   [msopprof-visualization](https://gitcode.com/cann/cannbot-skills/blob/master/ops/ops-profiling/msopprof-visualization/SKILL.md) 子技能执行；
    其结果仍须按[证据协议](evidence-protocol.md)归档后才能作为调优依据。
 
-   > 注：`ops-profiling` 未收录本仓，由安装入口在启用时从上游 `cann/cannbot-skills` 拉取；
-   > 上述 sibling 链接仅在安装后布局或上游仓检出中可解析。链接失效时按
-   > `$CANNBOT_CONFIG_ROOT/skills/ops-profiling`（或 `$VIS_SKILL_ROOT` 指向
-   > `msopprof-visualization` 子目录）定位。
+   > `ops-profiling` 是可选的外部 Skill，未收录本仓，当前 Pro 编排安装器不下载它。需要时从上述 `cann/cannbot-skills` 来源单独安装，并按实际位置设置 `$CANNBOT_CONFIG_ROOT/skills/ops-profiling` 或指向 `msopprof-visualization` 子目录的 `$VIS_SKILL_ROOT`。
 
 按分析需求路由：
 
@@ -96,5 +93,5 @@
 | [`enhanced-metrics-reference.md`](enhanced-metrics-reference.md) | `VISUAL_ANALYSIS.json` 字段字典（规范约束在证据协议） |
 | [`evidence-protocol.md`](evidence-protocol.md) | 逐 case manifest、Golden、归档与时间线合同 |
 | [`csv_fields_reference.md`](csv_fields_reference.md) | CSV 字段定义与阈值边界 |
-| [`ops-profiling Skill`](../../../ops-profiling/SKILL.md) | 跨 Skill 采集工具、加速比对比与瓶颈速查（sibling 链接仅在安装后布局/上游检出中可解析，失效时按 `$CANNBOT_CONFIG_ROOT/skills/ops-profiling` 定位） |
-| [`msopprof-visualization`](../../../ops-profiling/msopprof-visualization/SKILL.md) | 上板采集数据的交互式 HTML 性能报告（同上，失效时按 `$VIS_SKILL_ROOT` 定位） |
+| [`ops-profiling Skill`](https://gitcode.com/cann/cannbot-skills/blob/master/ops/ops-profiling/SKILL.md) | 可选的外部跨 Skill 采集工具、加速比对比与瓶颈速查；单独安装后按实际路径定位 |
+| [`msopprof-visualization`](https://gitcode.com/cann/cannbot-skills/blob/master/ops/ops-profiling/msopprof-visualization/SKILL.md) | 可选的外部交互式 HTML 性能报告；单独安装后设置 `$VIS_SKILL_ROOT` |

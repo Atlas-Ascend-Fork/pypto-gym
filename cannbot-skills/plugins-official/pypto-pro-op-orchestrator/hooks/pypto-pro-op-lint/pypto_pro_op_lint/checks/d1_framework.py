@@ -28,8 +28,8 @@ def _scan_test_files(ctx: CheckContext) -> list[tuple[str, str]]:
     """List (relative_filename, abs_path) of test files to scan.
 
     In post-edit mode (file_scope set), only the edited file is returned.
-    In module gate mode (module_scope set), only that module's staged file.
-    Otherwise (gate:S4), top-level test_{op}.py + all staged files.
+    With module_scope set, only that module's staged file.
+    Otherwise, top-level test_{op}.py + all staged files.
     """
     results: list[tuple[str, str]] = []
     op_name = ctx.op_name

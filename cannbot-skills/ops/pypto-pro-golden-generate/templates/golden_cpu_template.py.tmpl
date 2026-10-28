@@ -4,9 +4,6 @@
 
 """PyPTO-Pro {op} CPU golden reference (higher precision).
 
-Ordinary Pro mode only. Scriptor uses golden_cpu_scriptor_template.py.tmpl
-because its runner requires the exact SPEC output dtype.
-
 基于 NPU golden ({op}_golden.py) 的数学逻辑，在 CPU 上以更高精度（FP32）计算。
 供 test_{op}.py 的精度校验使用（方案A混合容差标准，见 precision_compare.py）。
 

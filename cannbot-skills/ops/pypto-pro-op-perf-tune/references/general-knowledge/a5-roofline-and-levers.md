@@ -20,16 +20,12 @@ the profiler result as the only tuning basis.
 ## Cross-Skill profiling tools
 
 For raw collection, cross-run speedup and bottleneck triage this page pairs with the
-`ops-profiling` Skill ([SKILL.md](../../../ops-profiling/SKILL.md)) and its
+`ops-profiling` Skill ([SKILL.md](https://gitcode.com/cann/cannbot-skills/blob/master/ops/ops-profiling/SKILL.md)) and its
 `msopprof-visualization` sub-skill
-([SKILL.md](../../../ops-profiling/msopprof-visualization/SKILL.md)) for interactive HTML reports.
+([SKILL.md](https://gitcode.com/cann/cannbot-skills/blob/master/ops/ops-profiling/msopprof-visualization/SKILL.md)) for interactive HTML reports.
 Those tools supply measurements only; the derivation and evidence gate above still decide the roofline.
 
-> Note: `ops-profiling` is not vendored in this repository; it is fetched from the
-> upstream `cann/cannbot-skills` repo at install time. The sibling links above resolve
-> only in the installed layout or an upstream checkout. If they dangle, locate the
-> skill via `$CANNBOT_CONFIG_ROOT/skills/ops-profiling` (or `$VIS_SKILL_ROOT` for the
-> `msopprof-visualization` sub-skill).
+> `ops-profiling` is an optional external skill from `cann/cannbot-skills`. It is not bundled or downloaded by the current Pro orchestrator installer. Install it separately when needed and use its actual installed path, setting `$VIS_SKILL_ROOT` to the `msopprof-visualization` subdirectory.
 
 ## Primary source paths
 

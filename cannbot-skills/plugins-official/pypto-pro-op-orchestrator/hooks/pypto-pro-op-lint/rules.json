@@ -14,9 +14,9 @@
       "fix_effort": "E1",
       "stages": [4],
       "target": "test",
-      "triggers": ["post-edit", "gate:M", "gate:S4"],
+      "triggers": ["lint-test", "post-edit"],
       "rule": "test/staged 文件必须含 import pypto_pro.language as pl；禁止 @pypto.frontend.jit、import pypto.frontend、import pypto（非 Pro）",
-      "fix_hint": "将 import 改为 `import pypto_pro.language as pl`，kernel 装饰器改为 `@pl.jit(auto_mutex=True)`。禁止使用 pypto（非 Pro）前端 API。"
+      "fix_hint": "使用 `import pypto_pro.language as pl` 和 `@pl.jit`，移除非 Pro 的 pypto 前端 API。"
     },
     {
       "id": "PL02",
@@ -25,9 +25,9 @@
       "fix_effort": "E1",
       "stages": [4],
       "target": "test",
-      "triggers": ["post-edit", "gate:M", "gate:S4"],
+      "triggers": ["lint-test", "post-edit"],
       "rule": "test/staged 文件中 @pl.jit 必须且仅能出现 1 次（单 kernel 铁律）",
-      "fix_hint": "L1 路径的逐 Module 开发是在同一个 kernel 函数内增量追加 section，不是每 Module 新建 kernel。删除多余的 @pl.jit 装饰函数，合并到唯一 kernel 中。"
+      "fix_hint": "每个被检查的 test/staged 文件只保留一个 @pl.jit kernel；将同一实现的计算合并到该 kernel。"
     },
     {
       "id": "PL03",
@@ -35,8 +35,8 @@
       "dimension": "D2",
       "fix_effort": "E1",
       "stages": [1],
-      "target": "gate",
-      "triggers": ["gate:S1"],
+      "target": "artifact",
+      "triggers": ["manual"],
       "rule": "SPEC.md 必须通过 pypto-pro-intent-understand 的 canonical JSON machine-contract validator",
       "fix_hint": "按 pypto-pro-intent-understand/templates/spec-template.md 填写唯一 JSON machine-contract，并运行 scripts/validate_spec.py。"
     },
@@ -46,10 +46,10 @@
       "dimension": "D2",
       "fix_effort": "E1",
       "stages": [2, 4],
-      "target": "gate",
-      "triggers": ["gate:S2", "gate:S4"],
+      "target": "artifact",
+      "triggers": ["manual"],
       "rule": "{op}_golden.py 存在",
-      "fix_hint": "确保 custom/<op>/{op}_golden.py 已由 mathematician 产出。"
+      "fix_hint": "补齐算子目录下的 {op}_golden.py 数学参考文件。"
     },
     {
       "id": "PL05",
@@ -57,10 +57,10 @@
       "dimension": "D2",
       "fix_effort": "E1",
       "stages": [2, 4],
-      "target": "gate",
-      "triggers": ["gate:S2", "gate:S4"],
+      "target": "artifact",
+      "triggers": ["manual"],
       "rule": "{op}_golden_cpu.py 存在",
-      "fix_hint": "确保 custom/<op>/{op}_golden_cpu.py 已由 mathematician 产出（CPU FP32 更高精度 golden）。"
+      "fix_hint": "补齐算子目录下的 {op}_golden_cpu.py，使用 CPU FP32 数学参考。"
     },
     {
       "id": "PL07",
@@ -68,10 +68,10 @@
       "dimension": "D2",
       "fix_effort": "E1",
       "stages": [3],
-      "target": "gate",
-      "triggers": ["gate:S3"],
+      "target": "artifact",
+      "triggers": ["manual"],
       "rule": "DESIGN.md 存在",
-      "fix_hint": "确保 custom/<op>/DESIGN.md 已由 architect 产出。"
+      "fix_hint": "补齐算子目录下的 DESIGN.md 设计文件。"
     },
     {
       "id": "PL08",
@@ -79,10 +79,10 @@
       "dimension": "D2",
       "fix_effort": "E1",
       "stages": [3],
-      "target": "gate",
-      "triggers": ["gate:S3"],
+      "target": "artifact",
+      "triggers": ["manual"],
       "rule": "module_interfaces.yaml 存在",
-      "fix_hint": "确保 custom/<op>/module_interfaces.yaml 已由 architect 产出（Module 契约）。"
+      "fix_hint": "补齐算子目录下的 module_interfaces.yaml 模块接口文件。"
     },
     {
       "id": "PL09",
@@ -90,21 +90,10 @@
       "dimension": "D2",
       "fix_effort": "E1",
       "stages": [4],
-      "target": "gate",
-      "triggers": ["gate:S4"],
+      "target": "artifact",
+      "triggers": ["manual"],
       "rule": "test_{op}.py 存在",
-      "fix_hint": "确保 custom/<op>/test_{op}.py 已由 coder 产出（L0 路径）或 cleanup 生成（L1 路径）。"
-    },
-    {
-      "id": "PL10",
-      "severity": "S1",
-      "dimension": "D2",
-      "fix_effort": "E1",
-      "stages": [1, 2, 3, 4],
-      "target": "gate",
-      "triggers": ["gate:S1", "gate:S2", "gate:S3", "gate:S4"],
-      "rule": ".orchestrator_state.json 是合法 JSON，且 max_stage 为严格整数 5",
-      "fix_hint": "检查 custom/<op>/.orchestrator_state.json 是否存在且为合法 JSON；max_stage 必须为严格整数 5。"
+      "fix_hint": "补齐算子目录下的 test_{op}.py 测试实现文件。"
     },
     {
       "id": "PL11",
@@ -113,7 +102,7 @@
       "fix_effort": "E1",
       "stages": [2, 4],
       "target": "golden",
-      "triggers": ["post-edit", "gate:S2", "gate:S4"],
+      "triggers": ["lint-golden", "post-edit"],
       "rule": "{op}_golden.py / {op}_golden_cpu.py / {op}_golden_stage*.py 禁止 import pypto_pro 或 import pypto",
       "fix_hint": "golden 文件必须是纯 torch 实现。删除 import pypto / import pypto_pro，数学计算只用 torch / torch_npu（golden_cpu 不含 torch_npu）。"
     },
@@ -124,7 +113,7 @@
       "fix_effort": "E1",
       "stages": [4],
       "target": "golden",
-      "triggers": ["post-edit", "gate:S4"],
+      "triggers": ["lint-golden", "post-edit"],
       "rule": "{op}_golden_stage*.py 禁止 import 任何 test_{op}_module*.py（golden 独立性）",
       "fix_hint": "per-Module golden 必须自包含，不 import staged impl 文件。删除对 test_{op}_module*.py 的 import，golden_stage 应独立实现数学逻辑。"
     },
@@ -135,7 +124,7 @@
       "fix_effort": "E1",
       "stages": [4],
       "target": "test",
-      "triggers": ["gate:S4"],
+      "triggers": ["lint-test"],
       "rule": "test_{op}.py 须含 _assert_precision；禁止 assert_close",
       "fix_hint": "使用模板自带的 _assert_precision 函数做方案A混合容差精度校验。删除 assert_close 调用。"
     },
@@ -146,7 +135,7 @@
       "fix_effort": "E1",
       "stages": [4],
       "target": "test",
-      "triggers": ["gate:S4"],
+      "triggers": ["lint-test"],
       "rule": "test_{op}.py 须 import {op}_golden_cpu",
       "fix_hint": "精度对比必须用 CPU FP32 golden。_assert_precision 内部应 from {op}_golden_cpu import {op}_golden_cpu。禁止用 {op}_golden（NPU 同 dtype）做精度对比。"
     }

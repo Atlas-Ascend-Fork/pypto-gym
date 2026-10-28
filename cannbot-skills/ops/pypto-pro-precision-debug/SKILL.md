@@ -7,8 +7,6 @@ description: 基于 PyPTO Pro Kernel 的代码审查、设备侧 dump 数据与�
 
 本技能先核对失败用例与 Kernel 数据路径，再按需使用设备侧 dump 和编译产物，定位 `@pl.jit` 算子精度问题的第一个出错环节并确定根因。
 
-调用方传入 `workflow_mode=scriptor-bootstrap` 时，只完成分配的当前一轮“诊断、修复、重编译上板复测”并返回证据，不自行继续下一轮。全算子最多 3 轮的预算由 Pro 主 agent 管理；预算用尽仍有数值误差时返回遗留问题，不改 Golden、容差或输入域。此限制只适用于进入 DSL implement 前的 Pro 原型，不改变后段 Scriptor 的精度验收要求。
-
 ## 一、排查思路
 
 ### 遇到精度问题时的完整流程
