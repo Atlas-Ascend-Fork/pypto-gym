@@ -196,17 +196,17 @@ def _create_fused_recurrent_kda_kernel(H, D, in_dtype, scale, eps,
 
                 o_i_cast = pypto.cast(o_i, in_dtype)
                 o_i_3d = pypto.reshape(o_i_cast, [1, 1, D])
-                pypto.assemble(o_i_3d, [t_global, h_idx, 0], o)
+                pypto.assemble(o_i_3d, [t_global, h_idx, 0], o, parallel=True)
 
                 S_buf_4d = pypto.reshape(S_buf, [1, 1, V, K])
                 if inplace_final_state:
                     if is_spec_decoding:
                         final_slot = ssm_state_indices[seq_idx, t_idx]
-                        pypto.assemble(S_buf_4d, [final_slot, h_idx, 0, 0], state_buf_out)
+                        pypto.assemble(S_buf_4d, [final_slot, h_idx, 0, 0], state_buf_out, parallel=True)
                     else:
-                        pypto.assemble(S_buf_4d, [init_slot, h_idx, 0, 0], state_buf_out)
+                        pypto.assemble(S_buf_4d, [init_slot, h_idx, 0, 0], state_buf_out, parallel=True)
                 else:
-                    pypto.assemble(S_buf_4d, [t_global, h_idx, 0, 0], state_buf_out)
+                    pypto.assemble(S_buf_4d, [t_global, h_idx, 0, 0], state_buf_out, parallel=True)
 
                 pypto.set_pass_options(sg_set_scope=-1)
 
