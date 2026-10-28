@@ -168,3 +168,24 @@ case and an inf case precisely because they are cheap to generate. Compare
 floats through `.view()` on an integer of the same width so NaN payloads and
 signed zeros are compared as bits, and keep the official gate as the formal
 second verdict rather than the first.
+
+## FP32 strip candidates / FP32 条带候选与取舍
+
+本新增节区分上文历史vector-only实现前提与目标版本能力：它只讨论UB Tile→Reg
+条带路线，不把旧实现的“无SIMT”前提扩展到所有版本。目标SDK若提供SIMT直接GM寻址，
+应在相同算子合同下作为另一候选比较；转置候选见[向量约束](../constraints/vec.md)。
+
+本节是候选设计规则，不将整张卡或任意条带几何升级为已验证骨架；
+[历史验证记录](../examples/validation-records.md)仍只支持上文明确的dtype兼容范围。
+128B是值得比较的行宽，不是无条件最优或所有平台的精确阈值；源轴pass数、索引和输出成本
+都要计入。整行`index_select`不是本卡的GatherElements合同，不能互相替代验证。
+
+输入`x[N,128]`、逐元素独立的`idx[64,128]`，输出`y[g,w]=x[idx[g,w],w]`。
+以FP32、源条带`[chunk,C]`为例，先从目标UB预算扣除索引、输出和临时量；若为两块
+`[64,C]`索引/输出及4096B临时区，则容量条件为`(chunk*C+2*64*C)*4+4096<=UB_budget`。
+C=8/32/64对应32B/128B/256B行宽；加宽可能增加源轴pass，也可能在小源轴下不增加pass。
+因此比较相邻候选，而不是硬编码C=32最优。该容量模型不是通用的UB大小或性能阈值。
+
+源轴分pass时，gather前clamp局部索引，再mask更新；后续pass的输出回读写回必须计入。
+完整调用还包括源读取、索引加载和输出合并，不能只套用DMA带宽表。若要给出某形状的
+加速比，须另有覆盖该实现和合同的可复核测量；本节不引用未随仓库保留的测量倍数。

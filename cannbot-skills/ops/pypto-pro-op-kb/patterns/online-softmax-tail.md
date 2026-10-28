@@ -146,3 +146,32 @@ row is shape-dependent; check before deciding the guard is unnecessary.)
 
 No full streaming reference is retained, so this page must remain
 `conceptual only` in [pattern-index.md](pattern-index.md).
+
+## Independent softmax storage contract / 独立 Softmax 的存储约束
+
+本节是独立、有限FP32输入、输出完整概率行的候选设计规则；不提升上文QK/softmax/PV
+融合流水的`conceptual only`状态，也不验证其尾块、NaN或全无效行语义。
+保留的[单tile Softmax样例](../examples/samples/softmax/softmax_impl.py)只支持其声明的驻留范围，
+不作为以下长行/暂存路线的验证证据。
+
+- **Resident row / 整行驻留**：输入、exp权重和临时量均可驻留UB时，输入读一次；
+  先求max，再计算并保存exp权重、求sum，最后读取UB中的权重归一化。
+- **Rereadable input / 输入可重读**：超UB长行可第一遍在线合并max/sum，第二遍读输入输出
+  全概率行；这与逐遍分别求max、sum、输出的三遍实现是不同算法路线。
+- **Output scratch / 输出暂存**：输入不可重读时，可把局部exp写入可回读的输出，并保留分块
+  max/sum；最终回读输出按最终统计重缩放再写回。不能只靠常数max/sum状态直接输出整行。
+  其首要价值是满足单读合同，不保证比允许重读的两遍路线更快。
+
+### Traffic and compute / 搬运与计算分别核算
+
+对N个FP32元素，忽略统计量等较低阶项：不缓存exp的三遍输入读+一次输出写约16N字节；
+两遍读+一次写约12N；一次输入读+输出暂存的写、读、最终写约16N；整行驻留约8N。
+这是逻辑外部流量估算，不是硬件计数器，也不是完整调用时延加速比的硬上限。
+
+上述不缓存中间exp的三遍实现，在求sum和最终输出时各计算一次exp；驻留路线可保存并复用
+权重，只计算一次exp。因此比较这两条完整路线时，同时改变了外部搬运、exp次数、UB访问
+和循环/调度，不能把整次调用的加速全部归为存储收益，也不能仅从16N/8N推断总提速上限为2倍。
+若要分别归因，需要额外控制计算/存储变量或用实际profile取证；本节不提供无对应归因实验的分项收益。
+
+先核算UB、分块统计、输入可重读及输出暂存条件，再比较完整合法调用；少读一次输入不等于
+减少总访存。具体时延和加速比须有覆盖实现与目标合同的可复核测量，本节不引述未随仓库保留的倍数。

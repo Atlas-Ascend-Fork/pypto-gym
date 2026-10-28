@@ -106,6 +106,8 @@ count either way. The same arithmetic over contiguous accesses runs 6x cheaper. 
 swapping one at a time in a loop that keeps the real dependency depth, not in a
 loop with two ops and nothing to overlap.
 
+Check the source types supported by `vf.gather` in the target version: the `_vf_api.py` installed with CANN 9.2.0-beta.2 declares both Tile-to-Reg and Reg-to-Reg forms. That declaration does not validate register-source Gather functionality or performance; do not transfer the UB-source costs above to the register-source form.
+
 The consequence is **not** "do the transpose in the DMA" — that was measured
 and it loses. A `[ROWS, 1]` strided descriptor costs 0.488 ns/element/core at
 `ROWS = 64` against 0.109 for the bulk one, and the transpose needs three
@@ -149,6 +151,8 @@ The reason is a trap worth stating on its own: **a store into UB followed by a
 read of the same address inside a vector function requires
 `vf.mem_bar(mode=pl.MemBarMode.VST_VLD)`** — omit it and the kernel faults the
 vector core — and the barrier, not the store or the load, is what costs.
+
+Write-after-write dependencies take `vf.mem_bar(mode=pl.MemBarMode.VST_VST)`.
 
 **屏障不是全部——但这条的证据等级低于上一条，必须分开读。**
 
@@ -270,9 +274,32 @@ barrier, since the launches serialise. Cost is one extra read of the input
 Those two launches make this form research-only. Delivery must express the
 dependency in one `@pl.jit` or report a design blocker.
 
+Multi-stage implementations must check workflow entry points, launch ordering, and the timing contract; an old workflow's single-launch restriction is not a platform limit.
+
 Neither form helps a 1-D input. With `P <= ROWS` the job count is at most
 `outer`, so a 1-D case goes from one *lane* of one core to `ROWS` lanes of one
 core and no further; only `P > ROWS` moves it off a single core.
+
+## Separate time and state for noncommutative or gated recurrences
+
+以下新增VF示意不计入开头所称的历史A/B两种数据流，也不扩展其验证范围。
+
+对非交换、带门控或段头递推，重排无法消除全部次序约束：
+
+- **保持时间次序**：把时间轴切分成 lane 块，块内合并，并把块末状态传给下一块。树形或移位网络只在所属段内适用。
+- **门控/段头**：在消费当前输入之前，先在段头重置状态。段头与数据共享 lane 参与条件。
+- **状态放置**：块内状态放寄存器；跨块状态放 UB 并配合 tile group 同步。寄存器不跨调用持久。
+- **前向/后向依赖**：区分步内并行、状态维度切分与真正的串行依赖。跨核状态传递仍然必要。
+
+```python
+result = vf.select(with_carry, scanned, no_head_in_prefix)
+vf.store_align(y_tile, result, active_mask, [0, col])
+carry = vf.full(result, int_mask, pos=pl.DuplicatePos.HIGHEST)
+```
+
+该片段仅示意INT32按行分段前缀和中的块尾状态传递，不是本库保留的已验证实现。
+通用分段、跨块汇总合并、门控以及任意min/max/index scan都需要各自的合同与验证；
+下文的单tile求和也不能证明它们成立。
 
 ## Index outputs
 
@@ -344,9 +371,28 @@ jobs" from "slow per element", which look identical in a score column.
    and medium cases are therefore **vector-issue-bound**, and op count — not
    traffic — is what to minimise. Check before tuning tiles.
 
+## Minimal row-prefix syntax
+
+把相互独立的列映射到 lane，沿行推进，carry 保存在寄存器。该包含式前缀和使用分离的源/目的 tile，只覆盖单个 tile 内的 `[8,64]` FP32。它不是通用的跨 lane、跨 tile 或跨核 scan。跨 tile 变体中，持有同一输出的 worker 必须按扫描轴次序传递状态，并在每个新序列处重置；无序的工作分配替代不了递推次序。
+
+```python
+@pl.vector_function
+def prefix_vf(src,dst):
+    mask=vf.create_mask(pattern=pl.MaskPattern.ALL,dtype=pl.DT_FP32)
+    carry=vf.full(0.0,mask,dtype=pl.DT_FP32)
+    for row in pl.range(0,8):
+        values=vf.load_align(src,row*64,dtype=pl.DT_FP32)
+        carry=vf.add(carry,values,mask)
+        vf.store_align(dst,carry,mask,row*64)
+```
+
+API：`pl.range`、`vf.full`、`vf.add`、`vf.store_align`。这是受限 shape 下的自包含 VF 片段；外层 kernel 的内存分配、搬运与同步必须遵循目标 SDK。
+
 ## Where this was built
 
 The [retained historical record](../examples/validation-records.md) reports both
 dataflows but does not retain their exact validation matrix or generator.
+The additional segmented-state and single-tile VF sketches do not extend that
+historical validation scope.
 `probe/probe_{bw,ops,scan,stride}.py` (every measurement above),
 `DESIGN.md` §5 for the honest performance postmortem.

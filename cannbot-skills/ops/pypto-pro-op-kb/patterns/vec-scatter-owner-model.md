@@ -177,3 +177,47 @@ and keep control of the addressing.
   `outer`/`K`/`inner` factorisation is host-side *metadata* arithmetic over
   shapes, and the reshape it implies is a pure view of a contiguous tensor.
   Anything that moves data stays in the kernel.
+
+## 重复目的与工作项不足时的确定性仲裁
+
+`vf.scatter` 只对唯一索引定义；重复目的必须有显式仲裁，并按需要的合并语义选择：
+
+| 需要的语义 | 仲裁方式 |
+|---|---|
+| 可交换归约（加/乘/最大/最小） | 原子累加、原子最值，或按输出归属的私有部分结果再合并 |
+| 覆盖（最后写者） | 先求出每个目的的唯一胜者（如打包“位置+数据”键取最大），再单次写入；原子加与稳定分组不能冒充覆盖语义 |
+| 唯一排列 | 可直接写，无需仲裁 |
+
+当按输出归属划分的任务/工作项不足以铺满核时，可比较转为元素并行：每个元素并行计算结果，用原子或胜者键保证重复目的
+的结果确定。初始化必须与更新同序（同流先初始化再累加），否则起点不确定；跨核部分结果要按
+数值顺序合并。
+
+```python
+for pos in pl.range(start, updates, stride):
+    dst = index[pos]
+    if dst < zero:
+        dst = dst + n_i32
+    pl.simt.atomic_add(out[dst], value[pos])
+```
+
+以上是SIMT加法归约的局部写法示意，前提是目标SDK提供该原子接口、输入索引满足定义域，
+且同流初始化在前；它不是覆盖语义或本库保留的完整已验证实现。
+覆盖语义、非交换归约与更宽原子类型须按目标接口单独核验；本段不扩展
+[历史记录](../examples/validation-records.md)中的fp32 inner-tile验证范围。
+
+## 无冲突 UB 写入的最小语法
+
+当一个输出归属工作单元覆盖完整索引轴、索引构成轴内唯一排列时，可直接使用以下 VF；
+索引是元素偏移，不是字节偏移。此片段使用 FP32 数据、UINT32 索引和独立 UB 目的数据块，
+每个输出位置恰被写入一次。重复索引、稀疏未写区域、归约与 GM scatter 不在此合同内。
+
+```python
+@pl.vector_function
+def scatter_vf(src,indices,dst):
+    mask=vf.create_mask(pattern=pl.MaskPattern.ALL,dtype=pl.DT_UINT32)
+    values=vf.load_align(src,0,dtype=pl.DT_FP32)
+    offsets=vf.load_align(indices,0,dtype=pl.DT_UINT32)
+    vf.scatter(dst,values,offsets,mask)
+```
+
+接口：`vf.scatter`、`vf.load_align`。此处为限定合同的自包含 VF 片段，外层分配、搬运与同步仍须按目标 SDK 实现。

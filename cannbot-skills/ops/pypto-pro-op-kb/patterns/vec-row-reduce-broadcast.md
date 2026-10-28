@@ -32,6 +32,29 @@ Do not use this pattern for a global reduction, a reduction shared across rows,
 or a reduction streamed across multiple score chunks. The last case uses the
 conceptual recurrence in [online-softmax-tail.md](online-softmax-tail.md).
 
+## 归约轴与保留轴物理交错时
+
+当保留轴与归约轴在物理上交错，或归约轴需要连续大块载入时：
+
+- 按连续行搬运，lane 对应保留轴，循环归约轴在寄存器内累加；不要退回逐元素碎读。
+- 交错（如奇偶 A/R）时，先在片上按 lane 解交错再累加，而不是改写为跨通道搬运。
+- 一次 DMA 搬运的块应由同一次 VF 调用尽量消费完；逐行调用会重复支付搬运与状态溢出开销。
+- 碎读的固定开销是否反超连续载入收益，须按完整调用比较后再决定，不能用固定形状阈值。
+
+```python
+mask = vf.create_mask(pattern=pl.MaskPattern.ALL, dtype=pl.DT_FP32)
+center = vf.load_align(src_tile, [0, 0])
+sum_delta = vf.sub(center, center, mask)
+for row in pl.range(rows):
+    value = vf.load_align(src_tile, [row, 0])
+    delta = vf.sub(value, center, mask)
+    sum_delta = vf.add(sum_delta, delta, mask)
+```
+
+该片段仅示意连续载入与寄存器累加，不是完整的交错轴归约实现。
+本库保留样例未验证本节的交错轴/解交错路径；作为conceptual指导收录，
+须按实际轴跨度、分块和数值合同重新实现并验证。原行归约骨架的验证状态不覆盖本节。
+
 ## Sizing the row tile — two alignment rules, one of which has to be escaped
 
 Both come from the same `pto_tile.hpp` static assertion: for a NoneBox tile, a

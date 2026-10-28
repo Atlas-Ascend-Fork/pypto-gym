@@ -98,6 +98,47 @@ def dot_unroll4_vf(a_tile, b_tile, out_tile, total: pl.DT_INT64):
 
 若目标只是逐 lane 的跨组和而非标量 dot，应改函数名并定义向量输出 shape/mask；不能叫 dot 却省略 `reduce_sum`。
 
+## 重算归约的双块折叠变体
+
+分清三种不同候选：独立累加链用于缩短依赖链（见上文）；双块折叠先按对合并输入再归约，
+减少归约发出次数；分层合并处理块级partial的状态与顺序。它们可以组合，但不互相等价。
+以下仅为算法级示意，`load_block`、`reduce_block`和`pairwise_merge`不是PyPTO-Pro API：
+
+```text
+partials = []
+for first in range(0, block_count, 2):
+    left = load_block(first)
+    right = load_block(first + 1) if first + 1 < block_count else zeros_like(left)
+    partials.append(reduce_block(left + right))   # 每对块一次归约
+while len(partials) > 1:
+    partials = pairwise_merge(partials)           # 分层合并，奇数项原样保留
+result = partials[0] if partials else additive_identity
+```
+
+源块尾部必须先屏蔽/补零；不同块的partial要保存在互不覆盖的状态中，不能提前复用仍被消费的
+存储。Main/Fold阶段的组织还须满足当前工作流的启动、同步和输出合同；此伪代码不是已验证的
+完整两遍均值/方差或Main/Fold实现，也不承诺某个展开度必然更快。
+
+### 独立的补偿累加示意
+
+下列VF片段描述Kahan式补偿状态更新，与上面的成对折叠和分层合并是不同机制；
+它本身不减少块归约次数，也不能作为双块折叠的实现或性能证据。`datablock=True`
+只选择归约粒度，不会自动生成Main/Fold或分层合并：
+
+```python
+adjusted = vf.sub(delta, compensation, full)
+next_accum = vf.add(accum, adjusted, full)
+rounded = vf.sub(next_accum, accum, full)
+next_compensation = vf.sub(rounded, adjusted, full)
+compensation = vf.move(next_compensation, full)
+accum = vf.move(next_accum, full)
+partials = vf.reduce_sum(accum, full, datablock=True)
+```
+
+分块数、块内累加范围与合并顺序按数值预算推导；窄整数状态按最坏输入推导上界后再决定何时
+发出部分结果；改变归约顺序须通过完整精度回归。本节是概念方法，不以未保留的外部实机样例
+声明已验证；局部累加链、成对归约或补偿累加中的一项通过，也不能验证完整Main/Fold。
+
 ## 性能与验证指标
 
 比较 `Task Duration(us)`、VECTOR 空泡与 spill/reload。**待实测**：四路只是候选，不是固定最优。
