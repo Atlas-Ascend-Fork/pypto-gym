@@ -21,10 +21,8 @@
 
 1. **GM 直访 SIMT**：SIMT 线程直接从 GM 读 token id 与配置张量并写出结果，不做
    UB staging、不经 MTE2/MTE3 搬运；访存由 D-cache 服务。
-2. **编译期专门化**：当前工具链的 ``pl.simt.launch`` 要求 Tensor 实参为静态 shape
-   （"simt.launch Tensor argument must have a static shape"），因此 kernel 以
-   ``(num_layers, max_ngram, tables, num_tokens, has_mask)`` 为键专门化，wrapper 缓存每种
-   组合的已编译 kernel；mask 是否存在也做编译期特化。
+2. **编译期专门化**：kernel 以 ``(num_layers, max_ngram, tables, num_tokens, has_mask)``
+   为键专门化，wrapper 缓存每种组合的已编译 kernel；mask 是否存在也做编译期特化。
 3. **不使用 UB tile 作为 SIMT 实参**：当前工具链下 SIMT 读取 UB tile 会触发设备异常
    （The address for VEC to access UB is out of bounds，vector core exception 507035），
    写 UB tile 正常；GM 直访形态不受影响。
@@ -51,7 +49,7 @@ def _build_kernel(num_layers, max_ngram, tables, num_tokens, has_mask):
     tile = TILE
     total = num_tokens
 
-    @pl.simt.function
+    @pl.vector_function(mode="simt")
     def hash_token(out, ids, mult, vocab, offs, row, tid):
         for layer in pl.range(0, num_layers):
             h = (pl.simt.cast(ids[row + tid, 0], pl.DT_INT64)
@@ -72,7 +70,7 @@ def _build_kernel(num_layers, max_ngram, tables, num_tokens, has_mask):
                         + offs[layer, (i - 1) * tables + t])
 
     if has_mask:
-        @pl.simt.function(max_threads=tile)
+        @pl.vector_function(mode="simt", max_threads=tile)
         def engram_hash_simt(out, ids, mask, mult, vocab, offs, row, valid):
             tid = pl.simt.linear_thread_idx()
             if tid < valid:
@@ -96,11 +94,10 @@ def _build_kernel(num_layers, max_ngram, tables, num_tokens, has_mask):
             row = tile_id * tile
             valid = pl.min(tile, total - row)
             with pl.section_vector():
-                pl.simt.launch(engram_hash_simt, threads=tile,
-                               args=(output, ngram_token_ids, image_token_mask,
-                                     multipliers, vocab_sizes, offsets, row, valid))
+                engram_hash_simt[tile](output, ngram_token_ids, image_token_mask,
+                                       multipliers, vocab_sizes, offsets, row, valid)
     else:
-        @pl.simt.function(max_threads=tile)
+        @pl.vector_function(mode="simt", max_threads=tile)
         def engram_hash_simt(out, ids, mult, vocab, offs, row, valid):
             tid = pl.simt.linear_thread_idx()
             if tid < valid:
@@ -118,9 +115,8 @@ def _build_kernel(num_layers, max_ngram, tables, num_tokens, has_mask):
             row = tile_id * tile
             valid = pl.min(tile, total - row)
             with pl.section_vector():
-                pl.simt.launch(engram_hash_simt, threads=tile,
-                               args=(output, ngram_token_ids, multipliers,
-                                     vocab_sizes, offsets, row, valid))
+                engram_hash_simt[tile](output, ngram_token_ids, multipliers,
+                                       vocab_sizes, offsets, row, valid)
 
     return engram_hash_kernel
 
