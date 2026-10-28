@@ -31,6 +31,11 @@ target_api_gate: "仅限 Ascend 950PR 或 950DT；依赖 pl.store/store_tile 的
 
 Data-Parallel 分核只在 M/N 维切任务；欠并行时大量核空闲。把 K 切成若干段，每核用独立 Acc 累加自己的 K 段得到 FP32 部分和，再以原子加累进同一输出块。并行度从 `min(mn_tiles, cores)` 提升到 `min(mn_tiles × k_parts, cores)`；代价是原子写的串行化与浮点累加顺序变化，部分和保持 FP32 可减少中间舍入。
 
+## 与相关卡片的区别
+
+- **cube-13（L0B KS 子切分）**：同样出现“K 切分”，但 cube-13 是**核内**把 K 宏步按 `KS=64` 子切，让多个右矩阵分块同驻 L0B，解决的是单核内 L0B Buffer 串行（MAC/MTE1 bound），**不改并行度、不跨核、不做原子归约**；本卡是**核间**切 K，用原子部分和补核利用率（调度 bound）。二者正交，不可互换。
+- **FullLoad / 驻留类手段**：K 被本卡切开后“整段 K 驻留 L1”的语义失效，互斥。
+
 ## 怎么改（before / after）
 
 以下为嵌入片段，截取自已上板验证的 M=128、N=128、长 K matmul kernel 对；tile 尺寸、地址与 K 段边界对齐须按当前 DESIGN 核验。

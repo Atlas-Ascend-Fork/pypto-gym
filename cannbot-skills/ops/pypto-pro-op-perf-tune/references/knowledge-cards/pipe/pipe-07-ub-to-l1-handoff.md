@@ -3,14 +3,14 @@ type: "PyPTO Performance Optimization Card"
 title: "UB 直接交给 L1，少一次 GM 往返"
 description: "Vector 产出的 tile 如果马上给 Cube 使用，可以直接写入 L1，省掉中间的 GM 写回和再次读取。"
 status: "stable"
-tags: ["pypto-pro", "cross-engine", "memory"]
-item_id: "cross-engine-01"
+tags: ["pypto-pro", "pipe", "cross-engine", "memory"]
+item_id: "pipe-07"
 bound_hint: "VEC、MTE2、MTE3"
 applicability: "Vector 和 Cube 在同一次 kernel 中前后相接，Vector 的结果只需被后面的 Cube 消费，且 GM 读写位于关键路径。"
 target_api_gate: "需要当前版本支持 UB 到 L1 的布局转换、pl.insert、valid shape 和跨核事件；具体 tile、地址和事件语义必须在目标设备上复核。"
 ---
 
-# 技术卡片 cross-engine-01：UB 直接交给 L1，少一次 GM 往返
+# 技术卡片 pipe-07：UB 直接交给 L1，少一次 GM 往返
 
 ## 何时用（诊断特征）
 
