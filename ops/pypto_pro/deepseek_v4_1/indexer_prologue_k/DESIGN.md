@@ -127,8 +127,8 @@ indexer_prologue_k_wrapper(
 | 路径 | key | 说明 |
 |---|---|---|
 | 投影 | `(NMode, KMode)` | 仅编码 L1 tile 形状类别；`(H,D)`、`T` 运行时读取，一份二进制服务该类别下任意形状 |
-| 后处理 | `(T, D, Dr, storage_mode, G, write_scale, cache_blocks, cache_slots)` | SIMT 入口要求静态 shape，故按此固化 |
-| 融合 | 后处理 key + `head_dim` | 固化维度与后处理一致 |
+| 后处理 | `(T, D, Dr, storage_mode, G, write_scale, cache_blocks, cache_slots, 启动核数)` | SIMT 入口要求静态 shape，故按此固化；核数固化后 owner 判定的模数为常量 |
+| 融合 | 后处理 key + `head_dim`（含启动核数） | 固化维度与后处理一致 |
 
 编译实例在 host 侧按 key 记忆化（`_FUSED_CACHE` / `_POSTPROCESS_CACHE`）；`projected` 由 wrapper
 分配（`torch.empty`）。

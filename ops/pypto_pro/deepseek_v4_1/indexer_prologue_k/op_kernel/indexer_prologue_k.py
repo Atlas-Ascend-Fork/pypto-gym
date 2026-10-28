@@ -279,7 +279,7 @@ def _make_postprocess_row(*, dim, rd, storage_mode, write_actual_scale, threads,
                 a = pl.simt.cast(norm[0, t - 1], pl.DT_FP32)
                 r = b * ce + a * se
             pub[0, t] = pl.simt.cast(r, pl.DT_BF16, mode=pl.RoundMode.CAST_RINT)
-        pl.simt.syncthreads()
+        # 每个线程只读回自己写入的 pub[0, t]，此处无需块同步。
         # ---- MXFP4：warp 覆盖一个 group（32 lane = 32 元素），满线程并行 ----
         val = pl.simt.cast(pub[0, t], pl.DT_FP32)
         group_amax = pl.simt.warp_reduce_max(pl.simt.abs(val))
@@ -290,8 +290,10 @@ def _make_postprocess_row(*, dim, rd, storage_mode, write_actual_scale, threads,
         exponent = pl.simt.cast((bits >> 23) & 0xFF, pl.DT_UINT32)
         if (bits & 0x7FFFFF) != 0:
             exponent = pl.simt.cast(exponent + 1, pl.DT_UINT32)
-        scale_value = pl.simt.bitcast(pl.simt.cast(exponent << 23, pl.DT_UINT32), pl.DT_FP32)
-        n = pl.simt.abs(val) / scale_value
+        # scale 恒为 2 的幂，1/scale 也是 2 的幂且可精确表示：用倒数乘替代除法
+        # （每元素省一次 FP 除法，结果与除法逐位一致）。
+        inv_scale = pl.simt.bitcast(pl.simt.cast((254 - exponent) << 23, pl.DT_UINT32), pl.DT_FP32)
+        n = pl.simt.abs(val) * inv_scale
         code = 7
         if n <= 5.0:
             code = 6
@@ -345,6 +347,7 @@ def make_postprocess_kernel(
     cache_width,
     scale_bytes,
     threads=None,
+    scan_blocks=0,
 ):
     """为某个静态配置构建后处理 kernel。
 
@@ -411,9 +414,16 @@ def make_postprocess_kernel(
             pl.load(gamma_tile, gamma, [0, 0])
 
             block_id = pl.get_block_idx()
-            num_blocks = pl.get_block_num()
+            # scan_blocks > 0 时核数是编译期常量，``owner_key % num_blocks`` 可强度削减
+            # 为位与；运行期值会退化成整数除法。
+            num_blocks = scan_blocks if scan_blocks > 0 else pl.get_block_num()
+            # 预取下一个 token 的 cache_index：标量 GM 读与当前行的处理重叠，
+            # 避免扫描阶段每 token 等待一次 load 延迟（扫描约占总时长一半）。
+            next_cr = pl.getval(cache_index, 0)
             for row in pl.range(0, row_count):
-                cr = pl.getval(cache_index, row)
+                cr = next_cr
+                if row + 1 < row_count:
+                    next_cr = pl.getval(cache_index, row + 1)
                 if cr != -1:
                     if storage_mode == 0:
                         owner_key = cr
@@ -457,6 +467,7 @@ def make_fused_kernel(
     write_scale_cache,
     cache_blocks,
     cache_slots,
+    scan_blocks=0,
 ):
     """构建单 kernel 融合实现：同一 launch 内先做 Cube 投影、经 MIX 屏障后做 Vector 后处理。
 
@@ -574,9 +585,13 @@ def make_fused_kernel(
             gamma_tile = gamma_g.current()
             pl.load(gamma_tile, gamma, [0, 0])
             block_id = pl.get_block_idx()
-            num_blocks = pl.get_block_num()
+            num_blocks = scan_blocks if scan_blocks > 0 else pl.get_block_num()
+            # 预取下一个 token 的 cache_index，隐藏标量 GM 读延迟。
+            next_cr = pl.getval(cache_index, 0)
             for row in pl.range(0, total_rows):
-                cr = pl.getval(cache_index, row)
+                cr = next_cr
+                if row + 1 < total_rows:
+                    next_cr = pl.getval(cache_index, row + 1)
                 if cr != -1:
                     if storage_mode == 0:
                         owner_key = cr
@@ -681,9 +696,10 @@ def _validate_cache_layout(k_cache, k_scale_cache, storage_mode, combined_block_
 
 
 def _get_postprocess_callable(total_rows, index_head_dim, rope_head_dim, storage_mode,
-                              combined_block_size, write_scale_cache, cache_blocks, cache_slots):
+                              combined_block_size, write_scale_cache, cache_blocks, cache_slots,
+                              scan_blocks):
     key = (total_rows, index_head_dim, rope_head_dim, storage_mode, combined_block_size,
-           write_scale_cache, cache_blocks, cache_slots)
+           write_scale_cache, cache_blocks, cache_slots, scan_blocks)
     compiled = _POSTPROCESS_CACHE.get(key)
     if compiled is None:
         value_bytes, scale_bytes = value_and_scale_bytes(index_head_dim)
@@ -700,23 +716,25 @@ def _get_postprocess_callable(total_rows, index_head_dim, rope_head_dim, storage
             cache_slots=cache_slots,
             cache_width=cache_width,
             scale_bytes=scale_bytes,
+            scan_blocks=scan_blocks,
         )
         _POSTPROCESS_CACHE[key] = compiled
     return compiled
 
 
 def _get_fused_callable(total_rows, head_dim, index_head_dim, rope_head_dim, storage_mode,
-                        combined_block_size, write_scale_cache, cache_blocks, cache_slots):
+                        combined_block_size, write_scale_cache, cache_blocks, cache_slots,
+                        scan_blocks):
     """融合（单 kernel）实现的编译缓存，键与后处理变体一致（另加 head_dim）。"""
     key = (total_rows, head_dim, index_head_dim, rope_head_dim, storage_mode,
-           combined_block_size, write_scale_cache, cache_blocks, cache_slots)
+           combined_block_size, write_scale_cache, cache_blocks, cache_slots, scan_blocks)
     compiled = _FUSED_CACHE.get(key)
     if compiled is None:
         compiled = make_fused_kernel(
             total_rows=total_rows, head_dim=head_dim, index_head_dim=index_head_dim,
             rope_head_dim=rope_head_dim, storage_mode=storage_mode,
             combined_block_size=combined_block_size, write_scale_cache=write_scale_cache,
-            cache_blocks=cache_blocks, cache_slots=cache_slots)
+            cache_blocks=cache_blocks, cache_slots=cache_slots, scan_blocks=scan_blocks)
         _FUSED_CACHE[key] = compiled
     return compiled
 
@@ -733,7 +751,7 @@ def _resolve_launch_grids(total_rows, head_dim, index_head_dim, storage_mode,
 
     投影核数 = ``min(AIC 数, m_tiles·n_tiles)``；后处理核数 = ``min(AIV 数, 工作项数)``：
     mode0 工作项 = token 数 ``T``，mode1 工作项 = ``ceil(T / G)``。工作项不足满核时不空起核。
-    owner 扫描在 kernel 内按运行期实际块数自适应，故这里只按工作量收缩。
+    该核数同时作为后处理/融合 kernel 的编译期常量（owner 判定的模数），故只按工作量收缩。
     返回 ``(cube_block_num, vec_block_num)``。
     """
     cube_cores, vector_cores = get_effective_core_counts()
@@ -786,10 +804,12 @@ def indexer_prologue_k_wrapper(
 
     if total_rows <= FUSED_T_MAX:
         # ---- 单 kernel 融合：Cube 投影 + MIX 屏障 + Vector 后处理（省一次下发固定开销）----
+        fused_grid = _resolve_fused_grid()
         fused_kernel = _get_fused_callable(
             total_rows, head_dim, index_head_dim, rope_head_dim, storage_mode,
-            combined_block_size, write_scale_cache, int(k_cache.shape[0]), int(k_cache.shape[1]))
-        fused_kernel[None, _resolve_fused_grid()](
+            combined_block_size, write_scale_cache, int(k_cache.shape[0]), int(k_cache.shape[1]),
+            fused_grid)
+        fused_kernel[None, fused_grid](
             latent, wk, gamma1, rope_sin, rope_cos, cache_index,
             k_cache, scale_arg, projected, float(norm_eps))
     else:
@@ -800,7 +820,7 @@ def indexer_prologue_k_wrapper(
                                   projection_tiling_key(index_head_dim, head_dim)](latent, wk, projected)
         postprocess_kernel = _get_postprocess_callable(
             total_rows, index_head_dim, rope_head_dim, storage_mode, combined_block_size,
-            write_scale_cache, int(k_cache.shape[0]), int(k_cache.shape[1]))
+            write_scale_cache, int(k_cache.shape[0]), int(k_cache.shape[1]), vec_block_num)
         postprocess_kernel[None, vec_block_num](
             projected, gamma1, rope_sin, rope_cos, cache_index,
             k_cache, scale_arg, float(norm_eps), total_rows)

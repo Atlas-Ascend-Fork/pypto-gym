@@ -119,7 +119,7 @@ result = indexer_prologue_k_wrapper(
 - `storage_mode ∈ {0, 1}`；mode 1 时 `combined_block_size = G > 0` 且 `C % G == 0`。
 - `cache_index[t] == -1` 跳过该 token；重复目标以最后一个 token 为准；未触及字节保持不变。
 - `latent`、`wk` 需连续；`k_cache` / `k_scale_cache` 需连续且 axis-0 无 stride。
-- 后处理按 `(T, D, Dr, storage_mode, G, write_scale, cache_blocks, cache_slots)` 编译期专门化
+- 后处理按 `(T, D, Dr, storage_mode, G, write_scale, cache_blocks, cache_slots, 启动核数)` 编译期专门化
   （SIMT 入口要求静态 shape）；线程数 = `D`，要求 `D` 为 32 的倍数且 `D <= 2048`。
 - 投影按 L1 tile 形状类别（`NMode` / `KMode`）专门化；`(H, D)` 与 `T` 运行时读取，
   同一类别下一份二进制服务任意形状。
