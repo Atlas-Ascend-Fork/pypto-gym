@@ -40,11 +40,7 @@ option(ENABLE_ASAN                "Enable AddressSanitizer (host side)." OFF)
 option(ENABLE_UBSAN               "Enable UndefinedBehaviorSanitizer (host side)." OFF)
 
 # 公开编译开关(tests)
-# 算子级 dispatcher 据此派发 tests/ 目录; 亦为 config.cmake 预留 XSAN 块的激活条件
-option(ENABLE_TESTS_EXECUTE "Enable auto execute tests executable" OFF)
-
-# 流程控制开关(内部机制, 由 prepare.sh 以 -DPREPARE_BUILD=ON 驱动; 手工/CLion 入口保持 OFF)
-option(PREPARE_BUILD              "Prepare build (second pass)."    OFF)
+option(ENABLE_TESTS "Enable tests" OFF)  # 算子级 dispatcher 据此派发 tests/ 目录; 亦为 config.cmake 预留 XSAN 块的激活条件
 
 # 缺省编译配置, 编译函数, 反射载体 stub
 include(cmake/config.cmake)
@@ -54,6 +50,14 @@ include(cmake/obj_func.cmake)
 ########################################################################################################################
 # 编译流程
 ########################################################################################################################
+
+# 测试侧 CMake 目标入口(仅 ENABLE_TESTS 时引入):
+#       1. 需先于算子目录创建, 供算子 tests target link 其中定义的目标.
+#       2. 逐级 add_subdirectory(tests/ops/pro/aclnn), 后续测试侧目标在对应层级扩展.
+#       3. torch 依赖已在 cmake/config.cmake(根作用域)查找, imported target 对算子 tests 子目录可见.
+if (ENABLE_TESTS)
+    add_subdirectory(tests)
+endif()
 
 # 算子接入: 发现 ops/{pro,tensor} 树, add 算子级目录(dispatcher 派发 op_host/tests).
 # 算子侧只做"申报"(宏登记源到全局属性), 目标创建在接入后的 custom_build.cmake 读回完成.

@@ -9,7 +9,7 @@
 # See LICENSE in the root of the software repository for the full text of the License.
 # -----------------------------------------------------------------------------------------------------------
 
-# gym 二次构建入口: 主 configure 期由 cmake/config.cmake 调用,
+# 二次构建入口: 主 configure 期由 cmake/config.cmake 调用,
 # 以 PREPARE_BUILD=ON 再跑一次 cmake 并 make prepare_build, 产出 autogen 与 impl.
 
 CPU_NUM=$(($(grep -c "^processor" /proc/cpuinfo)*2))

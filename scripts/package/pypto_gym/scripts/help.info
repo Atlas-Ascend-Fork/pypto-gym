@@ -5,3 +5,7 @@
   --uninstall                       Uninstall vendor package
     --install-path=<path>           Uninstall from specific opp dir (default: $ASCEND_HOME_PATH/opp)
   --quiet                           Quiet mode
+
+  Post-install:
+    source <opp>/vendors/pypto_gym/bin/set_env.bash       Set runtime environment
+    bash <opp>/vendors/pypto_gym/scripts/uninstall.sh    Uninstall (when .run is deleted)

@@ -55,12 +55,12 @@ dev = [
     "pip",
     "build",
     "packaging",
-    "pytest",
+    "pytest>=7",
     "pytest-forked",
     "pytest-xdist",
 ]
 tests = [
-    "pytest",
+    "pytest>=7",
     "pytest-forked",
     "pytest-xdist",
     "numpy",

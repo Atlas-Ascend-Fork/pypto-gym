@@ -12,7 +12,7 @@
 
 Replicates maskgen.core.spec + maskgen.patterns without depending on the
 maskgen package. Each pattern is defined in two equivalent forms:
-  - a MaskSpec (for _build_spec_mask_info in test_flex_attention.py)
+  - a MaskSpec (for _build_spec_mask_info in assets/flex_attention_golden.py)
   - a single-function form (Sym DSL, provided for reference)
 """
 

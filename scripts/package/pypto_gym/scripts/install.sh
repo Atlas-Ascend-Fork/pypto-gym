@@ -10,7 +10,7 @@
 # -----------------------------------------------------------------------------------------------------------
 # pypto_gym run 包安装入口(makeself 解压后执行).
 # 入参契约(补丁版 makeself): install.sh --<run包名> --"<执行时cwd>" <用户参数>
-# 语义参照 ops-transformer cmake/scripts/custom/install.sh(vendors + config.ini load_priority).
+# 安装语义: 落位 opp/vendors/<vendor>/ 并维护 config.ini 的 load_priority.
 
 ########################################################################################################################
 # 包内路径(makeself 解压根)
@@ -181,7 +181,7 @@ do_install() {
     fi
     chmod -R 550 "${targetdir}/${vendordir}" >/dev/null 2>&1
     if [ "${ARG_INSTALL_FOR_ALL}" = "y" ]; then
-        # multi-user scenario: world-readable vendor tree + config.ini (对齐 ops-transformer custom install)
+        # multi-user scenario: world-readable vendor tree + config.ini
         chmod -R 555 "${targetdir}/${vendordir}" >/dev/null 2>&1
     fi
 
@@ -190,9 +190,31 @@ do_install() {
         chmod 755 "${config_file}" 2>/dev/null
     fi
 
+    # version.info 落到 vendor 目录
+    if [ -f "${TMP_PKG_VERSION_FILE}" ]; then
+        cp -f "${TMP_PKG_VERSION_FILE}" "${targetdir}/${vendordir}/version.info" 2>/dev/null
+    fi
+
+    # set_env.bash: 导出 ASCEND_CUSTOM_OPP_PATH + LD_LIBRARY_PATH
+    mkdir -p "${targetdir}/${vendordir}/bin"
+    cat > "${targetdir}/${vendordir}/bin/set_env.bash" <<EOF
+#!/bin/bash
+export ASCEND_CUSTOM_OPP_PATH=${targetdir}/${vendordir}:\${ASCEND_CUSTOM_OPP_PATH}
+export LD_LIBRARY_PATH=${targetdir}/${vendordir}/op_api/lib/:\${LD_LIBRARY_PATH}
+EOF
+    chmod 550 "${targetdir}/${vendordir}/bin/set_env.bash"
+
+    # uninstall.sh 落到 vendor scripts/ 目录(供 .run 包已删除、仅存安装结果时直接 bash uninstall.sh)
+    mkdir -p "${targetdir}/${vendordir}/scripts"
+    if [ -f "${TMP_PKG_SCRIPTS_PATH}/uninstall.sh" ]; then
+        cp -f "${TMP_PKG_SCRIPTS_PATH}/uninstall.sh" "${targetdir}/${vendordir}/scripts/uninstall.sh"
+        chmod 550 "${targetdir}/${vendordir}/scripts/uninstall.sh"
+    fi
+
     log "[INFO] install success. vendor: ${VENDOR_NAME} -> ${targetdir}/${vendordir}"
     log "[INFO] verify: grep load_priority ${config_file}"
-    log "[INFO] using requirements: export LD_LIBRARY_PATH=${targetdir}/${vendordir}/op_api/lib/:\${LD_LIBRARY_PATH}"
+    log "[INFO] using requirements: source ${targetdir}/${vendordir}/bin/set_env.bash"
+    log "[INFO] uninstall: bash ${targetdir}/${vendordir}/scripts/uninstall.sh"
 }
 
 do_uninstall() {

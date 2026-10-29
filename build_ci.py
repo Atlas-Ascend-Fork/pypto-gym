@@ -12,9 +12,10 @@
 
 This file provides a unified build entry point for PyPTO-GYM project, supporting dual product modes:
 
-    whl: jit direct-call mode, python -m build -> build_out/*.whl
-    run: built-in mode, CMake full chain -> build_out/ producing custom run packages
+    whl: jit direct-call mode, python -m build -> build_out/whl/<soc>/*.whl
+    run: built-in mode, CMake full chain -> build_out/run/<soc>/ producing custom run packages
          configure -> build -> package (.run)
+    stest: -s/--stest runs on-board system tests (whl -> jit / run -> aclnn)
 
 Multi-soc semantics: --soc accepts a comma-separated list; each soc runs a FULL
 build round in its own binary dir (build/<soc>), producing one .run per soc
@@ -43,6 +44,7 @@ Usage:
         -j/--jobs: Specify build parallelism
         -c/--clean: Clean build directory and install directory
         --timeout: Total timeout in seconds
+        -s/--stest: Run on-board system tests (optional value is a pytest -k filter)
 
 Examples:
     # Build whl (jit mode)
@@ -62,12 +64,13 @@ import abc
 import argparse
 from datetime import datetime, timezone
 from importlib import metadata
+import json
 import logging
 import os
 from pathlib import Path
-import shlex
 import shutil
 import signal
+import shlex
 import subprocess
 import sys
 from typing import Dict, List, Optional, Tuple
@@ -130,11 +133,11 @@ class FeatureParam(CMakeParam):
         :rtype: str
         """
         desc = "\nFeature"
-        desc += f"\n    PackageType              : {self.pkg_type}"
-        desc += f"\n    Ops                      : {self.ops}"
+        desc += f"\n    PackageType             : {self.pkg_type}"
+        desc += f"\n    Ops                     : {self.ops}"
         run_count = len(self.soc_list)
-        desc += f"\n    Soc                      : {self.soc} ({run_count} run{'s' if run_count > 1 else ''})"
-        desc += f"\n    Isolation                : {self.whl_isolation}"
+        desc += f"\n    Soc                     : {self.soc} ({run_count} run{'s' if run_count > 1 else ''})"
+        desc += f"\n    Isolation               : {self.whl_isolation}"
         return desc
 
     @property
@@ -231,9 +234,9 @@ class BuildParam(CMakeParam):
         :rtype: str
         """
         desc = "\nBuild"
-        desc += f"\n    BuildType                : {self.build_type}"
-        desc += f"\n    ASan                     : {self.asan}"
-        desc += f"\n    UbSan                    : {self.ubsan}"
+        desc += f"\n    BuildType               : {self.build_type}"
+        desc += f"\n    ASan                    : {self.asan}"
+        desc += f"\n    UbSan                   : {self.ubsan}"
         return desc
 
     @staticmethod
@@ -267,6 +270,58 @@ class BuildParam(CMakeParam):
         return cmd
 
 
+class TestParam(CMakeParam):
+    """System test parameter (on-board pytest execution).
+
+    --stest without a value runs all selected operator tests; with a value the
+    value is used as a pytest -k expression (comma-separated entries are joined
+    with "or"). UTest is intentionally not registered yet.
+    """
+
+    def __init__(self, args):
+        """Initialize TestParam instance.
+
+        :param args: Parsed command-line arguments
+        """
+        self.stest = args.stest  # False (not requested) / True (no filter) / str (filter)
+
+    @property
+    def enabled(self) -> bool:
+        """Whether system test execution is requested."""
+        return self.stest is not False
+
+    @property
+    def filter_expr(self) -> str:
+        """Return the pytest -k expression derived from --stest=<value>."""
+        if not isinstance(self.stest, str) or not self.stest.strip():
+            return ""
+        parts = [p.strip() for p in self.stest.split(",") if p.strip()]
+        return " or ".join(parts)
+
+    def __str__(self) -> str:
+        if not self.enabled:
+            return ""
+        desc = "\nTests"
+        desc += f"\n    STest                   : {'ON' if not self.filter_expr else self.filter_expr}"
+        return desc
+
+    @staticmethod
+    def reg_args(parser):
+        parser.add_argument(
+            "-s",
+            "--stest",
+            nargs="?",
+            const=True,
+            default=False,
+            help="run on-board system tests; optional value is a pytest -k filter "
+                 "(comma-separated entries are ORed), e.g. --stest=test_fa_mask_info",
+        )
+
+    def get_cfg_cmd(self) -> str:
+        """Enable test targets in CMake when system tests are requested."""
+        return " -DENABLE_TESTS=ON" if self.enabled else ""
+
+
 class BuildCtrl(CMakeParam):
     """Build process control class
 
@@ -296,6 +351,7 @@ class BuildCtrl(CMakeParam):
         # Others
         self.feature: FeatureParam = FeatureParam(args=args)
         self.build: BuildParam = BuildParam(args=args)
+        self.tests: TestParam = TestParam(args=args)
         self.jobs: Optional[int] = args.jobs
         self.verbose: bool = args.verbose
         self.cmake: Optional[Path] = self.which_cmake()
@@ -325,6 +381,7 @@ class BuildCtrl(CMakeParam):
         desc += f"\n    Timeout                 : {self.origin_timeout}"
         desc += f"{self.feature}"
         desc += f"{self.build}"
+        desc += f"{self.tests}"
         desc += "\n"
         return desc
 
@@ -437,6 +494,7 @@ class BuildCtrl(CMakeParam):
         # Register arguments
         FeatureParam.reg_args(parser=parser)
         BuildParam.reg_args(parser=parser)
+        TestParam.reg_args(parser=parser)
         BuildCtrl.reg_args(parser=parser)
 
         # Parse arguments
@@ -446,6 +504,8 @@ class BuildCtrl(CMakeParam):
         if ctrl.verbose:
             logging.getLogger().setLevel(logging.DEBUG)
         logging.info("%s", ctrl)
+        if ctrl.tests.enabled and len(ctrl.feature.soc_list) != 1:
+            raise ValueError("--stest supports exactly one soc; pass a single --soc")
         if ctrl.feature.pkg_type_run:
             soc_list = ctrl.feature.soc_list
             logging.info("PackageType(run), start process with CMake, %s soc(s): %s", len(soc_list), soc_list)
@@ -460,10 +520,12 @@ class BuildCtrl(CMakeParam):
                 ctrl.cmake_configure(soc=soc)
                 ctrl.cmake_build(soc=soc)
                 ctrl.cmake_package(soc=soc)
+            ctrl.run_stest()
         else:
             logging.info("PackageType(whl), start process")
             ctrl.cmake_clean()
             ctrl.py_build()
+            ctrl.run_stest()
 
     @classmethod
     def _check_pip_pkg(cls, pkg: str, ver: str) -> List[str]:
@@ -498,9 +560,10 @@ class BuildCtrl(CMakeParam):
         # No standalone install step: install() rules are consumed by the CPack staging
         # inside the package target; CMAKE_INSTALL_PREFIX here only decides where the
         # .run files land (set_cann_cpack_config -> CPACK_CMAKE_INSTALL_PREFIX).
-        cmd = f" -DCMAKE_INSTALL_PREFIX={self.install_root}"
+        cmd = f" -DCMAKE_INSTALL_PREFIX={self._run_dir(soc)}"
         cmd += f" -DPython3_EXECUTABLE={sys.executable}"
         cmd += f" -DASCEND_COMPUTE_UNIT={soc}"
+        cmd += self.tests.get_cfg_cmd()
         if self.third_party_path:
             cmd += f" -DCANN_3RD_LIB_PATH={self.third_party_path}"
         return cmd
@@ -524,7 +587,9 @@ class BuildCtrl(CMakeParam):
         # The build-system.requires check in pyproject.toml is implemented by the build
         # package itself and thus cannot fail early; validate the build package version here.
         self.check_pip_dependencies(deps={"build": ">=1.0.3"}, raise_err=True)
-        cmd = f"{sys.executable} -m build --outdir={self.install_root}"
+        whl_dir = self._whl_dir()
+        whl_dir.mkdir(parents=True, exist_ok=True)
+        cmd = f"{sys.executable} -m build --outdir={whl_dir}"
         cmd += " --no-isolation" if not self.feature.whl_isolation else ""
         logging.info("Build whl, Cmd: %s, Timeout: %s secs", cmd, self.remain_timeout)
         _, duration = self._run_build_cmd(cmd=cmd, pg_desc="build")
@@ -573,9 +638,25 @@ class BuildCtrl(CMakeParam):
         cmd += " --verbose" if self.verbose else ""
         logging.info("CMake Package[%s], Cmd: %s, Timeout: %s secs", soc, cmd, self.remain_timeout)
         _, duration = self._run_build_cmd(cmd=cmd, pg_desc="cmake-package")
-        for run_file in sorted(self.install_root.glob("*.run")):
+        for run_file in sorted(self._run_dir(soc).glob("*.run")):
             logging.info("run package: %s", run_file)
         logging.info("CMake Package[%s] success, %s", soc, duration)
+
+    def _pkg_dir(self, soc: str) -> Path:
+        """Per-package-type/per-soc output dir under build_out.
+
+        whl: build_out/whl/<soc> (wheel + site-packages + ops registry)
+        run: build_out/run/<soc> (run package + vendors after test install)
+        """
+        return self.install_root / self.feature.pkg_type / soc
+
+    def _whl_dir(self) -> Path:
+        """Output dir for whl artifacts and the test install tree."""
+        return self._pkg_dir(self.feature.soc_list[0])
+
+    def _run_dir(self, soc: str) -> Path:
+        """Output dir for one soc's run package and its isolated test install."""
+        return self._pkg_dir(soc)
 
     def _build_dir(self, soc: str) -> Path:
         """Per-soc CMake binary dir (isolated per soc round to avoid cross-round artifacts)
@@ -585,6 +666,134 @@ class BuildCtrl(CMakeParam):
         :rtype: Path
         """
         return self._build_root / soc
+
+    @staticmethod
+    def _prepend_env(name: str, value: str) -> str:
+        """Prepend a path to an existing environment variable value."""
+        old = os.environ.get(name, "")
+        return f"{value}:{old}" if old else value
+
+    @staticmethod
+    def _find_artifact(directory: Path, pattern: str) -> Path:
+        """Return the newest artifact matching pattern in directory."""
+        files = sorted(directory.glob(pattern), key=lambda p: p.stat().st_mtime, reverse=True)
+        if not files:
+            raise RuntimeError(f"no artifact matching {pattern!r} under {directory}")
+        return files[0]
+
+    def _discover_op_dirs(self) -> Dict[str, Path]:
+        """Discover operator dirs that have a tests/ directory (ops/{pro,tensor} only)."""
+        found: Dict[str, Path] = {}
+        for paradigm in ("pro", "tensor"):
+            root = self.src_root / "ops" / paradigm
+            for tests_dir in sorted(root.glob("**/tests")):
+                op_dir = tests_dir.parent
+                if not (op_dir / "op_host").is_dir():
+                    continue
+                found[op_dir.name] = op_dir
+        return found
+
+    def _selected_op_dirs(self) -> List[Path]:
+        """Resolve --ops into operator dirs for stest."""
+        found = self._discover_op_dirs()
+        if self.feature.ops.strip().upper() == "ALL":
+            selected = sorted(found.values(), key=lambda p: p.name)
+            if not selected:
+                raise RuntimeError("no operator tests found under ops/{pro,tensor}/**/tests")
+            return selected
+        names = [n.strip() for n in self.feature.ops.split(",") if n.strip()]
+        missing = [n for n in names if n not in found]
+        if missing:
+            raise RuntimeError(
+                f"operator tests not found for {missing}; available: {sorted(found)}")
+        return [found[n] for n in names]
+
+    def _pytest_filter_args(self) -> List[str]:
+        expr = self.tests.filter_expr
+        return ["-k", expr] if expr else []
+
+    def _run_pytest(self, op_dirs: List[Path], mode: str, soc: str,
+                    update_env: Optional[Dict[str, str]]) -> None:
+        """Run pytest in a child process with an isolated environment."""
+        args = [sys.executable, "-m", "pytest"]
+        args += [str(op_dir / "tests") for op_dir in op_dirs]
+        args += ["--mode", mode, "--rootdir", str(self.src_root), "-q"]
+        if mode == "aclnn":
+            args += ["--aclnn-lib-dir", str(self._build_dir(soc) / "tests")]
+            args += ["-m", "not jit_only"]
+        args += self._pytest_filter_args()
+        cmd = " ".join(shlex.quote(a) for a in args)
+        logging.info("pytest(%s), Cmd: %s, Timeout: %s secs", mode, cmd, self.remain_timeout)
+        _, duration = self._run_build_cmd(cmd=cmd, update_env=update_env, pg_desc=f"pytest-{mode}")
+        logging.info("pytest(%s) success, %s", mode, duration)
+
+    def _install_whl_for_test(self) -> Path:
+        """Install the built whl into build_out/whl/<soc>/site-packages."""
+        whl_dir = self._whl_dir()
+        whl = self._find_artifact(whl_dir, "*.whl")
+        site_dir = whl_dir / "site-packages"
+        if site_dir.exists():
+            shutil.rmtree(site_dir)
+        site_dir.mkdir(parents=True, exist_ok=True)
+        cmd = (f"{sys.executable} -m pip install --target {shlex.quote(str(site_dir))} "
+               f"--no-deps --no-compile {shlex.quote(str(whl))}")
+        logging.info("Install whl for test, Cmd: %s, Timeout: %s secs", cmd, self.remain_timeout)
+        _, duration = self._run_build_cmd(cmd=cmd, pg_desc="pip-install-whl")
+        logging.info("Install whl for test success, %s", duration)
+        return site_dir
+
+    def _write_ops_registry(self, op_dirs: List[Path]) -> Path:
+        """Write op -> installed package module mapping for jit stest."""
+        mapping = {}
+        for op_dir in op_dirs:
+            rel = op_dir.relative_to(self.src_root)
+            pkg = "pypto_gym." + ".".join(rel.parts)
+            mapping[op_dir.name] = f"{pkg}.op_kernel.{op_dir.name}"
+        registry = self._whl_dir() / "ops_registry.json"
+        registry.write_text(json.dumps(mapping, indent=2) + "\n", encoding="utf-8")
+        logging.info("ops registry: %s", registry)
+        return registry
+
+    def _run_stest_jit(self, op_dirs: List[Path]) -> None:
+        site_dir = self._install_whl_for_test()
+        registry = self._write_ops_registry(op_dirs)
+        update_env = {
+            "PYTHONPATH": self._prepend_env("PYTHONPATH", str(site_dir)),
+            "GYM_OPS_REGISTRY": str(registry),
+        }
+        self._run_pytest(op_dirs, mode="jit", soc=self.feature.soc_list[0], update_env=update_env)
+
+    def _run_stest_aclnn(self, op_dirs: List[Path], soc: str) -> None:
+        run_dir = self._run_dir(soc).resolve()
+        run_pkg = self._find_artifact(run_dir, "*.run")
+        install_path = run_dir
+        uninstall_cmd = (f"bash {shlex.quote(str(run_pkg))} --uninstall "
+                         f"--install-path={shlex.quote(str(install_path))}")
+        self._run_build_cmd(cmd=uninstall_cmd, check=False, pg_desc="run-uninstall")
+        install_cmd = (f"bash {shlex.quote(str(run_pkg))} --install-path="
+                       f"{shlex.quote(str(install_path))}")
+        logging.info("Install run for test, Cmd: %s, Timeout: %s secs", install_cmd, self.remain_timeout)
+        _, duration = self._run_build_cmd(cmd=install_cmd, pg_desc="run-install")
+        logging.info("Install run for test success, %s", duration)
+        vendor = install_path / "vendors" / "pypto_gym"
+        if not vendor.is_dir():
+            raise RuntimeError(f"test install did not produce vendor dir: {vendor}")
+        update_env = {
+            "ASCEND_CUSTOM_OPP_PATH": self._prepend_env("ASCEND_CUSTOM_OPP_PATH", str(vendor)),
+            "LD_LIBRARY_PATH": self._prepend_env("LD_LIBRARY_PATH", str(vendor / "op_api" / "lib")),
+        }
+        self._run_pytest(op_dirs, mode="aclnn", soc=soc, update_env=update_env)
+
+    def run_stest(self) -> None:
+        """Execute system tests for the selected operators."""
+        if not self.tests.enabled:
+            return
+        op_dirs = self._selected_op_dirs()
+        logging.info("STest operators: %s", [d.name for d in op_dirs])
+        if self.feature.pkg_type_run:
+            self._run_stest_aclnn(op_dirs, self.feature.soc_list[0])
+        else:
+            self._run_stest_jit(op_dirs)
 
     def _duration(self, ts: datetime) -> str:
         """Calculate stage duration and update remaining timeout

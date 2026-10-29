@@ -21,34 +21,32 @@ the kernel: mask_num <= CHUNK runs the single-pass decoder, mask_num > CHUNK
 runs the HoleChunk=1 chunked decoder (base + refine passes).
 
 Usage:
-    python3 python/tests/st/pypto_pro/frontend/fa/test_flex_attention_matrix.py
+    pytest ops/pro/experimental/flex_attention/tests/test_flex_attention_matrix.py --mode jit
 """
 
 import dataclasses
 import itertools
 import logging
-import math
 import os
-import sys
 
 import pytest
 import torch
 
-sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)),
-                                "..", "op_kernel"))
-sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from flex_attention import (  # noqa: E402
-    flex_attention, CHUNK, MASK_NUM_LIMIT, TD, TKV,
-)
-from mask_specs import (  # noqa: E402
+from op_caller import get_op_caller  # noqa: E402
+from flex_attention_kernel_consts import CHUNK, MASK_NUM_LIMIT, TD  # noqa: E402
+from flex_attention_mask_specs import (  # noqa: E402
     FOUR_STAGE_SPEC, HSTU_FWD_SPEC, SPU_FWD_SPEC,
     REALTIME_VAR_SPEC, CALLABLE_MODULO_SPEC, PIECEWISE_SPEC,
 )
-from test_flex_attention import (  # noqa: E402
+from flex_attention_golden import (  # noqa: E402
     flash_attention_ref_tnd, _build_spec_mask_info, _fixed_intervals_mask_info,
     _maskgen_simulate, _pad_maskgen_to_info, _reconstruct_intervals_from_mask_info,
     _assert_mask_info_equal,
 )
+from flex_attention_call import flex_attention_from_info  # noqa: E402
+
+flex_attention = get_op_caller("flex_attention")
+pytestmark = pytest.mark.jit_only
 
 ST_DEVICE_ID = int(os.environ.get("TILE_FWK_DEVICE_ID", 0))
 ST_DEVICE = f"npu:{ST_DEVICE_ID}"
@@ -222,32 +220,10 @@ def _build_case_mask_info(case: AttentionCase, seq_q_list, seq_kv_list):
 #  flex_attention bridge
 # ================================================================
 
-def _flex_attention_from_info(q, k, v, seq_q_list, seq_kv_list, attn_out, softmax_max, softmax_sum,
-                              mask_info, layout="varlen"):
-    device = q.device
-    def _to_dev(x):
-        return x.to(device) if x is not None else None
-    if layout == "bshd":
-        flex_attention(q, k, v, None, None,
-                       _to_dev(mask_info["maskr"]),
-                       _to_dev(mask_info.get("mask_start")),
-                       _to_dev(mask_info.get("mask_len")),
-                       _to_dev(mask_info["block_range"]),
-                       _to_dev(mask_info["block_compute"]),
-                       _to_dev(mask_info["block_mask"]),
-                       attn_out, softmax_max, softmax_sum, layout="bshd")
-        return
-    actual_seq_q = torch.tensor(seq_q_list, dtype=torch.int64, device=device).cumsum(0)
-    actual_seq_kv = torch.tensor(seq_kv_list, dtype=torch.int32, device=device).cumsum(0, dtype=torch.int32)
-    flex_attention(q, k, v, actual_seq_q, actual_seq_kv,
-                   _to_dev(mask_info["maskr"]),
-                   _to_dev(mask_info.get("mask_start")),
-                   _to_dev(mask_info.get("mask_len")),
-                   _to_dev(mask_info["block_range"]),
-                   _to_dev(mask_info["block_compute"]),
-                   _to_dev(mask_info["block_mask"]),
-                   attn_out, softmax_max, softmax_sum, layout="varlen")
-
+def _flex_attention_from_info(q, k, v, seq_q_list, seq_kv_list, attn_out, softmax_max,
+                              softmax_sum, mask_info, layout="varlen"):
+    flex_attention_from_info(flex_attention, q, k, v, seq_q_list, seq_kv_list,
+                             attn_out, softmax_max, softmax_sum, mask_info, layout)
 
 # ================================================================
 #  Negative case runner
@@ -493,24 +469,3 @@ def test_new_spec_sim_parity():
         mi_end, _ = _build_spec_mask_info_endpoint(sq_list_p, skv_list_p, spec, req, **tensors)
         _assert_mask_info_equal(mi_scan, mi_end)
     logging.info("  [PASS] new spec parity (regionmask == compilemask)")
-
-
-if __name__ == "__main__":
-    logging.basicConfig(level=logging.INFO, format="%(message)s")
-    torch.npu.set_device(ST_DEVICE)
-    logging.info("FlexAttention matrix test suite")
-    logging.info("  %d exec cases (incl. %d stripe: chunked=%s)",
-                 len(EXEC_CASES), len(STRIPE_CASES),
-                 [(_required_mask_num(c), _required_mask_num(c) > CHUNK) for c in STRIPE_CASES])
-    logging.info("%s", "=" * 60)
-    test_new_spec_sim_parity()
-    failures = []
-    for c in EXEC_CASES:
-        try:
-            _run_case(c)
-        except Exception as e:
-            failures.append((case_id(c), str(e)))
-    if failures:
-        msg = "\n".join(f"  {cid}: {err}" for cid, err in failures)
-        raise AssertionError(f"{len(failures)} failures:\n{msg}")
-    logging.info("\nAll tests passed!")

@@ -1600,8 +1600,7 @@ def flex_attention_kernel(
     tiling: FlexAttnTiling,
 ):
     # ========== Delivery-form shape derivation (all from OpTiling) ==========
-    # raw Ptr I/O carry no shape; reconstruct typed views with OpTiling scalars
-    # (mirrors ops-transformer op_kernel convention, cf. x_attention.py).
+    # raw Ptr I/O carry no shape; reconstruct typed views with OpTiling scalars.
     batch = tiling.batch
     max_block_m = tiling.r_f
     max_block_n = tiling.w_f

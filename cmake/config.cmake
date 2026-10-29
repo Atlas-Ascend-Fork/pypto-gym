@@ -19,6 +19,14 @@
 ]]
 
 ########################################################################################################################
+# 内部流程开关
+########################################################################################################################
+
+# 二次构建: 由 prepare.sh 以 -DPREPARE_BUILD=ON 驱动, 手工/CLion 入口保持 OFF.
+# 内部变量(CACHE INTERNAL), 不在 cmake -L/gui 暴露; 不加 FORCE, 以保留 prepare.sh 的 -D 传入值.
+set(PREPARE_BUILD OFF CACHE INTERNAL "Prepare build (second pass).")
+
+########################################################################################################################
 # 环境检查
 ########################################################################################################################
 
@@ -86,6 +94,26 @@ if (NOT PREPARE_BUILD)
         endif()
         unset(_gym_tool_path CACHE)
     endforeach()
+endif()
+
+# 测试 aclnn_bridge 依赖(仅 ENABLE_TESTS):
+# 1. torch 仅供 pybind11 测试 bridge 使用, 非 run/kernel 构建依赖.
+# 2. 必须在本文件(根作用域 include)中查找: imported target 为目录作用域, 根作用域创建后
+#    才能被后续 add_subdirectory 引入的算子 tests 子目录链接.
+if (ENABLE_TESTS)
+    execute_process(
+            COMMAND ${Python3_EXECUTABLE} -c "import torch.utils; print(torch.utils.cmake_prefix_path)"
+            OUTPUT_VARIABLE _gym_torch_cmake_prefix
+            OUTPUT_STRIP_TRAILING_WHITESPACE
+            ERROR_QUIET)
+    if (_gym_torch_cmake_prefix)
+        list(APPEND CMAKE_PREFIX_PATH ${_gym_torch_cmake_prefix})
+    endif()
+    find_package(Torch REQUIRED)
+    find_library(TORCH_PYTHON_LIB torch_python PATHS ${TORCH_INSTALL_PREFIX}/lib NO_DEFAULT_PATH)
+    if (NOT TORCH_PYTHON_LIB)
+        message(FATAL_ERROR "libtorch_python not found under ${TORCH_INSTALL_PREFIX}/lib")
+    endif()
 endif()
 
 ########################################################################################################################
@@ -202,9 +230,9 @@ if (NOT "${CMAKE_C_COMPILER_ID}" STREQUAL "GNU")
     endif ()
 endif ()
 
-# [预留能力·原样保留] ASAN/UBSAN 用例执行环境配置(ENABLE_TESTS_EXECUTE 选项落地时生效).
+# [预留能力] ASAN/UBSAN 用例执行环境配置(ENABLE_TESTS 选项落地时生效).
 # 编译执行用例场景下, 将相关检查在编译前执行, 避免出现编译完成后又无法执行的情况, 影响使用体验.
-if ((ENABLE_ASAN OR ENABLE_UBSAN) AND ENABLE_TESTS_EXECUTE)
+if ((ENABLE_ASAN OR ENABLE_UBSAN) AND ENABLE_TESTS)
     # 用于向外传递 XSAN 相关配置, 以保证 whl 包 ASan 场景的兼容性
     set(XSAN_CONFIG_FILE "${PYPTO_GYM_SRC_DIR}/_pypto_gym_xsan_config.txt")
     file(WRITE "${XSAN_CONFIG_FILE}" "")

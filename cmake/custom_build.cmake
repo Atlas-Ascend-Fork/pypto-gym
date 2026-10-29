@@ -169,7 +169,7 @@ if (ENABLE_OPS_HOST AND NOT PREPARE_BUILD)
         list(APPEND _autogen_proto_srcs ${base_aclnn_binary_dir}/${_op_name}_proto.cpp)
     endforeach()
 
-    # host 编译公共含头(地面真值裁剪自 ops-transformer 参照构建)
+    # host 编译公共包含头(以构建期实际产物为准的最小集合)
     set(GYM_HOST_INCLUDES
         ${ASCEND_CANN_PACKAGE_PATH}/include
         ${ASCEND_CANN_PACKAGE_PATH}/include/exe_graph
@@ -213,7 +213,7 @@ if (ENABLE_OPS_HOST AND NOT PREPARE_BUILD)
         ${GYM_CANN_LIBS_DIR}/libregister.so
         ${GYM_CANN_LIBS_DIR}/liberror_manager.so
         ${GYM_CANN_LIBS_DIR}/libplatform.so
-        ${GYM_CANN_LIBS_DIR}/librt2_registry.a
+        -Wl,--whole-archive ${GYM_CANN_LIBS_DIR}/librt2_registry.a -Wl,--no-whole-archive
         ${ASCEND_CANN_PACKAGE_PATH}/lib64/libc_sec.so
         ascendalog pthread)
     target_link_libraries(cust_proto PRIVATE intf_pub)
@@ -269,7 +269,7 @@ if (ENABLE_OPS_HOST AND NOT PREPARE_BUILD)
         ${GYM_CANN_LIBS_DIR}/libplatform.so
         ${GYM_CANN_LIBS_DIR}/libregister.so
         ${GYM_CANN_LIBS_DIR}/liberror_manager.so
-        ${GYM_CANN_LIBS_DIR}/librt2_registry.a
+        -Wl,--whole-archive ${GYM_CANN_LIBS_DIR}/librt2_registry.a -Wl,--no-whole-archive
         ${GYM_CANN_LIBS_DIR}/libtiling_api.a
         ${ASCEND_CANN_PACKAGE_PATH}/lib64/libc_sec.so
         ${ASCEND_CANN_PACKAGE_PATH}/lib64/libascendalog.so
@@ -279,7 +279,7 @@ if (ENABLE_OPS_HOST AND NOT PREPARE_BUILD)
 
     # liboptiling.so 兼容软链(运行时按旧名查找 tiling 库)
     # 目标为安装态相对路径: 软链 install 后位于 op_tiling/ 下, .so 实际在 op_tiling/lib/linux/<arch>/
-    # (对齐 ops-transformer symbol.cmake: ALL 目标每次构建 ln -sf 强制刷新, 无陈旧软链问题;
+    # (ALL 目标每次构建以 ln -sf 强制刷新, 无陈旧软链问题;
     #  build/ 内该链悬空属预期, 仅安装态需要解析)
     add_custom_target(gym_optiling_compat ALL
             COMMAND ln -sf lib/linux/${CMAKE_SYSTEM_PROCESSOR}/$<TARGET_FILE_NAME:cust_opmaster>
@@ -347,6 +347,33 @@ if (ENABLE_OPS_HOST AND NOT PREPARE_BUILD)
         add_dependencies(prepare_build generate_ops_info_${compute_unit})
     endforeach ()
 
+    # ---------- opc 编译期 custom opp staging ----------
+    # opc 通过 ASCEND_CUSTOM_OPP_PATH 读取 op store(输入/输出数校验)与 tiling 结构
+    # (liboptiling.so, 决定 .json 的 opParaSize/parameters). 构建期用本仓产物组一个
+    # 临时 opp 树, 既不依赖已安装 vendor, 也避免 "do not registe tiling struct" 导致的
+    # opParaSize=8(运行期 TilingDef::SaveToBuffer capacity 不足).
+    set(_opstore_dir ${GYM_OPSTORE_DIR})
+    set(_opstore_stamp ${_opstore_dir}/.stamp)
+    add_custom_command(OUTPUT ${_opstore_stamp}
+            COMMAND ${CMAKE_COMMAND} -E make_directory
+            ${_opstore_dir}/op_impl/ai_core/tbe/config/${ASCEND_COMPUTE_UNIT}
+            COMMAND ${CMAKE_COMMAND} -E make_directory
+            ${_opstore_dir}/op_impl/ai_core/tbe/op_tiling
+            COMMAND ${CMAKE_COMMAND} -E create_symlink
+            ${ASCEND_AUTOGEN_DIR}/aic-${ASCEND_COMPUTE_UNIT}-ops-info.json
+            ${_opstore_dir}/op_impl/ai_core/tbe/config/${ASCEND_COMPUTE_UNIT}/aic-${ASCEND_COMPUTE_UNIT}-ops-info.json
+            COMMAND ${CMAKE_COMMAND} -E create_symlink
+            $<TARGET_FILE:cust_opmaster>
+            ${_opstore_dir}/op_impl/ai_core/tbe/op_tiling/liboptiling.so
+            COMMAND ${CMAKE_COMMAND} -E touch ${_opstore_stamp}
+            DEPENDS generate_ops_info_${ASCEND_COMPUTE_UNIT} gym_optiling_compat cust_opmaster
+            VERBATIM)
+    add_custom_target(gym_opstore_stage ALL DEPENDS ${_opstore_stamp})
+    get_property(_gym_kernel_targets GLOBAL PROPERTY GYM_KERNEL_TARGETS)
+    foreach(_kernel_target ${_gym_kernel_targets})
+        add_dependencies(${_kernel_target} gym_opstore_stage)
+    endforeach ()
+
     # ---------- vendors staging install 规则(COMPONENT = 包组件, 供 CPack staging 收集) ----------
     install(TARGETS cust_opapi LIBRARY DESTINATION ${_vendor_dir}/op_api/lib COMPONENT ${VENDOR_NAME})
     install(TARGETS cust_proto LIBRARY DESTINATION ${_arch_lib_dir} COMPONENT ${VENDOR_NAME})
@@ -357,6 +384,26 @@ if (ENABLE_OPS_HOST AND NOT PREPARE_BUILD)
             DESTINATION ${_vendor_dir}/op_impl/ai_core/tbe/op_tiling COMPONENT ${VENDOR_NAME})
     if (_autogen_aclnn_headers)
         install(FILES ${_autogen_aclnn_headers} DESTINATION ${_vendor_dir}/op_api/include/aclnnop
+                COMPONENT ${VENDOR_NAME})
+        # aclnn 汇总头: 汇总各算子生成的 aclnn_<op>.h, 提供单入口头;
+        # include 全部 aclnn_<op>.h, 使用方 #include "aclnn_ops_<vendor>.h" 即可
+        set(_gym_aclnn_master ${CMAKE_BINARY_DIR}/aclnn_ops_${VENDOR_NAME}.h)
+        file(WRITE ${_gym_aclnn_master}
+                "#ifndef ACLNN_OPS_${VENDOR_NAME}_H_\n"
+                "#define ACLNN_OPS_${VENDOR_NAME}_H_\n\n")
+        foreach(_aclnn_h ${_autogen_aclnn_headers})
+            get_filename_component(_aclnn_name ${_aclnn_h} NAME)
+            file(APPEND ${_gym_aclnn_master} "#include \"${_aclnn_name}\"\n")
+        endforeach()
+        file(APPEND ${_gym_aclnn_master} "\n#endif // ACLNN_OPS_${VENDOR_NAME}_H_\n")
+        install(FILES ${_gym_aclnn_master} DESTINATION ${_vendor_dir}/op_api/include/aclnnop
+                COMPONENT ${VENDOR_NAME})
+    endif()
+    # proto 头 install: autogen 下全部 *_proto.h
+    file(GLOB _autogen_proto_headers ${ASCEND_AUTOGEN_DIR}/*_proto.h)
+    if (_autogen_proto_headers)
+        install(FILES ${_autogen_proto_headers}
+                DESTINATION ${_vendor_dir}/op_proto/inc OPTIONAL
                 COMPONENT ${VENDOR_NAME})
     endif()
     foreach (compute_unit ${ASCEND_COMPUTE_UNIT})

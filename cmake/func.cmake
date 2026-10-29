@@ -8,9 +8,9 @@
 # See LICENSE in the root of the software repository for the full text of the License.
 # -----------------------------------------------------------------------------------------------------------
 
-# gym 算子发现 + pypto 桥接 + kernel 编译目标, 机制对齐 ops-transformer cmake/func.cmake (裁剪版)
+# gym 算子发现 + pypto 桥接 + kernel 编译目标(按 gym 构建链裁剪的公共函数集)
 
-# 发现 ops/{pro,tensor} 下的算子目录(锚定算子级 CMakeLists.txt, 对齐 ops-transformer op_add_subdirectory);
+# 发现 ops/{pro,tensor} 下的算子目录(锚定算子级 CMakeLists.txt);
 # 算子契约: <op>/CMakeLists.txt(dispatcher) + <op>/op_host/(算子身份判定, 过滤中间层目录);
 # 显式 --ops 时仅编名单内算子, 否则全量
 function(gym_op_discovery OP_LIST OP_DIR_LIST)
@@ -197,7 +197,7 @@ function(add_compile_cmd_target)
     add_dependencies(generate_compile_cmd ${COMPILE_CMD_TARGET})
 endfunction()
 
-# 源码 staging: 整目录拷贝(与 ops-transformer add_ops_src_copy 语义一致) + stamp
+# 源码 staging: 整目录拷贝 + stamp
 function(add_ops_src_copy)
     cmake_parse_arguments(SRC_COPY "" "TARGET_NAME;SRC;DST;COMPUTE_UNIT" "" ${ARGN})
     set(_stamp ${SRC_COPY_DST}/.${SRC_COPY_TARGET_NAME}.done)
@@ -210,6 +210,8 @@ function(add_ops_src_copy)
 endfunction()
 
 # kernel 二进制编译目标: pypto 算子按 ground-truth 命令链执行 opc (asc_opc)
+set(GYM_OPSTORE_DIR ${CMAKE_BINARY_DIR}/gym_custom_opp CACHE INTERNAL "custom opp staging for opc")
+
 function(add_bin_compile_target)
     cmake_parse_arguments(BINARY "" "COMPUTE_UNIT" "OP_INFO" ${ARGN})
 
@@ -249,6 +251,7 @@ function(add_bin_compile_target)
             add_custom_target(${OP_TARGET_NAME})
             add_dependencies(ops_gym_kernel ${OP_TARGET_NAME})
             list(APPEND _ops_target_list ${OP_TARGET_NAME})
+            set_property(GLOBAL APPEND PROPERTY GYM_KERNEL_TARGETS ${OP_TARGET_NAME})
 
             set(OP_SRC_OUT_DIR ${SRC_OUT_DIR}/${op_file})
             set(OP_BIN_OUT_DIR ${BIN_OUT_DIR}/${op_file})
@@ -278,9 +281,15 @@ function(add_bin_compile_target)
             add_custom_target(${OP_TARGET_NAME}_pypto_install DEPENDS ${_pypto_install_stamp})
 
             set(DYNAMIC_PY_FILE ${OP_SRC_OUT_DIR}/${op_type}.py)
+            # 内容变化才覆盖(copy_if_different), 保持增量: def 变更导致 adapt py 重新生成时
+            # 必须同步到 staging, 否则 opc 会用旧签名(与 input_param 输出数错位).
             add_custom_command(OUTPUT ${DYNAMIC_PY_FILE}
-                    COMMAND cp -rf ${ASCEND_IMPL_OUT_DIR}/dynamic/${op_file}.py ${DYNAMIC_PY_FILE})
+                    COMMAND ${CMAKE_COMMAND} -E copy_if_different
+                    ${ASCEND_IMPL_OUT_DIR}/dynamic/${op_file}.py ${DYNAMIC_PY_FILE}
+                    DEPENDS ${ASCEND_IMPL_OUT_DIR}/dynamic/${op_file}.py
+                    VERBATIM)
             add_custom_target(${OP_TARGET_NAME}_py_copy DEPENDS ${DYNAMIC_PY_FILE})
+            add_dependencies(${OP_TARGET_NAME}_py_copy generate_gym_adapt_py)
 
             add_custom_command(OUTPUT ${OP_BIN_OUT_DIR} COMMAND mkdir -p ${OP_BIN_OUT_DIR})
             add_custom_target(${OP_TARGET_NAME}_mkdir DEPENDS ${OP_BIN_OUT_DIR})
@@ -291,6 +300,10 @@ function(add_bin_compile_target)
         # (BIN_FILENAME_HASHED=1 即 <OpType>_<md5>.o 哈希文件名来源, ascendc_common_utility.py)
         set(_BUILD_COMMAND export TILINGKEY_PAR_COMPILE=1 &&)
         list(APPEND _BUILD_COMMAND export BIN_FILENAME_HASHED=1 &&)
+        # opc 的 op store(输出数校验)与 tiling 结构注册都经 ASCEND_CUSTOM_OPP_PATH 查找;
+        # 构建期指向 gym_opstore_stage(本仓 ops-info + liboptiling), 避免依赖已安装 vendor
+        # 并让 opParaSize/parameters 由真实 tiling 结构生成.
+        list(APPEND _BUILD_COMMAND export ASCEND_CUSTOM_OPP_PATH=${GYM_OPSTORE_DIR} &&)
         list(APPEND _BUILD_COMMAND bash ${bin_script} ${SRC_OUT_DIR}/${op_file}/${op_type}.py ${OP_BIN_OUT_DIR})
         if(CMAKE_GENERATOR MATCHES "Unix Makefiles")
             list(APPEND _BUILD_COMMAND && echo $(MAKE))

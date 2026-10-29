@@ -22,27 +22,28 @@ Each case: warmup 1 + repeat 10 timed kernel calls, golden comparison vs
 flash_attention_ref_tnd (kv head-expanded for GQA), bandwidth in GB/s.
 
 Usage:
-    python3 python/tests/st/pypto_pro/frontend/fa/test_flex_attention_perf.py
+    pytest ops/pro/experimental/flex_attention/tests/test_flex_attention_perf.py --mode jit
 """
 
 import logging
 import os
-import sys
 import time
 
+import pytest
 import torch
 
-sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)),
-                                "..", "op_kernel"))
-sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from flex_attention import flex_attention  # noqa: E402
-from test_flex_attention import (  # noqa: E402
-    flash_attention_ref_tnd, _build_band_mask_info_maskgen, TD,
+from op_caller import get_op_caller  # noqa: E402
+from flex_attention_kernel_consts import TD  # noqa: E402
+from flex_attention_golden import (  # noqa: E402
+    flash_attention_ref_tnd, _build_band_mask_info_maskgen,
 )
 from test_flex_attention_matrix import (  # noqa: E402
     EXEC_CASES, _build_case_mask_info, _flex_attention_from_info,
     _shape_for, _seed_for, case_id,
 )
+
+flex_attention = get_op_caller("flex_attention")
+pytestmark = pytest.mark.jit_only
 
 ST_DEVICE_ID = int(os.environ.get("TILE_FWK_DEVICE_ID", 0))
 ST_DEVICE = f"npu:{ST_DEVICE_ID}"
@@ -228,7 +229,3 @@ def main():
         raise AssertionError(f"{len(failures)} precision failures:\n" +
                              "\n".join(f"  {f}" for f in failures))
     logging.info("\nAll perf cases passed!")
-
-
-if __name__ == "__main__":
-    main()

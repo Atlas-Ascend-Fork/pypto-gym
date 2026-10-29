@@ -245,7 +245,7 @@ def {}({}, kernel_name="{}"{}):
     ascendc_api_version_header_path = os.path.join(tikcpp_path, "tikcfw/lib/ascendc_api_version.h")
     if os.path.exists(ascendc_api_version_header_path):
         with open(ascendc_api_version_header_path, "r") as ascendc_api_version_file:
-            ascendc_api_version = re.findall(r"#define ASCENDC_API_VERSION (\d+)", ascendc_api_version_file.read())
+            ascendc_api_version = re.findall(r"#define ASCENDC_API_VERSION (\\d+)", ascendc_api_version_file.read())
             if ascendc_api_version:
                 options.append(f"-DASCENDC_API_VERSION={{ascendc_api_version[0]}}")
     custom_compile_options = {},

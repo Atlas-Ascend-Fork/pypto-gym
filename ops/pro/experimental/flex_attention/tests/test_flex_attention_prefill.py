@@ -66,7 +66,7 @@ batch b's Q rows start at ``cu_seqlens_q[b]``; ``seqlens_kvcache`` is ``[B]``
 *absolute* per-request KV lengths, not a prefix sum.
 
 Usage:
-    python3 python/tests/st/pypto_pro/frontend/fa/test_flex_attention_tx.py
+    pytest ops/pro/experimental/flex_attention/tests/test_flex_attention_prefill.py --mode jit
 """
 
 import itertools
@@ -77,6 +77,13 @@ import os
 import pypto_pro.language as pl
 import pytest
 import torch
+
+from flex_attention_prefill_golden import (  # noqa: E402
+    flash_attention_ref_tnd, flash_attention_ref_fp32, cosine_similarity,
+    hybrid_bounds, dense_mask_from_bounds, normalize_spans, hybrid_mask,
+)
+
+pytestmark = pytest.mark.jit_only
 
 ST_DEVICE_ID = int(os.environ.get("TILE_FWK_DEVICE_ID", 0))
 ST_DEVICE = f"npu:{ST_DEVICE_ID}"
@@ -1197,167 +1204,6 @@ def flex_attention_bf16(
             q_count = q_count + 1
 
 
-def flash_attention_ref_tnd(q_tnd, k_tnd, v_tnd, seq_q_list, seq_kv_list, d, masks):
-    """Reference attention operating on TND tensors, per-batch.
-
-    ``masks[bi]`` is a bool tensor of shape [sq, skv] where True == masked
-    (the cell is invisible and gets NEG_INF before softmax). It is the single
-    source of truth shared with the kernel: both come from the same spans via
-    the bound rule (host: hybrid_bounds, device: compute_row_bounds_vf).
-
-    This mirrors the *on-device flash-attention compute flow* rather than a
-    single fused fp32 softmax, so the reference stays faithful to what the
-    kernel actually computes:
-      * KV is consumed in TKV-wide blocks with an online (running max/sum)
-        softmax, exactly like the Cube/Vector pipeline;
-      * the P (probability) tile is cast to bf16 *before* the P@V matmul, as the
-        kernel does (``vf.astype(..., DT_BF16)`` in ``process_vec1_*``), so P@V
-        runs in bf16 with fp32 accumulation;
-      * the running denominator uses the fp32 exp sum (the kernel reduces the
-        sum from the fp32 exp, before the bf16 cast).
-    Modelling the bf16-P quantization is what lets the reference agree with the
-    kernel to ~bf16 ulp even for sliding-window masks, where the attention peak
-    lands in a later block and earlier blocks' bf16 P is downscaled by exp_corr.
-
-    GQA: q head ``ni`` reads kv head ``ni // (n_head_q // n_head_kv)``, matching
-    the kernel's ``ctx.kv_n_idx``.
-    """
-    q_tnd = q_tnd.cpu()
-    k_tnd = k_tnd.cpu()
-    v_tnd = v_tnd.cpu()
-    seq_q_list = seq_q_list.cpu() if torch.is_tensor(seq_q_list) else seq_q_list
-    seq_kv_list = seq_kv_list.cpu() if torch.is_tensor(seq_kv_list) else seq_kv_list
-    scale_val = 1.0 / math.sqrt(d)
-    n = q_tnd.shape[1]
-    group = n // k_tnd.shape[1]
-    o_tnd = torch.zeros_like(q_tnd)
-    q_off = 0
-    kv_off = 0
-    for bi, sq_val in enumerate(seq_q_list):
-        sq = int(sq_val)
-        skv = int(seq_kv_list[bi])
-        mask = masks[bi].cpu()
-        for ni in range(n):
-            kvi = ni // group
-            qi = q_tnd[q_off:q_off + sq, ni, :].float()      # [sq, d]
-            ki = k_tnd[kv_off:kv_off + skv, kvi, :].float()  # [skv, d]
-            vi = v_tnd[kv_off:kv_off + skv, kvi, :].float()  # [skv, d]
-            running_m = torch.full((sq, 1), float(NEG_INF))
-            running_l = torch.zeros((sq, 1))
-            acc = torch.zeros((sq, d))
-            for c0 in range(0, skv, TKV):
-                c1 = min(c0 + TKV, skv)
-                qk = torch.matmul(qi, ki[c0:c1].T) * scale_val          # [sq, blk] fp32
-                qk = qk.masked_fill(mask[:, c0:c1], NEG_INF)
-                blk_max = qk.max(dim=1, keepdim=True).values            # [sq, 1]
-                new_m = torch.maximum(running_m, blk_max)
-                corr = torch.exp(running_m - new_m)                     # [sq, 1]
-                p = torch.exp(qk - new_m)                               # [sq, blk] fp32
-                p16 = p.bfloat16().float()                              # bf16 P (FA flow)
-                acc = acc * corr + torch.matmul(p16, vi[c0:c1])
-                running_l = running_l * corr + p.sum(dim=1, keepdim=True)
-                running_m = new_m
-            o_tnd[q_off:q_off + sq, ni, :] = (acc / running_l).bfloat16()
-        q_off += sq
-        kv_off += skv
-    return o_tnd
-
-
-def flash_attention_ref_fp32(q_tnd, k_tnd, v_tnd, seq_q_list, seq_kv_list, d, masks):
-    """Naive fused fp32 attention -- the reference the operator grades against.
-
-    Deliberately *not* shaped like the kernel: one fp32 softmax over the whole
-    row, no KV blocking, no bf16 P quantization. flash_attention_ref_tnd mirrors
-    the kernel's flow (which is what lets it agree to ~1 ulp); this one is
-    independent, so it also cross-checks that reference rather than sharing its
-    assumptions. The doc's criterion against it is cosine similarity >= 0.99.
-    """
-    q_tnd, k_tnd, v_tnd = q_tnd.cpu(), k_tnd.cpu(), v_tnd.cpu()
-    scale_val = 1.0 / math.sqrt(d)
-    n = q_tnd.shape[1]
-    group = n // k_tnd.shape[1]
-    o_tnd = torch.zeros_like(q_tnd)
-    q_off = kv_off = 0
-    for bi, sq_val in enumerate(seq_q_list):
-        sq, skv = int(sq_val), int(seq_kv_list[bi])
-        mask = masks[bi].cpu()
-        for ni in range(n):
-            kvi = ni // group
-            qi = q_tnd[q_off:q_off + sq, ni, :].float()
-            ki = k_tnd[kv_off:kv_off + skv, kvi, :].float()
-            vi = v_tnd[kv_off:kv_off + skv, kvi, :].float()
-            sc = torch.matmul(qi, ki.T) * scale_val
-            sc = sc.masked_fill(mask, float("-inf"))
-            o_tnd[q_off:q_off + sq, ni, :] = torch.matmul(torch.softmax(sc, dim=-1), vi).bfloat16()
-        q_off += sq
-        kv_off += skv
-    return o_tnd
-
-
-def cosine_similarity(a, b):
-    """Whole-tensor cosine similarity, the doc's accuracy metric.
-
-    Accumulated in float64 deliberately. At these sizes (millions of elements)
-    an fp32 dot product and fp32 norms drift by more than the deviation being
-    measured: with fp32 reductions cos(x, x) came back as 0.9969 instead of 1.0,
-    which would have swamped the real ~1e-6 signal and reported every case as
-    far worse than it is.
-    """
-    x, y = a.double().flatten(), b.double().flatten()
-    return float(torch.dot(x, y) / (x.norm() * y.norm()))
-
-
-def hybrid_bounds(sq, skv, spans):
-    """Per-row visibility bound -- the host mirror of the on-device rule.
-
-    This is the *only* mask quantity the host computes, and it exists purely to
-    drive the reference and the core-balancing cost model; nothing derived here
-    is shipped to the kernel, which reads mm_prefix_range and rebuilds the mask
-    itself. Query row r sits at absolute position ``q_abs = skv - sq + r`` and
-    sees KV columns ``[0, bound[r])``.
-    """
-    q_abs = torch.arange(sq, dtype=torch.int64) + (skv - sq)
-    bound = q_abs + 1
-    for s, e in spans:
-        hit = (q_abs >= s) & (q_abs <= e)
-        bound = torch.where(hit, torch.clamp(bound, min=e + 1), bound)
-    return torch.clamp(bound, max=skv)
-
-
-def normalize_spans(mm_prefix_range, b):
-    """Validate mm_prefix_range and return (device tensor, per-batch span list).
-
-    Accepts what the operator accepts: ``None`` (pure causal), ``[max_spans, 2]``
-    broadcast to every request, or ``[b, max_spans, 2]``; ``-1`` marks padding.
-    The device tensor keeps the operator's own ``[b, max_spans, 2]`` layout --
-    only padded out to the full span budget, so the kernel's span loop is a
-    fixed statically unrolled length and padding slots stay inert (read
-    unsigned, ``s = -1`` never matches a real position). The [2, max_spans]
-    transpose the UB staging tile needs is done by the load, not here.
-    """
-    dev = torch.full((b, HYBRID_MAX_SPANS, 2), -1, dtype=torch.int32)
-    if mm_prefix_range is None:
-        return dev, [[] for _ in range(b)]
-
-    t = torch.as_tensor(mm_prefix_range, dtype=torch.int32)
-    if t.dim() == 2:                                    # [max_spans, 2] -> broadcast
-        t = t.unsqueeze(0).expand(b, -1, -1)
-    assert t.shape[0] == b and t.shape[2] == 2, "mm_prefix_range must be [b, max_spans, 2]"
-    assert t.shape[1] <= HYBRID_MAX_SPANS, \
-        "at most %d spans per request" % HYBRID_MAX_SPANS
-
-    dev[:, :t.shape[1], :] = t
-    per_batch = [[(int(s), int(e)) for s, e in t[bi].tolist() if int(s) >= 0] for bi in range(b)]
-    return dev, per_batch
-
-
-def dense_mask_from_bounds(bound, skv):
-    """Dense [sq, skv] reference mask (True == masked) from per-row bounds."""
-    cols = torch.arange(skv, dtype=torch.int64)
-    return ~(cols[None, :] < bound[:, None])
-
-
-
 def build_work_ranges(seq_q_list, seq_kv_list, spans_per_batch, n, num_cores):
     """Assign work to cores; returns int32 [num_cores, 4] =
     (work_start, n_items, split_mode, two_c).
@@ -1453,9 +1299,6 @@ def build_work_ranges(seq_q_list, seq_kv_list, spans_per_batch, n, num_cores):
     return out
 
 
-def hybrid_mask(mm_prefix_range):
-    """Mask spec: the operator's mm_prefix_range, verbatim."""
-    return mm_prefix_range
 
 
 @pytest.mark.soc("950")
@@ -1903,12 +1746,3 @@ def test_flex_attention_bf16_gqa():
         msg = "\n".join("  cfg=%s max|diff|=%.5f" % (c, d) for c, d in failures)
         raise AssertionError("%d/%d precision cases failed:\n%s" % (len(failures), len(test_cfgs), msg))
     logging.info("  PASS")
-
-
-if __name__ == "__main__":
-    logging.basicConfig(level=logging.INFO, format="%(message)s")
-    torch.npu.set_device(ST_DEVICE)
-    logging.info("FlexAttention bf16 + GQA (QK_PRELOAD=%s, FIFO=%s)", QK_PRELOAD, FIFO_SIZE)
-    logging.info("%s", '=' * 60)
-    test_flex_attention_bf16_model_shapes()
-    logging.info("\nAll tests passed!")

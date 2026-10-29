@@ -46,18 +46,20 @@ $$
 | block_range | 可选输入 | 每 Q tile 上界 KV tile 数（kv_loop），`[B, Rf]`（`BITMASK/CALLABLE`）。 | INT32 | ND |
 | tile_range1 | 可选输入 | DENSE 前缀全可见块数，`[B, Rf]`（`DENSE` 时必传）。 | INT32 | ND |
 | tile_range2 | 可选输入 | DENSE 末可见块索引+1，`[B, Rf]`（`DENSE` 时必传）。 | INT32 | ND |
-| block_compute | 可选输入 | 计算位图，`[B, Rf, Wf]`（`BITMASK/CALLABLE` 时必传）。 | UINT32 | ND |
+| block_compute | 可选输入 | 计算位图，`[B, Rf, Wf]`（`BITMASK/CALLABLE` 时必传）。 | INT64 | ND |
 | block_mask | 可选输入 | 掩码位图，`[B, Rf, Wf]`（`BITMASK/CALLABLE` 时必传）。 | UINT32 | ND |
 | bounds | 可选输入 | 可调用行批级右界，`[B, num_bounds]`（`CALLABLE` 且 `num_bounds>0` 时必传）。 | INT32 | ND |
-| actual_seq_q | 输入 | per-batch q 前缀和，`[B]`。 | INT32 | ND |
-| actual_seq_kv | 输入 | per-batch kv 前缀和，`[B]`。 | INT32 | ND |
+| actual_seq_q | 输入 | per-batch q 前缀和，`[B]`（varlen 必需；bshd 可缺省）。 | INT64 | ND |
+| actual_seq_kv | 输入 | per-batch kv 前缀和，`[B]`（varlen 必需；bshd 可缺省）。 | INT32 | ND |
 | attn_out | 输出 | 注意力输出，shape 同 `query`。 | FLOAT16、BFLOAT16 | ND |
+| layout | 可选属性 | 数据布局：`varlen`（TND 拼包，默认）/ `bshd`（`[B,S,H,D]`）。 | STRING | - |
 | schedule_type | 必选属性 | 调度类型：0=DENSE，1=BITMASK，2=CALLABLE。 | INT | - |
 | num_bounds | 可选属性 | `bounds` 维度（`CALLABLE`），默认 0。 | INT | - |
 
 ## 约束说明
 
-- `d`（head_dim）仅支持 128。
+- `d`（head_dim）支持 `[8, 128]`；UB tile 固定按 128 分配，运行时 validshape/params 跟随 `tiling.d`。
+- `layout=bshd` 时输入为 4D `[B,S,H,D]`，但交付形态输出仍为 3D：`attn_out [B*S,n,d]`、`softmax_* [n,B*S]`（与 varlen 一致，内存与 4D 连续布局等价）。
 - `mask_num` 非独立输入：host tiling 从 `mask_start` 的 shape（dim 1）推导，
   `mask_start` 缺省即 `mask_num=0`；上限 256（`mask_num > 16` 走 HoleChunk 分块解码）。
 - `schedule_type` 与所传可选输入须匹配：DENSE 需 `tile_range1/tile_range2`；
@@ -74,7 +76,7 @@ $$
 | 调用方式 | 说明 |
 | -------- | ---- |
 | Kernel 直调（PyPTO） | 参考 `python/tests/st/pypto_pro/frontend/fa/test_flex_attention.py`：经 host 入口 `flex_attention(q, k, v, seq_q_list, seq_kv_list, maskr, mask_start, mask_len, block_range, block_compute, block_mask, attn_out, softmax_max, softmax_sum)` 构造 `FlexAttnTiling` 并启动 `flex_attention_kernel[None, blockDim, None, datatype](...)`（`mask_num` 从 `mask_start.shape[1]` 推导）。 |
-| aclnn API | 待补齐。 |
+| aclnn API | 已支持（run 包 built-in）。`aclnnFlexAttentionGetWorkspaceSize`（int64 ValueDepend 走 `aclIntArray`）/ `aclnnFlexAttentionTensorGetWorkspaceSize`（全 Tensor）+ `aclnnFlexAttention`；测试桥见 `tests/aclnn_bridge/aclnn_bridge_flex_attention.cpp`，`pytest --mode aclnn`。 |
 
 ## 目录结构
 

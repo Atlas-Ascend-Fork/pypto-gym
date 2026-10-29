@@ -10,8 +10,7 @@
 # -----------------------------------------------------------------------------------------------------------
 """tiling 结构字节级对齐 构建期自动校验.
 
-参照 ops-transformer attention/flash_attn_grad/op_host/base/flash_attn_grad_tiling_regbase.cpp
-的手工 static_assert 方案, gym 将其自动化: TilingData 存在两份互不相干的声明——
+TilingData 存在两份互不相干的声明——
   1. pypto codegen 生成的 <X>_tiling.h: 按 kernel dataclass 声明顺序生成, 是权威布局;
   2. op_host 手写 BEGIN_TILING_DATA_DEF + REGISTER_TILING_DATA_CLASS: 框架按它分配 tiling buffer.
 两份漂移不会有任何编译/运行报错, 只会让 kernel 读到整体错位的字段.
@@ -25,8 +24,7 @@
 
 注: 手写侧布局由 BEGIN_TILING_DATA_DEF 的 FieldHandler 在运行时累加 (C++ 对象尺寸含
     每字段 offset+16B reserve 三件套, sizeof 不可比), 故编译期 offsetof/static_assert
-    对手写侧不可行 (ops-transformer fag regbase.cpp 亦仅对生成侧下断言, gym 以运行时
-    核对程序补全另一半).
+    对手写侧不可行; gym 采用运行时核对程序补全该侧校验.
 """
 
 import argparse

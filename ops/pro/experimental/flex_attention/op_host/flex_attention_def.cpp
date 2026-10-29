@@ -13,7 +13,7 @@
  * \brief FlexAttention operator registration (mask_info-driven FA).
  *
  * Input order mirrors the delivery-form kernel signature in op_kernel/
- * (inputs first, then the single output attn_out, then the tiling struct).
+ * (inputs first, then outputs attn_out/softmax_max_out/softmax_sum_out, then the tiling struct).
  * Single-schedule (bitmask interval): maskr/mask_start/mask_len descriptor + block_range +
  * block_compute/block_mask. mask_num is derived from the mask_start shape in the
  * host tiling. ValueDepend(OPTIONAL) marks the inputs whose Host data the host
@@ -77,13 +77,13 @@ public:
             .Format({ge::FORMAT_ND, ge::FORMAT_ND})
             .AutoContiguous();
         this->Input("actual_seq_q")
-            .ParamType(REQUIRED)
+            .ParamType(OPTIONAL)
             .DataType({ge::DT_INT64, ge::DT_INT64})
             .Format({ge::FORMAT_ND, ge::FORMAT_ND})
             .AutoContiguous()
             .ValueDepend(OPTIONAL);
         this->Input("actual_seq_kv")
-            .ParamType(REQUIRED)
+            .ParamType(OPTIONAL)
             .DataType({ge::DT_INT32, ge::DT_INT32})
             .Format({ge::FORMAT_ND, ge::FORMAT_ND})
             .AutoContiguous();
@@ -91,6 +91,19 @@ public:
             .ParamType(REQUIRED)
             .DataType({ge::DT_FLOAT16, ge::DT_BF16})
             .Format({ge::FORMAT_ND, ge::FORMAT_ND});
+        this->Output("softmax_max_out")
+            .ParamType(REQUIRED)
+            .DataType({ge::DT_FLOAT, ge::DT_FLOAT})
+            .Format({ge::FORMAT_ND, ge::FORMAT_ND});
+        this->Output("softmax_sum_out")
+            .ParamType(REQUIRED)
+            .DataType({ge::DT_FLOAT, ge::DT_FLOAT})
+            .Format({ge::FORMAT_ND, ge::FORMAT_ND});
+
+        // Host-side layout contract (mirrors the Python host wrapper argument):
+        // "varlen" (TND packed) or "bshd" ([B, S, H, D]). The kernel selects the
+        // Layout specialization through the tiling key.
+        this->Attr("layout").AttrType(OPTIONAL).String("varlen");
 
         OpAICoreConfig aicore_config;
         aicore_config.DynamicCompileStaticFlag(true)

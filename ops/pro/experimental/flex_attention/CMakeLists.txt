@@ -7,11 +7,11 @@
 # INCLUDING BUT NOT LIMITED TO NON-INFRINGEMENT, MERCHANTABILITY OR FITNESS FOR A PARTICULAR PURPOSE.
 # See LICENSE in the root of the software repository for the full text of the License.
 # -----------------------------------------------------------------------------------------------------------
-# 算子级 dispatcher(对齐 ops-transformer): 派发算子子目录(op_host 必选, tests 等按需).
+# 算子级 dispatcher: 派发算子子目录(op_host 必选, tests 等按需).
 # 算子接入契约: gym_op_discovery 锚定本文件, 缺失即 FATAL.
 
 file(GLOB CURRENT_DIRS RELATIVE ${CMAKE_CURRENT_SOURCE_DIR} ${CMAKE_CURRENT_SOURCE_DIR}/*)
-if(NOT ENABLE_TESTS_EXECUTE)
+if(NOT ENABLE_TESTS)
     list(REMOVE_ITEM CURRENT_DIRS tests)
 endif()
 foreach(SUB_DIR ${CURRENT_DIRS})

@@ -3,6 +3,6 @@
 
 pypto>=0.2.0
 numpy
-pytest
+pytest>=7
 pytest-forked==1.6.0
 pytest-xdist
