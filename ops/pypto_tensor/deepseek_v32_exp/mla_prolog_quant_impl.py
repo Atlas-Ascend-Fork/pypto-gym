@@ -871,19 +871,37 @@ def mla_prolog_quant_d(
         if t > 64:
             pypto.set_pass_options(cube_l1_reuse_setting={-1: 4, 0: 1, 1: 1, 2: 1, 3: 1})
             pypto.set_pass_options(cube_nbuffer_setting={-1: 4, 0: 1, 1: 1, 2: 1, 3: 3})
+            mla_prolog_quant_compute(
+                        token_x, w_dq, w_uq_qr, dequant_scale, w_uk,
+                        w_dkv_kr, gamma_cq, gamma_ckv, cos,
+                        sin, cache_index, kv_cache, kr_cache, k_scale_cache,
+                        q_norm_out, q_norm_scale_out, query_nope_out,
+                        query_rope_out, kv_cache_out,
+                        kr_cache_out, k_scale_cache_out, epsilon_cq,
+                        epsilon_ckv, cache_mode, tile_config, rope_cfg
+            )
         else:
             pypto.set_pass_options(cube_l1_reuse_setting={-1: 4, 0: 1, 1: 1, 2: 1})
             pypto.set_pass_options(cube_nbuffer_setting={-1: 4, 0: 1, 1: 1, 2: 3})
+            mla_prolog_quant_compute(
+                        token_x, w_dq, w_uq_qr, dequant_scale, w_uk,
+                        w_dkv_kr, gamma_cq, gamma_ckv, cos,
+                        sin, cache_index, kv_cache, kr_cache, k_scale_cache,
+                        q_norm_out, q_norm_scale_out, query_nope_out,
+                        query_rope_out, kv_cache_out,
+                        kr_cache_out, k_scale_cache_out, epsilon_cq,
+                        epsilon_ckv, cache_mode, tile_config, rope_cfg
+            )
     else:
         pypto.set_pass_options(cube_l1_reuse_setting={-1: 8, 0: 1, 1: 1, 2: 1})
         pypto.set_pass_options(cube_nbuffer_setting={-1: 4, 0: 1, 1: 1})
         pypto.set_pass_options(vec_nbuffer_setting={-2: 1, -1: 4})
-    mla_prolog_quant_compute(
-                token_x, w_dq, w_uq_qr, dequant_scale, w_uk,
-                w_dkv_kr, gamma_cq, gamma_ckv, cos,
-                sin, cache_index, kv_cache, kr_cache, k_scale_cache,
-                q_norm_out, q_norm_scale_out, query_nope_out,
-                query_rope_out, kv_cache_out,
-                kr_cache_out, k_scale_cache_out, epsilon_cq,
-                epsilon_ckv, cache_mode, tile_config, rope_cfg
-    )
+        mla_prolog_quant_compute(
+                    token_x, w_dq, w_uq_qr, dequant_scale, w_uk,
+                    w_dkv_kr, gamma_cq, gamma_ckv, cos,
+                    sin, cache_index, kv_cache, kr_cache, k_scale_cache,
+                    q_norm_out, q_norm_scale_out, query_nope_out,
+                    query_rope_out, kv_cache_out,
+                    kr_cache_out, k_scale_cache_out, epsilon_cq,
+                    epsilon_ckv, cache_mode, tile_config, rope_cfg
+        )
