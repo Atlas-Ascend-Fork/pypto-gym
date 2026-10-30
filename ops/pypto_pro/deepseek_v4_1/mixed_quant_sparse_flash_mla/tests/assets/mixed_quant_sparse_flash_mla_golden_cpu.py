@@ -11,7 +11,7 @@
 """mixed_quant_sparse_flash_mla CPU golden（独立数学 oracle，纯 torch）。
 
 三部分：
-* host 侧 metadata 规划器（``plan_metadata`` / ``build_metadata``：本机 28 核下按 uniform
+* host 侧 metadata 规划器（``plan_metadata`` / ``build_metadata``：按设备 `cube_core_num` 规划，uniform
   整行规划，FD 字段为 0；测试用它生成 kernel 消费的 ``int32[1024]``）；
 * 独立 CPU 参考 ``mixed_quant_sparse_flash_mla_golden_cpu``：直接从合同字节池
   解码 FP8 E4M3FN group32 / FP4 E2M1 group16 反量化，做 128-token 分块在线
@@ -85,6 +85,7 @@ FD_MIN_TOTAL_TILES = 64
 # for anyway (their imbalance came from row granularity at a scale FD cannot fix
 # better than the whole-row schedule), so only split rows long enough to matter.
 FD_MIN_ROW_TILES = 4
+FD_SPLIT_COST_TILES = 0.5
 
 
 def _row_tiles(w_ori, w_cmp, has_cmp):
@@ -103,9 +104,23 @@ def _batch_of(cu_q, row):
 
 
 def _get_cube_core_num(device=None):
+    """Cube 核数（host 侧规划用）：缺省读当前设备，不写死具体平台。"""
     import torch_npu  # noqa: F401
 
+    if device is None:
+        device = torch.npu.current_device()
     return int(torch.npu.get_device_properties(device).cube_core_num)
+
+
+def _effective_blocks(blocks):
+    if blocks is None:
+        blocks = _get_cube_core_num()
+    blocks = int(blocks)
+    if blocks <= 0:
+        raise ValueError(f"blocks must be positive, got {blocks}")
+    if blocks > AIC_CORE_MAX_NUM:
+        raise ValueError(f"blocks must be <= {AIC_CORE_MAX_NUM}, got {blocks}")
+    return blocks
 
 
 def plan_metadata_uniform(cu_q, len_ori, len_cmp=None, blocks=None):
@@ -118,7 +133,7 @@ def plan_metadata_uniform(cu_q, len_ori, len_cmp=None, blocks=None):
     """
     rows = int(cu_q[-1])
     if blocks is None:
-        blocks = rows
+        blocks = min(_effective_blocks(None), max(rows, 1))
     if not 0 < blocks <= AIC_CORE_MAX_NUM:
         raise ValueError(f"blocks must be in 1..{AIC_CORE_MAX_NUM}, got {blocks}")
     if len(cu_q) < 2 or cu_q[0] != 0:
@@ -162,7 +177,7 @@ def _uniform_critical(rows, row_tiles, blocks):
     return worst
 
 
-def plan_metadata_fd(cu_q, len_ori, len_cmp=None, has_cmp=True, blocks=28, min_gain=FD_MIN_GAIN):
+def plan_metadata_fd(cu_q, len_ori, len_cmp=None, has_cmp=True, blocks=None, min_gain=FD_MIN_GAIN):
     """Plan the flat ``(row, tile)`` interval schedule with 2-way FD partials.
 
     Returns ``(metadata_int32_1024, block_dim)`` when the critical path shrinks
@@ -174,6 +189,7 @@ def plan_metadata_fd(cu_q, len_ori, len_cmp=None, has_cmp=True, blocks=28, min_g
     kernel's ``row_count = m_end - m_start + (s2_end > 0)``.
     """
     rows = int(cu_q[-1])
+    blocks = _effective_blocks(blocks) if rows > 0 else int(blocks or 0)
     if rows <= 0 or blocks <= 0:
         return None
     row_tiles = [_row_tiles(len_ori[r], (len_cmp[r] if has_cmp and len_cmp else 0), has_cmp) for r in range(rows)]
@@ -207,6 +223,9 @@ def plan_metadata_fd(cu_q, len_ori, len_cmp=None, has_cmp=True, blocks=28, min_g
         r = row_at(f)
         if rstart[r] < f < rstart[r] + row_tiles[r]:
             splits.append((c, r))
+    # 切分的 partial 写读 + 屏障代价：省下的 tile 数必须盖得住切分数。
+    if (ub_max - fl_max) < FD_SPLIT_COST_TILES * len(splits):
+        return None
     if len(splits) > n_blocks or len(splits) * 2 > 2 * AIC_CORE_MAX_NUM:
         return None
     # A row cut by two consecutive boundaries would need a 3-way merge.
@@ -253,13 +272,14 @@ def plan_metadata_fd(cu_q, len_ori, len_cmp=None, has_cmp=True, blocks=28, min_g
     return torch.tensor(md, dtype=torch.int32), n_blocks
 
 
-def plan_metadata(cu_q, len_ori, len_cmp=None, has_cmp=True, blocks=28, min_gain=FD_MIN_GAIN):
+def plan_metadata(cu_q, len_ori, len_cmp=None, has_cmp=True, blocks=None, min_gain=FD_MIN_GAIN):
     """Dispatch: flat FD schedule when it pays, else uniform whole rows.
 
     Returns ``(metadata_int32_1024, block_dim)``. ``len_ori``/``len_cmp`` are
     per-row effective widths (already clamped to K1/K2) and are required for the
     FD cost model.
     """
+    blocks = _effective_blocks(blocks)
     if len_ori is not None:
         fd = plan_metadata_fd(cu_q, len_ori, len_cmp, has_cmp, blocks, min_gain)
         if fd is not None:
@@ -530,7 +550,7 @@ def _build_case_tensors(case, device=torch.device("cpu")):
         tensors["cmp_block_table"] = torch.zeros(batch, 1, dtype=torch.int32)
         tensors["cmp_topk_length"] = torch.zeros(rows, 1, dtype=torch.int32)
         tensors["cmp_kv_stride0"] = 320
-    blocks = min(28, max(1, rows))
+    blocks = min(_get_cube_core_num(), max(1, rows))
     tensors["metadata"] = plan_metadata_uniform(cu.tolist(), None, None, blocks=blocks)
     ordered = [tensors.get(name) for name in _INPUT_ORDER]
     scalars = {
@@ -604,7 +624,7 @@ def build_inputs(name, device=torch.device("cpu")):
         else [0] * len(w_o)
     )
     cu = [int(v) for v in inputs["cu_seqlens_q"].reshape(-1).tolist()]
-    md, block_dim = plan_metadata(cu, w_o, w_c, bool(case["has_cmp"]), 28)
+    md, block_dim = plan_metadata(cu, w_o, w_c, bool(case["has_cmp"]), None)
     inputs["metadata"] = md
     return inputs, block_dim, case
 

@@ -18,7 +18,7 @@ tilingkey 只编译一份产物；共 13 条 P0 用例，精度 13/13 通过。�
 | 输入数据类型 | `q` 为 BF16；`ori_kv` / `cmp_kv` 为 `uint8`（FP8 / FP4 的编码字节，非数值类型）；索引、页表、长度、`metadata` 为 int32；`sinks` 为 FP32 |
 | 输出数据类型 | `out` 为 BF16；`lse` 为 FP32 |
 | 支持的形状 | `T1 ∈ [1,4096]`、`B ∈ [1,1024]`、`K1`/`K2` `∈ [1,4096]`、页数 `∈ [1,65536]`、`bs`/`bt` `∈ [1,1024]` |
-| 分核数 | 由 `metadata`（host 侧规划）给定，本机 28 核下走 uniform 整行规划；代码内不硬编码核数 |
+| 分核数 | 由 `metadata`（host 侧规划）给定；host 规划器缺省读取当前设备 `cube_core_num`（`torch.npu.get_device_properties`），不硬编码平台核数，上限 `AIC_CORE_MAX_NUM=36` |
 | 测试标注 | `pytestmark = pytest.mark.soc("950")`；不满足 SoC 标注的用例由仓库 conftest 统一跳过 |
 | 依赖 | pypto_pro、torch、torch_npu、NumPy、pytest |
 

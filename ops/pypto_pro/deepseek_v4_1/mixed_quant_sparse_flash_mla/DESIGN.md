@@ -11,7 +11,7 @@
 - 13 个 P0（README.md「约束说明」的合约）真机精度 PASS（pro_scheme_a + LSE 1e-5 +
   空行严格 0/sink + 输出有限）。
 - 平台：Ascend950PR_9579（950PR_957x.ini：UB 248KB/AIV、L1 512KB、L0A/L0B 64KB、
-  L0C 256KB、28 Cube/56 Vector）。launch `block_dim = metadata.planner blocks`（≤28）。
+  L0C 256KB、28 Cube/56 Vector）。launch `block_dim = metadata.planner blocks`（≤`AIC_CORE_MAX_NUM=36`；host 规划器缺省取当前设备 `cube_core_num`）。
 - host 边界：wrapper 只校验、`torch.empty`、派生标量、一次 launch；metadata 由
   host 入口 `mixed_quant_sparse_flash_mla_metadata` 生成（用户指令）。
 
@@ -88,7 +88,9 @@ def mixed_quant_sparse_flash_mla_kernel(
    → `phys = getval(bt_flat, b*BT+page)` → `addr = phys*stride0 + off*row_bytes`；
    `pl.load(bytes_tile[row], kv_flat, [addr])`（[1,row_bytes] u8，1D 视图）。
 2. VF 反量化（ORI：512B FP8→FP32 ×16 scale BF16→FP32 → BF16；CMP：256B FP4 低 nibble
-   在前 → LUT 值 ×32 scale → BF16），写 UB `kv_bf16[row, 512]`。
+   在前 → BF16 值 ×32 scale → BF16），写 UB `kv_bf16[row, 512]`。CMP 的每个 scale 通过
+   `LoadDist.E2B_B16` 在 load 时直接扩展成 16 lanes，并提前到 FP4 load/cast 前覆盖依赖延迟；
+   不再构造 lane index 或执行 `vf.gather`。
 3. `pl.move(UB kv_bf16 → L1 kv_half[本 AIV 半区])`（ND 字节拷贝）→ `set_cross_core(KV_READY)`。
 
 ### 阶段 B（AIC，每 tile）

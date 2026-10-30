@@ -284,52 +284,45 @@ def dequant_ori_row_fan_vf(fp8, sc_bf, knz, r0, cnt):
 
 @pl.vector_function
 def dequant_cmp_pairgrp_vf(p, s, knz, roff):
-    _pall_u16 = vf.create_mask(pattern=pl.MaskPattern.ALL, dtype=pl.DT_UINT16)
     _pall_bf16 = vf.create_mask(pattern=pl.MaskPattern.ALL, dtype=pl.DT_BF16)
     m8 = vf.create_mask(pattern=pl.MaskPattern.ALL, dtype=pl.DT_INT8)
-    lane = vf.arange(0, dtype=pl.DT_UINT16)
-    base = vf.shift_right(lane, 4, _pall_u16)
-    reg = vf.adds(base, 0, _pall_u16)
-    reg_1 = vf.adds(base, 8, _pall_u16)
-    reg_2 = vf.adds(base, 16, _pall_u16)
-    reg_3 = vf.adds(base, 24, _pall_u16)
     for r in pl.range(0, 8, 1):
-        srow = vf.load_align(s, [r, 128])
+        # E2B expands each BF16 scale over 16 lanes; issue it before FP4 conversion to hide its load-use latency.
+        svec = vf.load_align(s, [r, 128], dist=pl.LoadDist.E2B_B16)
         u8r = vf.load_align(p, [r, 0], dist=pl.LoadDist.UNPK4)
-        view_2 = vf.bit_cast(u8r, dtype=pl.DT_FP4E2M1)
+        packed = vf.bit_cast(u8r, dtype=pl.DT_FP4E2M1)
         vals = vf.astype(
-            view_2, m8, dtype=pl.DT_BF16, round_mode=pl.VFRoundMode.CAST_RINT, saturate=pl.SaturateMode.OFF
+            packed, m8, dtype=pl.DT_BF16, round_mode=pl.VFRoundMode.CAST_RINT, saturate=pl.SaturateMode.OFF
         )
-        svec = vf.gather(srow, reg)
         prod = vf.mul(vals, svec, _pall_bf16)
         mul = (r + roff) * 16
         vf.store_align(knz + mul, prod, _pall_bf16, data_copy_mode=pl.DataCopyMode.DATA_BLOCK_COPY, block_stride=17)
+        svec = vf.load_align(s, [r, 136], dist=pl.LoadDist.E2B_B16)
         u8r = vf.load_align(p, [r, 64], dist=pl.LoadDist.UNPK4)
-        view_4 = vf.bit_cast(u8r, dtype=pl.DT_FP4E2M1)
+        packed = vf.bit_cast(u8r, dtype=pl.DT_FP4E2M1)
         vals = vf.astype(
-            view_4, m8, dtype=pl.DT_BF16, round_mode=pl.VFRoundMode.CAST_RINT, saturate=pl.SaturateMode.OFF
+            packed, m8, dtype=pl.DT_BF16, round_mode=pl.VFRoundMode.CAST_RINT, saturate=pl.SaturateMode.OFF
         )
-        svec = vf.gather(srow, reg_1)
         prod = vf.mul(vals, svec, _pall_bf16)
         vf.store_align(
             knz + (mul + 2176), prod, _pall_bf16, data_copy_mode=pl.DataCopyMode.DATA_BLOCK_COPY, block_stride=17
         )
+        svec = vf.load_align(s, [r, 144], dist=pl.LoadDist.E2B_B16)
         u8r = vf.load_align(p, [r, 128], dist=pl.LoadDist.UNPK4)
-        view_6 = vf.bit_cast(u8r, dtype=pl.DT_FP4E2M1)
+        packed = vf.bit_cast(u8r, dtype=pl.DT_FP4E2M1)
         vals = vf.astype(
-            view_6, m8, dtype=pl.DT_BF16, round_mode=pl.VFRoundMode.CAST_RINT, saturate=pl.SaturateMode.OFF
+            packed, m8, dtype=pl.DT_BF16, round_mode=pl.VFRoundMode.CAST_RINT, saturate=pl.SaturateMode.OFF
         )
-        svec = vf.gather(srow, reg_2)
         prod = vf.mul(vals, svec, _pall_bf16)
         vf.store_align(
             knz + (mul + 4352), prod, _pall_bf16, data_copy_mode=pl.DataCopyMode.DATA_BLOCK_COPY, block_stride=17
         )
+        svec = vf.load_align(s, [r, 152], dist=pl.LoadDist.E2B_B16)
         u8r = vf.load_align(p, [r, 192], dist=pl.LoadDist.UNPK4)
-        view_8 = vf.bit_cast(u8r, dtype=pl.DT_FP4E2M1)
+        packed = vf.bit_cast(u8r, dtype=pl.DT_FP4E2M1)
         vals = vf.astype(
-            view_8, m8, dtype=pl.DT_BF16, round_mode=pl.VFRoundMode.CAST_RINT, saturate=pl.SaturateMode.OFF
+            packed, m8, dtype=pl.DT_BF16, round_mode=pl.VFRoundMode.CAST_RINT, saturate=pl.SaturateMode.OFF
         )
-        svec = vf.gather(srow, reg_3)
         prod = vf.mul(vals, svec, _pall_bf16)
         vf.store_align(
             knz + (mul + 6528), prod, _pall_bf16, data_copy_mode=pl.DataCopyMode.DATA_BLOCK_COPY, block_stride=17
@@ -338,35 +331,27 @@ def dequant_cmp_pairgrp_vf(p, s, knz, roff):
 
 @pl.vector_function
 def dequant_cmp_row_fan_vf(pk, sc_bf, knz, r0, cnt):
-    _pall_u16 = vf.create_mask(pattern=pl.MaskPattern.ALL, dtype=pl.DT_UINT16)
     _pall_bf16 = vf.create_mask(pattern=pl.MaskPattern.ALL, dtype=pl.DT_BF16)
     m8 = vf.create_mask(pattern=pl.MaskPattern.ALL, dtype=pl.DT_INT8)
-    srow = vf.load_align(sc_bf, [0, 128])
-    lane = vf.arange(0, dtype=pl.DT_UINT16)
-    base = vf.shift_right(lane, 4, _pall_u16)
     u8r = vf.load_align(pk, [0, 0], dist=pl.LoadDist.UNPK4)
     view_2 = vf.bit_cast(u8r, dtype=pl.DT_FP4E2M1)
     vals = vf.astype(view_2, m8, dtype=pl.DT_BF16, round_mode=pl.VFRoundMode.CAST_RINT, saturate=pl.SaturateMode.OFF)
-    idx = vf.adds(base, 0, _pall_u16)
-    svec = vf.gather(srow, idx)
+    svec = vf.load_align(sc_bf, [0, 128], dist=pl.LoadDist.E2B_B16)
     reg = vf.mul(vals, svec, _pall_bf16)
     u8r = vf.load_align(pk, [0, 64], dist=pl.LoadDist.UNPK4)
     view_4 = vf.bit_cast(u8r, dtype=pl.DT_FP4E2M1)
     vals = vf.astype(view_4, m8, dtype=pl.DT_BF16, round_mode=pl.VFRoundMode.CAST_RINT, saturate=pl.SaturateMode.OFF)
-    idx = vf.adds(base, 8, _pall_u16)
-    svec = vf.gather(srow, idx)
+    svec = vf.load_align(sc_bf, [0, 136], dist=pl.LoadDist.E2B_B16)
     reg_1 = vf.mul(vals, svec, _pall_bf16)
     u8r = vf.load_align(pk, [0, 128], dist=pl.LoadDist.UNPK4)
     view_6 = vf.bit_cast(u8r, dtype=pl.DT_FP4E2M1)
     vals = vf.astype(view_6, m8, dtype=pl.DT_BF16, round_mode=pl.VFRoundMode.CAST_RINT, saturate=pl.SaturateMode.OFF)
-    idx = vf.adds(base, 16, _pall_u16)
-    svec = vf.gather(srow, idx)
+    svec = vf.load_align(sc_bf, [0, 144], dist=pl.LoadDist.E2B_B16)
     reg_2 = vf.mul(vals, svec, _pall_bf16)
     u8r = vf.load_align(pk, [0, 192], dist=pl.LoadDist.UNPK4)
     view_8 = vf.bit_cast(u8r, dtype=pl.DT_FP4E2M1)
     vals = vf.astype(view_8, m8, dtype=pl.DT_BF16, round_mode=pl.VFRoundMode.CAST_RINT, saturate=pl.SaturateMode.OFF)
-    idx = vf.adds(base, 24, _pall_u16)
-    svec = vf.gather(srow, idx)
+    svec = vf.load_align(sc_bf, [0, 152], dist=pl.LoadDist.E2B_B16)
     reg_3 = vf.mul(vals, svec, _pall_bf16)
     fan_store_vf(knz, r0, cnt, reg, reg_1, reg_2, reg_3)
 
@@ -4674,6 +4659,10 @@ FD_MIN_TOTAL_TILES = 64
 # for anyway (their imbalance came from row granularity at a scale FD cannot fix
 # better than the whole-row schedule), so only split rows long enough to matter.
 FD_MIN_ROW_TILES = 4
+# 每个切分（一次行切两段）要写/读 2 个 partial（各 FD_HEADS_PER_AIV*512 FP32 = 128KB）
+# 并多一次全设备 MIX 屏障；实测（9589，同输入 A/B，28 block）切行 22.74us vs 整行 19.35us，
+# 即 20 个切分换 4 个 tile 是净亏。按 tile 计的等价代价取 0.5 tile/切分。
+FD_SPLIT_COST_TILES = 0.5
 
 
 def _row_tiles(w_ori, w_cmp, has_cmp):
@@ -4692,7 +4681,22 @@ def _batch_of(cu_q, row):
 
 
 def _get_cube_core_num(device=None):
+    """Cube 核数（host 侧规划用）：缺省读当前设备，不写死具体平台。"""
+    if device is None:
+        device = torch.npu.current_device()
     return int(torch.npu.get_device_properties(device).cube_core_num)
+
+
+def _effective_blocks(blocks):
+    """规划核数：显式值优先，否则取当前设备的 Cube 核数，并夹到 metadata 容量上限。"""
+    if blocks is None:
+        blocks = _get_cube_core_num()
+    blocks = int(blocks)
+    if blocks <= 0:
+        raise ValueError(f"blocks must be positive, got {blocks}")
+    if blocks > AIC_CORE_MAX_NUM:
+        raise ValueError(f"blocks must be <= {AIC_CORE_MAX_NUM}, got {blocks}")
+    return blocks
 
 
 def plan_metadata_uniform(cu_q, len_ori, len_cmp=None, blocks=None):
@@ -4705,7 +4709,7 @@ def plan_metadata_uniform(cu_q, len_ori, len_cmp=None, blocks=None):
     """
     rows = int(cu_q[-1])
     if blocks is None:
-        blocks = rows
+        blocks = min(_effective_blocks(None), max(rows, 1))
     if not 0 < blocks <= AIC_CORE_MAX_NUM:
         raise ValueError(f"blocks must be in 1..{AIC_CORE_MAX_NUM}, got {blocks}")
     if len(cu_q) < 2 or cu_q[0] != 0:
@@ -4749,7 +4753,7 @@ def _uniform_critical(rows, row_tiles, blocks):
     return worst
 
 
-def plan_metadata_fd(cu_q, len_ori, len_cmp=None, has_cmp=True, blocks=28, min_gain=FD_MIN_GAIN):
+def plan_metadata_fd(cu_q, len_ori, len_cmp=None, has_cmp=True, blocks=None, min_gain=FD_MIN_GAIN):
     """Plan the flat ``(row, tile)`` interval schedule with 2-way FD partials.
 
     Returns ``(metadata_int32_1024, block_dim)`` when the critical path shrinks
@@ -4761,6 +4765,7 @@ def plan_metadata_fd(cu_q, len_ori, len_cmp=None, has_cmp=True, blocks=28, min_g
     kernel's ``row_count = m_end - m_start + (s2_end > 0)``.
     """
     rows = int(cu_q[-1])
+    blocks = _effective_blocks(blocks) if rows > 0 else int(blocks or 0)
     if rows <= 0 or blocks <= 0:
         return None
     row_tiles = [_row_tiles(len_ori[r], (len_cmp[r] if has_cmp and len_cmp else 0), has_cmp) for r in range(rows)]
@@ -4794,6 +4799,9 @@ def plan_metadata_fd(cu_q, len_ori, len_cmp=None, has_cmp=True, blocks=28, min_g
         r = row_at(f)
         if rstart[r] < f < rstart[r] + row_tiles[r]:
             splits.append((c, r))
+    # 切分的 partial 写读 + 屏障代价：省下的 tile 数必须盖得住切分数。
+    if (ub_max - fl_max) < FD_SPLIT_COST_TILES * len(splits):
+        return None
     if len(splits) > n_blocks or len(splits) * 2 > 2 * AIC_CORE_MAX_NUM:
         return None
     # A row cut by two consecutive boundaries would need a 3-way merge.
@@ -4840,13 +4848,14 @@ def plan_metadata_fd(cu_q, len_ori, len_cmp=None, has_cmp=True, blocks=28, min_g
     return torch.tensor(md, dtype=torch.int32), n_blocks
 
 
-def plan_metadata(cu_q, len_ori, len_cmp=None, has_cmp=True, blocks=28, min_gain=FD_MIN_GAIN):
+def plan_metadata(cu_q, len_ori, len_cmp=None, has_cmp=True, blocks=None, min_gain=FD_MIN_GAIN):
     """Dispatch: flat FD schedule when it pays, else uniform whole rows.
 
     Returns ``(metadata_int32_1024, block_dim)``. ``len_ori``/``len_cmp`` are
     per-row effective widths (already clamped to K1/K2) and are required for the
     FD cost model.
     """
+    blocks = _effective_blocks(blocks)
     if len_ori is not None:
         fd = plan_metadata_fd(cu_q, len_ori, len_cmp, has_cmp, blocks, min_gain)
         if fd is not None:
@@ -4904,14 +4913,33 @@ def _planned_blocks(metadata):
     return max(1, min(AIC_CORE_MAX_NUM, n))
 
 
+#: metadata 里 FD 计划字（`md[900]`）的 host 侧缓存：``(data_ptr, numel) -> fd_enable``。
+#: 读该字要走一次 D2H（约 130us 的整流通），而 metadata 由本模块 host 入口生成后不再变动，
+#: 因此按缓冲地址缓存一次即可；调用方若原地改 metadata，需要显式传 ``fd_enable``。
+_FD_PLAN_CACHE = {}
+
+
+def _fd_enable_from_metadata(md):
+    if not isinstance(md, torch.Tensor):
+        return 0
+    key = (md.data_ptr(), int(md.numel()))
+    cached = _FD_PLAN_CACHE.get(key)
+    if cached is not None:
+        return cached
+    value = int(md.reshape(-1)[900].item())
+    if len(_FD_PLAN_CACHE) > 64:
+        _FD_PLAN_CACHE.clear()
+    _FD_PLAN_CACHE[key] = value
+    return value
+
+
 def _tiling_key(tensors, fd_enable=None):
     """Compile-time code-path conditions (see ``MqsmlaTilingKey``)."""
     has_cmp = isinstance(tensors.get("cmp_kv"), torch.Tensor)
     has_ori_len = isinstance(tensors.get("ori_topk_length"), torch.Tensor)
     has_cmp_len = has_cmp and isinstance(tensors.get("cmp_topk_length"), torch.Tensor)
     if fd_enable is None:
-        md = tensors.get("metadata")
-        fd_enable = int(md.reshape(-1)[900].item()) if isinstance(md, torch.Tensor) else 0
+        fd_enable = _fd_enable_from_metadata(tensors.get("metadata"))
     return {
         "HAS_ORI_LEN": int(bool(has_ori_len)),
         "HAS_CMP_LEN": int(bool(has_cmp_len)),
@@ -5066,11 +5094,24 @@ def mixed_quant_sparse_flash_mla(
         lse=lse,
     )
     _check_tensors(tensors)
+    # 分核与 launch 一律以当前设备的实际 Cube 核数为准：metadata 规划出来的核数
+    # （host 端）不得超过本机核数，超出说明 metadata 是在别的设备上生成的。
+    device_blocks = _get_cube_core_num()
     if block_dim is None:
         block_dim = _planned_blocks(metadata)
+    block_dim = int(block_dim)
+    if block_dim > device_blocks:
+        raise ValueError(
+            f"block_dim {block_dim} exceeds this device's cube core count {device_blocks}; "
+            f"regenerate metadata with mixed_quant_sparse_flash_mla_metadata on this device"
+        )
     key = _tiling_key(tensors, fd_enable)
-    # FlashDecode split partials workspace (fixed size; used only when FD is on).
-    ws = torch.zeros(MQSMLA_WORKSPACE_BYTES, dtype=torch.uint8, device=q.device)
+    # FlashDecode split partials workspace. 只有 FD 打开时 kernel 才会引用它；FD 关闭时
+    # 相关代码在编译期整段消除，这里给 1 字节占位即可，避免每次调用都分配并清零 9.5MB。
+    if key["FD_ENABLE"]:
+        ws = torch.zeros(MQSMLA_WORKSPACE_BYTES, dtype=torch.uint8, device=q.device)
+    else:
+        ws = torch.empty(1, dtype=torch.uint8, device=q.device)
     args = [tensors[n] for n in ARG_ORDER] + [ws]
-    mixed_quant_sparse_flash_mla_kernel[None, int(block_dim), key](*args, *_runtime_args(tensors, scale))
+    mixed_quant_sparse_flash_mla_kernel[None, block_dim, key](*args, *_runtime_args(tensors, scale))
     return {"out": out, "lse": lse}
