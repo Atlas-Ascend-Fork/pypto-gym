@@ -70,7 +70,7 @@ python .opencode/skills/pypto-pro-kernel/scripts/check.py links
 
 列表应包含主入口 `pypto-pro-op-orchestrator`，以及 `pypto-pro-op-` 前缀的 `planner`、`coder`、`debugger`、`verifier`、`optimizer`、`tool` 六个子代理。这些角色可按需调用；开启多 agent 模式后按协作说明派工。`links` 只检查文档链接，不代表数值或性能验证通过。
 
-安装器复制完整 skill，包括参考资料、工具和样例，并将仓根 `LICENSE` 复制到已安装 skill 的 `LICENSE`；请勿只复制 `SKILL.md`。JSONC 注释、格式和已有选项保留。若同时有 `opencode.json` 和 `opencode.jsonc`，先合并所需设置，备份移走其中一个。已有其他默认 agent 时保留原选择，用下文的 `--agent` 启动本入口。
+安装器复制四个完整 skill（`pypto-pro-kernel`、`pypto-benchmark-fracture-aggregator`、`pypto-fracture-point-detector`、`pypto-session-dfx-report`），包括参考资料、工具和样例，并将仓根 `LICENSE` 复制到每个已安装 skill 的 `LICENSE`；请勿只复制 `SKILL.md`。JSONC 注释、格式和已有选项保留。若同时有 `opencode.json` 和 `opencode.jsonc`，先合并所需设置，备份移走其中一个。已有其他默认 agent 时保留原选择，用下文的 `--agent` 启动本入口。
 
 ## 二、快速上手
 

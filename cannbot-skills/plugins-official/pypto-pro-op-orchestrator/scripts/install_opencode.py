@@ -7,7 +7,7 @@
 # INCLUDING BUT NOT LIMITED TO NON-INFRINGEMENT, MERCHANTABILITY, OR FITNESS FOR A PARTICULAR PURPOSE.
 # See LICENSE in the root of the software repository for the full text of the License.
 
-"""Install pypto-pro-kernel and its entry point for the selected tool.
+"""Install the PyPTO-Pro skills and their entry point for the selected tool.
 
 Uses the existing Python environment; does not install PyPTO-Pro/CANN or run
 network or device commands.
@@ -67,7 +67,12 @@ def is_link(path):
 
 ORCHESTRATOR = filesystem_path(Path(__file__).resolve().parents[1])
 PLUGIN = "pypto-pro-op-orchestrator"
-SKILL = "pypto-pro-kernel"
+SKILLS = (
+    "pypto-pro-kernel",
+    "pypto-benchmark-fracture-aggregator",
+    "pypto-fracture-point-detector",
+    "pypto-session-dfx-report",
+)
 AGENTS = tuple(
     f"pypto-pro-op-{role}"
     for role in ("planner", "coder", "debugger", "verifier", "optimizer", "tool")
@@ -596,14 +601,19 @@ def install(project, *, tool="opencode", global_level=False):
     root_target = (config if global_level else project) / root_name
     _reject_legacy_installation(config, root_target, previous, tool)
     retire = set()
-    source = ORCHESTRATOR.parents[1] / "ops" / SKILL
-    if not (source / "SKILL.md").is_file():
-        raise InstallError(f"missing required Skill: {source / 'SKILL.md'}")
-    desired = _resources(source, f"skills/{SKILL}")
+    sources = {}
+    desired = {}
+    for skill in SKILLS:
+        source = ORCHESTRATOR.parents[1] / "ops" / skill
+        if not (source / "SKILL.md").is_file():
+            raise InstallError(f"missing required Skill: {source / 'SKILL.md'}")
+        sources[skill] = source
+        desired.update(_resources(source, f"skills/{skill}"))
     license_path = ORCHESTRATOR.parents[2] / "LICENSE"
     if not license_path.is_file():
         raise InstallError(f"missing repository license: {license_path}")
-    desired[f"skills/{SKILL}/LICENSE"] = license_path.read_bytes()
+    for skill in SKILLS:
+        desired[f"skills/{skill}/LICENSE"] = license_path.read_bytes()
     primary = render((ORCHESTRATOR / "AGENTS.md").read_text(encoding="utf-8"), config)
     desired[f"agents/{PLUGIN}.md"] = primary.encode("utf-8")
     for name in AGENTS:
@@ -681,12 +691,14 @@ def install(project, *, tool="opencode", global_level=False):
         for name, content in desired.items():
             target = config / name
             mode_source = None
-            if name.startswith(f"skills/{SKILL}/"):
-                mode_source = (
-                    license_path
-                    if name == f"skills/{SKILL}/LICENSE"
-                    else source / Path(name).relative_to(f"skills/{SKILL}")
-                )
+            if name.startswith("skills/"):
+                skill, _, relative = name.removeprefix("skills/").partition("/")
+                if skill in sources and relative:
+                    mode_source = (
+                        license_path
+                        if relative == "LICENSE"
+                        else sources[skill] / relative
+                    )
             if (
                 not is_link(target)
                 and target.is_file()
@@ -711,7 +723,7 @@ def install(project, *, tool="opencode", global_level=False):
             "level": "global" if global_level else "project",
             "tool": tool,
             "config_root": display_path(config),
-            "installed_skills": [SKILL],
+            "installed_skills": list(SKILLS),
             "installed_agents": [PLUGIN, *AGENTS],
             "install_time": timestamp,
             "managed_prompt_sha256": digest(_managed_prompt(primary).encode("utf-8"))
@@ -757,7 +769,7 @@ def install(project, *, tool="opencode", global_level=False):
                 pass
     return {
         "config_root": display_path(config),
-        "skill": SKILL,
+        "skills": list(SKILLS),
         "primary_agent": PLUGIN,
         "subagents": list(AGENTS),
         "backup": display_path(backup) if backed_up else None,

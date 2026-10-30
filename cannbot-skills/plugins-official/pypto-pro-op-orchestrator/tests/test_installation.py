@@ -34,6 +34,21 @@ def write(path, content):
     path.write_text(content, encoding="utf-8")
 
 
+def expected_skill_files() -> dict:
+    """All files the installer must place under skills/ for the bundled skills."""
+    license_content = (PLUGIN_ROOT.parents[2] / "LICENSE").read_bytes()
+    ignored = {"__pycache__", ".pytest_cache", "node_modules", ".DS_Store"}
+    files = {}
+    for skill in installer.SKILLS:
+        source = PLUGIN_ROOT.parents[1] / "ops" / skill
+        for path in source.rglob("*"):
+            relative = path.relative_to(source)
+            if path.is_file() and not ignored.intersection(relative.parts):
+                files[f"skills/{skill}/{relative.as_posix()}"] = path.read_bytes()
+        files[f"skills/{skill}/LICENSE"] = license_content
+    return files
+
+
 def make_junction(path, target):
     command = shutil.which("cmd.exe")
     if command is None:
@@ -120,6 +135,41 @@ class ActualResourceTest(unittest.TestCase):
             self.assertNotIn("//?/", primary)
             self.assertNotIn("//?/", result["config_root"])
 
+    def assert_skill_bundle(self, config: Path, files: dict) -> None:
+        installed = {
+            path.relative_to(config).as_posix()
+            for path in (config / "skills").rglob("*")
+            if path.is_file()
+        }
+        self.assertEqual(installed, set(files))
+        for relative, expected in files.items():
+            self.assertEqual((config / relative).read_bytes(), expected, relative)
+        self.assertEqual(
+            {path.name for path in (config / "skills").iterdir()},
+            set(installer.SKILLS),
+        )
+        self.assertEqual(
+            {path.stem for path in (config / "agents").iterdir()},
+            {installer.PLUGIN, *installer.AGENTS},
+        )
+        self.assertEqual(
+            installer.read_json(config / "opencode.json")["default_agent"],
+            installer.PLUGIN,
+        )
+        for agent in (config / "agents").glob("*.md"):
+            self.assertNotIn(
+                "$CANNBOT_CONFIG_ROOT", agent.read_text(encoding="utf-8")
+            )
+        for name in installer.AGENTS:
+            expected = installer.render(
+                (PLUGIN_ROOT / "agents" / f"{name}.md").read_text(encoding="utf-8"),
+                config,
+            )
+            self.assertEqual(
+                (config / "agents" / f"{name}.md").read_bytes(),
+                expected.encode("utf-8"),
+            )
+
     def test_complete_skill_primary_discovery_and_idempotence(self):
         with tempfile.TemporaryDirectory(
             dir=installer.filesystem_path(tempfile.gettempdir())
@@ -127,42 +177,7 @@ class ActualResourceTest(unittest.TestCase):
             project = Path(temporary).resolve() / "workspace with spaces"
             result = installer.install(project)
             config = project / ".opencode"
-            source = PLUGIN_ROOT.parents[1] / "ops/pypto-pro-kernel"
-            ignored = {"__pycache__", ".pytest_cache", "node_modules", ".DS_Store"}
-            files = {
-                "skills/pypto-pro-kernel/"
-                + path.relative_to(source).as_posix(): path.read_bytes()
-                for path in source.rglob("*")
-                if path.is_file()
-                and not ignored.intersection(path.relative_to(source).parts)
-            }
-            files["skills/pypto-pro-kernel/LICENSE"] = (
-                PLUGIN_ROOT.parents[2] / "LICENSE"
-            ).read_bytes()
-            installed = {
-                "skills/pypto-pro-kernel/"
-                + path.relative_to(config / "skills/pypto-pro-kernel").as_posix()
-                for path in (config / "skills/pypto-pro-kernel").rglob("*")
-                if path.is_file()
-            }
-            self.assertEqual(installed, set(files))
-            for relative, expected in files.items():
-                self.assertEqual((config / relative).read_bytes(), expected, relative)
-            self.assertEqual(
-                {path.name for path in (config / "skills").iterdir()}, {installer.SKILL}
-            )
-            self.assertEqual(
-                {path.stem for path in (config / "agents").iterdir()},
-                {installer.PLUGIN, *installer.AGENTS},
-            )
-            self.assertEqual(
-                installer.read_json(config / "opencode.json")["default_agent"],
-                installer.PLUGIN,
-            )
-            for agent in (config / "agents").glob("*.md"):
-                self.assertNotIn(
-                    "$CANNBOT_CONFIG_ROOT", agent.read_text(encoding="utf-8")
-                )
+            self.assert_skill_bundle(config, expected_skill_files())
             for obsolete in (
                 "hooks",
                 "plugins",
@@ -174,22 +189,13 @@ class ActualResourceTest(unittest.TestCase):
             before = (project / "AGENTS.md").read_bytes()
             self.assertIsNone(installer.install(project)["backup"])
             self.assertEqual((project / "AGENTS.md").read_bytes(), before)
-            self.assertEqual(result["skill"], installer.SKILL)
+            self.assertEqual(result["skills"], list(installer.SKILLS))
             receipt = installer.read_json(config / installer.RECEIPT)
-            self.assertEqual(receipt["installed_skills"], [installer.SKILL])
+            self.assertEqual(receipt["installed_skills"], list(installer.SKILLS))
             self.assertEqual(
                 receipt["installed_agents"], [installer.PLUGIN, *installer.AGENTS]
             )
             self.assertEqual(result["subagents"], list(installer.AGENTS))
-            for name in installer.AGENTS:
-                expected = installer.render(
-                    (PLUGIN_ROOT / "agents" / f"{name}.md").read_text(encoding="utf-8"),
-                    config,
-                )
-                self.assertEqual(
-                    (config / "agents" / f"{name}.md").read_bytes(),
-                    expected.encode("utf-8"),
-                )
 
 
 class InstallationTest(unittest.TestCase):
@@ -202,7 +208,11 @@ class InstallationTest(unittest.TestCase):
         )
         self.project = self.root / "workspace"
         self.config = self.project / ".opencode"
-        self.source = self.plugin.parents[1] / "ops" / installer.SKILL
+        self.sources = {
+            skill: self.plugin.parents[1] / "ops" / skill
+            for skill in installer.SKILLS
+        }
+        self.source = self.sources[installer.SKILLS[0]]
         write(
             self.plugin / "AGENTS.md",
             "---\nname: pypto-pro-op-orchestrator\nmode: primary\n---\n"
@@ -215,13 +225,14 @@ class InstallationTest(unittest.TestCase):
                 "Read $CANNBOT_CONFIG_ROOT/skills/pypto-pro-kernel/SKILL.md\n",
             )
         write(self.plugin.parents[2] / "LICENSE", "Repository CANN license\n")
-        for relative in (
-            "SKILL.md",
-            "examples/add.py",
-            "references/index.md",
-            "scripts/check.py",
-        ):
-            write(self.source / relative, f"Bundled resource: {relative}\n")
+        for source in self.sources.values():
+            for relative in (
+                "SKILL.md",
+                "examples/add.py",
+                "references/index.md",
+                "scripts/check.py",
+            ):
+                write(source / relative, f"Bundled resource: {relative}\n")
         write(
             self.plugin / "references/multi-agent.md", "Explicit multi-agent opt-in.\n"
         )
@@ -562,6 +573,41 @@ class InstallationTest(unittest.TestCase):
         self.assertNotIn("$CANNBOT_CONFIG_ROOT", primary)
         self.assertIn((self.plugin / ".opencode").as_posix(), primary)
 
+    def assert_tool_adapters(self, tool: str, directory: str) -> None:
+        project = self.root / f"project-{tool}"
+        result = installer.install(project, tool=tool)
+        for skill in installer.SKILLS:
+            self.assertTrue(
+                (project / directory / f"skills/{skill}/SKILL.md").is_file()
+            )
+        self.assertEqual(result["subagents"], list(installer.AGENTS))
+        prompt = "CLAUDE.md" if tool == "claude" else "AGENTS.md"
+        self.assertTrue((project / prompt).is_file())
+        global_config = self.root / f"global-{tool}"
+        result = installer.install(global_config, tool=tool, global_level=True)
+        for skill in installer.SKILLS:
+            self.assertTrue((global_config / f"skills/{skill}/SKILL.md").is_file())
+        self.assertEqual(result["subagents"], list(installer.AGENTS))
+        self.assert_installed_agents(project / directory, global_config)
+        self.assertTrue((global_config / prompt).is_file())
+
+    def assert_installed_agents(self, project_config: Path, global_config: Path) -> None:
+        for config in (project_config, global_config):
+            receipt = installer.read_json(config / installer.RECEIPT)
+            self.assertEqual(
+                receipt["installed_agents"], [installer.PLUGIN, *installer.AGENTS]
+            )
+            for name in installer.AGENTS:
+                relative = f"agents/{name}.md"
+                expected_agent = installer.render(
+                    (self.plugin / relative).read_text(), config
+                ).encode("utf-8")
+                self.assertEqual((config / relative).read_bytes(), expected_agent)
+                self.assertEqual(
+                    receipt["owned_files"][relative],
+                    installer.digest(expected_agent),
+                )
+
     def test_all_project_and_explicit_global_tool_adapters(self):
         expected = {
             "opencode": ".opencode",
@@ -574,43 +620,7 @@ class InstallationTest(unittest.TestCase):
         with mock.patch.object(Path, "home", return_value=self.root / "home"):
             for tool, directory in expected.items():
                 with self.subTest(tool=tool):
-                    project = self.root / f"project-{tool}"
-                    result = installer.install(project, tool=tool)
-                    self.assertTrue(
-                        (
-                            project / directory / "skills/pypto-pro-kernel/SKILL.md"
-                        ).is_file()
-                    )
-                    self.assertEqual(result["subagents"], list(installer.AGENTS))
-                    prompt = "CLAUDE.md" if tool == "claude" else "AGENTS.md"
-                    self.assertTrue((project / prompt).is_file())
-                    global_config = self.root / f"global-{tool}"
-                    result = installer.install(
-                        global_config, tool=tool, global_level=True
-                    )
-                    self.assertTrue(
-                        (global_config / "skills/pypto-pro-kernel/SKILL.md").is_file()
-                    )
-                    self.assertEqual(result["subagents"], list(installer.AGENTS))
-                    for config in (project / directory, global_config):
-                        receipt = installer.read_json(config / installer.RECEIPT)
-                        self.assertEqual(
-                            receipt["installed_agents"],
-                            [installer.PLUGIN, *installer.AGENTS],
-                        )
-                        for name in installer.AGENTS:
-                            relative = f"agents/{name}.md"
-                            expected_agent = installer.render(
-                                (self.plugin / relative).read_text(), config
-                            ).encode("utf-8")
-                            self.assertEqual(
-                                (config / relative).read_bytes(), expected_agent
-                            )
-                            self.assertEqual(
-                                receipt["owned_files"][relative],
-                                installer.digest(expected_agent),
-                            )
-                    self.assertTrue((global_config / prompt).is_file())
+                    self.assert_tool_adapters(tool, directory)
 
     def test_existing_opencode_options_and_explicit_primary_are_preserved(self):
         write(

@@ -9,7 +9,7 @@
 
 ## 📢 项目概述
 
-**CANNBot Skills — PyPTO-Gym** 是面向 PyPTO 与 PyPTO-Pro Tile 算子开发、大模型适配和模型治理的 CANNBot Agent Skills 模块，提供 34 个顶层技能与 4 个开发路径插件。
+**CANNBot Skills — PyPTO-Gym** 是面向 PyPTO 与 PyPTO-Pro Tile 算子开发、大模型适配和模型治理的 CANNBot Agent Skills 模块，提供 37 个顶层技能与 4 个开发路径插件。
 
 **面向用户**：基于 PyPTO 编程框架的昇腾 NPU 算子开发者、模型适配工程师。
 
@@ -67,7 +67,7 @@ python scripts/check.py
 
 ### 技能清单
 
-**算子开发**（ops/，共 31 个顶层技能）
+**算子开发**（ops/，共 34 个顶层技能）
 
 | 类别 | 技能 | 说明 |
 |------|------|------|
@@ -81,7 +81,9 @@ python scripts/check.py
 | 性能调优 | `pypto-op-perf-tune` | 算子性能采集、分析与自动调优 |
 | 性能调优 | `pypto-op-perf-panko-manual` | PANKO 搜索式自动调优的 world model + evaluator 契约（由 `pypto-op-auto-tuner-panko` 读取） |
 | 监控与调试 | `pypto-op-monitor`、`pypto-general-debug` | 任务进度监控与通用问题诊断 |
-| **Pro 专属** | `pypto-pro-intent-understand`、`pypto-pro-material-explore`、`pypto-pro-op-plan`、`pypto-pro-op-design`、`pypto-pro-op-develop`、`pypto-pro-op-perf-tune`、`pypto-pro-golden-generate`、`pypto-pro-environment-check`、`pypto-pro-precision-debug` | PyPTO-Pro 开发与精度诊断 |
+| 断裂点分析 | `pypto-benchmark-fracture-aggregator`、`pypto-fracture-point-detector` | Session 断裂点批量聚合、检测、复现取证与 Issue 文档产出 |
+| 报告与可视化 | `pypto-session-dfx-report` | Session DFX 报告（端到端耗时、token 消耗、执行轨迹） |
+| **Pro 专属** | `pypto-pro-intent-understand`、`pypto-pro-material-explore`、`pypto-pro-op-plan`、`pypto-pro-op-design`、`pypto-pro-op-develop`、`pypto-pro-op-perf-tune`、`pypto-pro-golden-generate`、`pypto-pro-environment-check`、`pypto-pro-precision-debug`、`pypto-pro-cann-delivery`、`pypto-pro-docs-search` | PyPTO-Pro 开发、精度诊断、CANN 交付与文档检索 |
 | **Pro 独立技能（实验）** | [pypto-pro-kernel](ops/pypto-pro-kernel/SKILL.md) | 原生 kernel 开发、验证、调试与优化，内含参考资料、检查工具和样例 |
 
 **模型适配**（model/，共 3 个）
