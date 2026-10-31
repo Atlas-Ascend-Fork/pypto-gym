@@ -58,7 +58,8 @@ def mixed_quant_sparse_flash_mla_kernel(
 - **第 15 个参数 `fd_partial_ws`** 是 wrapper 分配、**不属于公开接口**的 FlashDecode partial
   工作区（`uint8[MQSMLA_WORKSPACE_BYTES]`，`(72·64·512 + 2·72·64) × 4` B）。FD 打开时 kernel 在
   其中切出 `fd_o [72,64,512]`(FP32, +0)、`fd_m [72,1,64]`(+9437184)、`fd_l [72,1,64]`(+9455616)
-  三块；FD 关闭时整段不编译。
+  三块；FD 关闭时整段不编译。归约时远端半边的载入缓冲 `fd_tail [32,128]`(FP32) 按地址别名到
+  主循环专用的 staging 区（`46336`，主循环结束后已死），不额外占 UB。
 - **10 个运行时标量**（顺序 = 签名尾部）：`scale_arg`（FP32，softmax scale）、
   `ori_kv_stride0` / `cmp_kv_stride0`（INT64，KV 池页距）、`b_num`（= `B+1`）、`k_ori` /
   `k_cmp`（两侧 TopK）、`bs_ori` / `bs_cmp`（页 slot 数）、`bt_ori` / `bt_cmp`（块表宽度）。
@@ -73,8 +74,11 @@ def mixed_quant_sparse_flash_mla_kernel(
   `s2_start=md[fa+3]`(=0)、`bn2_end=md[fa+4]`、`m_end=md[fa+5]`、`s2_end=md[fa+6]`(=0)。
 - 行区间：`m_global_first = cu_q[bn2_start] + m_start`；行数
   `row_count = m_end - m_start (+1 if s2_end>0)`；uniform 下 s2_end=0 → 行数 = m_end-m_start。
-- `fd_used_vec_num = md[900]`（host 规划恒 0）：非 0 属合同违约，kernel 直接
-  断言式跳过 FD（本版本不实现 FD 归约路径）。
+- `fd_used_vec_num = md[900]`：2-way split 数（host 规划给出，短行/均衡时可为 0）。非 0 时
+  进入 FD 收尾：本核的归约槽位 `324 + (2·block_idx + sub)·8`，由 `enable` / `bn2` / `m` /
+  `workspace` / `m_start` / `m_num` 指定归约行与 32 个 head。归约核固定是产出 tail 半边
+  （FA word 8，在本核**最后一行**结束）的那个核，因此它的 O chunk 仍在片上，只需从 GM 读回
+  远端那一半。
 - `enable==0` 的核无行任务：直接返回（无跨核事件，不存在全局 barrier）。
 
 ## 3. 核心数据流（每行每 KV tile）
@@ -178,7 +182,7 @@ AIV 侧用 `V` / `MTE3`）。16 个事件 id 使用 0–9，10–15 预留。
 - 每条流每 tile 恰好 1 次 set / 1 次 wait。id `7` 在源码里有 4 处 `wait`，但落在
   `mod_29` × `actnm <= 16` 的**互斥分支**中，每 tile 只执行一处。
 - 不占事件 id 的同步：AIV 本地的 `pl.system.bar_all()`（store / 写回排序，`PIPE_ALL`），以及
-  FD 收尾的 `pl.system.sync_all(core_type=MIX)`。
+  FD 收尾的 `pl.system.sync_all(core_type=MIX)`（发布所有 partial；归约核只读远端那一半）。
 - 成对与到达规则沿用知识库约束 `sync-stitch.md`
   （`cannbot-skills/ops/pypto-pro-op-kb/constraints/`）。
 

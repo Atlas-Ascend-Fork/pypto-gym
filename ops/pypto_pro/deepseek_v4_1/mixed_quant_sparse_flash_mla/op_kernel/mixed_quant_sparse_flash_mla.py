@@ -1575,6 +1575,7 @@ def dequant_ori(
     tail16,
     sub0,
     dq,
+    pt,
 ):
     """ORI KV dequant: gather one 16-row group, dequantize FP8 -> BF16 and insert into L1."""
     if pl.min(1, (tail16 + (sub0 * pl.max((1 - g), 0)))) == 0:
@@ -1598,40 +1599,9 @@ def dequant_ori(
     ub_knz0 = dq.ub_knz0
     ub_knz1 = dq.ub_knz1
     ub_pt = dq.ub_pt
-    view_101 = dq.view_101
-    view_102 = dq.view_102
-    view_105 = dq.view_105
-    view_106 = dq.view_106
-    view_109 = dq.view_109
-    view_110 = dq.view_110
-    view_113 = dq.view_113
-    view_114 = dq.view_114
+    ub_pt = pt
     view_116 = dq.view_116
     view_117 = dq.view_117
-    view_53 = dq.view_53
-    view_54 = dq.view_54
-    view_57 = dq.view_57
-    view_58 = dq.view_58
-    view_61 = dq.view_61
-    view_62 = dq.view_62
-    view_65 = dq.view_65
-    view_66 = dq.view_66
-    view_69 = dq.view_69
-    view_70 = dq.view_70
-    view_73 = dq.view_73
-    view_74 = dq.view_74
-    view_77 = dq.view_77
-    view_78 = dq.view_78
-    view_81 = dq.view_81
-    view_82 = dq.view_82
-    view_85 = dq.view_85
-    view_86 = dq.view_86
-    view_89 = dq.view_89
-    view_90 = dq.view_90
-    view_93 = dq.view_93
-    view_94 = dq.view_94
-    view_97 = dq.view_97
-    view_98 = dq.view_98
     pair_53 = dq.pair_53
     pair_57 = dq.pair_57
     pair_61 = dq.pair_61
@@ -1777,6 +1747,7 @@ def dequant_cmp(
     tail16,
     sub0,
     dqc,
+    pt,
 ):
     """CMP KV dequant: gather one 16-row group, dequantize FP8 -> BF16 and insert into L1."""
     if pl.min(1, (tail16 + (sub0 * pl.max((1 - g_1), 0)))) == 0:
@@ -1798,38 +1769,7 @@ def dequant_cmp(
     ub_knz0 = dqc.ub_knz0
     ub_knz1 = dqc.ub_knz1
     ub_pt = dqc.ub_pt
-    view_143 = dqc.view_143
-    view_144 = dqc.view_144
-    view_147 = dqc.view_147
-    view_148 = dqc.view_148
-    view_151 = dqc.view_151
-    view_152 = dqc.view_152
-    view_155 = dqc.view_155
-    view_156 = dqc.view_156
-    view_159 = dqc.view_159
-    view_160 = dqc.view_160
-    view_163 = dqc.view_163
-    view_164 = dqc.view_164
-    view_167 = dqc.view_167
-    view_168 = dqc.view_168
-    view_171 = dqc.view_171
-    view_172 = dqc.view_172
-    view_175 = dqc.view_175
-    view_176 = dqc.view_176
-    view_179 = dqc.view_179
-    view_180 = dqc.view_180
-    view_183 = dqc.view_183
-    view_184 = dqc.view_184
-    view_187 = dqc.view_187
-    view_188 = dqc.view_188
-    view_191 = dqc.view_191
-    view_192 = dqc.view_192
-    view_195 = dqc.view_195
-    view_196 = dqc.view_196
-    view_199 = dqc.view_199
-    view_200 = dqc.view_200
-    view_203 = dqc.view_203
-    view_204 = dqc.view_204
+    ub_pt = pt
     view_206 = dqc.view_206
     view_207 = dqc.view_207
     pair_143 = dqc.pair_143
@@ -2361,13 +2301,31 @@ def mixed_quant_sparse_flash_mla_kernel(
             depth=1,
         )
         ub_tabs = ub_tabs_native[0]
-        ub_pt_native = pl.make_tile_group(
-            type=pl.TileType(shape=[1, 576], dtype=pl.DT_INT32, target_memory=pl.MemorySpace.Vec),
-            addrs=[26624],
-            mutex_ids=[5],
+        ub_tabs_b_native = pl.make_tile_group(
+            type=pl.TileType(shape=[1, 2304], dtype=pl.DT_INT32, target_memory=pl.MemorySpace.Vec),
+            addrs=[238592],
+            mutex_ids=[4],
             depth=1,
         )
+        ub_tabs_b = ub_tabs_b_native[0]
+        # Two pair-table banks with distinct mutex ids: the build for tile t+2 writes
+        # bank (t+2)&1 while the dequant of tile t reads bank t&1, so the tile-level
+        # wait no longer serialises the staging MTE2 behind the neighbouring build.
+        ub_pt_native = pl.make_tile_group(
+            type=pl.TileType(shape=[1, 576], dtype=pl.DT_INT32, target_memory=pl.MemorySpace.Vec),
+            addrs=[26624, 247808],
+            mutex_ids=[5, 30],
+            depth=2,
+        )
         ub_pt = ub_pt_native[0]
+        ub_pt_b = ub_pt_native[1]
+        fan_grp_native = pl.make_tile_group(
+            type=pl.TileType(shape=[1, 64], dtype=pl.DT_INT32, target_memory=pl.MemorySpace.Vec),
+            addrs=[28672, 249856],
+            mutex_ids=[5, 30],
+            depth=2,
+        )
+        fan_grp = fan_grp_native
         ub_knz0_native = pl.make_tile_group(
             type=pl.TileType(shape=[17, 512], dtype=pl.DT_BF16, target_memory=pl.MemorySpace.Vec),
             addrs=[28928],
@@ -2507,6 +2465,13 @@ def mixed_quant_sparse_flash_mla_kernel(
             depth=1,
         )
         view_28 = view_28_native[0]
+        view_28b_native = pl.make_tile_group(
+            type=pl.TileType(shape=[1, 128], dtype=pl.DT_INT32, target_memory=pl.MemorySpace.Vec),
+            addrs=[238592],
+            mutex_ids=[4],
+            depth=1,
+        )
+        view_28b = view_28b_native[0]
         view_29_native = pl.make_tile_group(
             type=pl.TileType(shape=[1, 1024], dtype=pl.DT_INT32, target_memory=pl.MemorySpace.Vec),
             addrs=[18432],
@@ -2514,13 +2479,6 @@ def mixed_quant_sparse_flash_mla_kernel(
             depth=1,
         )
         view_29 = view_29_native[0]
-        view_30_native = pl.make_tile_group(
-            type=pl.TileType(shape=[1, 64], dtype=pl.DT_INT32, target_memory=pl.MemorySpace.Vec),
-            addrs=[28672],
-            mutex_ids=[5],
-            depth=1,
-        )
-        view_30 = view_30_native[0]
         view_33_native = pl.make_tile_group(
             type=pl.TileType(shape=[1, 128], dtype=pl.DT_INT32, target_memory=pl.MemorySpace.Vec),
             addrs=[17408],
@@ -2528,6 +2486,13 @@ def mixed_quant_sparse_flash_mla_kernel(
             depth=1,
         )
         view_33 = view_33_native[0]
+        view_33b_native = pl.make_tile_group(
+            type=pl.TileType(shape=[1, 128], dtype=pl.DT_INT32, target_memory=pl.MemorySpace.Vec),
+            addrs=[238592],
+            mutex_ids=[4],
+            depth=1,
+        )
+        view_33b = view_33b_native[0]
         view_34_native = pl.make_tile_group(
             type=pl.TileType(shape=[1, 1024], dtype=pl.DT_INT32, target_memory=pl.MemorySpace.Vec),
             addrs=[22528],
@@ -2535,13 +2500,6 @@ def mixed_quant_sparse_flash_mla_kernel(
             depth=1,
         )
         view_34 = view_34_native[0]
-        view_35_native = pl.make_tile_group(
-            type=pl.TileType(shape=[1, 64], dtype=pl.DT_INT32, target_memory=pl.MemorySpace.Vec),
-            addrs=[28672],
-            mutex_ids=[5],
-            depth=1,
-        )
-        view_35 = view_35_native[0]
         view_36_native = pl.make_tile_group(
             type=pl.TileType(shape=[1, 64], dtype=pl.DT_FP32, target_memory=pl.MemorySpace.Vec),
             addrs=[219648],
@@ -2633,230 +2591,6 @@ def mixed_quant_sparse_flash_mla_kernel(
             depth=1,
         )
         view_50 = view_50_native[0]
-        view_53_native = pl.make_tile_group(
-            type=pl.TileType(shape=[1, 544], dtype=pl.DT_UINT8, target_memory=pl.MemorySpace.Vec),
-            addrs=[0],
-            mutex_ids=[0],
-            depth=1,
-        )
-        view_53 = view_53_native[0]
-        view_54_native = pl.make_tile_group(
-            type=pl.TileType(shape=[1, 544], dtype=pl.DT_UINT8, target_memory=pl.MemorySpace.Vec),
-            addrs=[544],
-            mutex_ids=[0],
-            depth=1,
-        )
-        view_54 = view_54_native[0]
-        view_57_native = pl.make_tile_group(
-            type=pl.TileType(shape=[1, 544], dtype=pl.DT_UINT8, target_memory=pl.MemorySpace.Vec),
-            addrs=[1088],
-            mutex_ids=[0],
-            depth=1,
-        )
-        view_57 = view_57_native[0]
-        view_58_native = pl.make_tile_group(
-            type=pl.TileType(shape=[1, 544], dtype=pl.DT_UINT8, target_memory=pl.MemorySpace.Vec),
-            addrs=[1632],
-            mutex_ids=[0],
-            depth=1,
-        )
-        view_58 = view_58_native[0]
-        view_61_native = pl.make_tile_group(
-            type=pl.TileType(shape=[1, 544], dtype=pl.DT_UINT8, target_memory=pl.MemorySpace.Vec),
-            addrs=[2176],
-            mutex_ids=[0],
-            depth=1,
-        )
-        view_61 = view_61_native[0]
-        view_62_native = pl.make_tile_group(
-            type=pl.TileType(shape=[1, 544], dtype=pl.DT_UINT8, target_memory=pl.MemorySpace.Vec),
-            addrs=[2720],
-            mutex_ids=[0],
-            depth=1,
-        )
-        view_62 = view_62_native[0]
-        view_65_native = pl.make_tile_group(
-            type=pl.TileType(shape=[1, 544], dtype=pl.DT_UINT8, target_memory=pl.MemorySpace.Vec),
-            addrs=[3264],
-            mutex_ids=[0],
-            depth=1,
-        )
-        view_65 = view_65_native[0]
-        view_66_native = pl.make_tile_group(
-            type=pl.TileType(shape=[1, 544], dtype=pl.DT_UINT8, target_memory=pl.MemorySpace.Vec),
-            addrs=[3808],
-            mutex_ids=[0],
-            depth=1,
-        )
-        view_66 = view_66_native[0]
-        view_69_native = pl.make_tile_group(
-            type=pl.TileType(shape=[1, 544], dtype=pl.DT_UINT8, target_memory=pl.MemorySpace.Vec),
-            addrs=[8704],
-            mutex_ids=[2],
-            depth=1,
-        )
-        view_69 = view_69_native[0]
-        view_70_native = pl.make_tile_group(
-            type=pl.TileType(shape=[1, 544], dtype=pl.DT_UINT8, target_memory=pl.MemorySpace.Vec),
-            addrs=[9248],
-            mutex_ids=[2],
-            depth=1,
-        )
-        view_70 = view_70_native[0]
-        view_73_native = pl.make_tile_group(
-            type=pl.TileType(shape=[1, 544], dtype=pl.DT_UINT8, target_memory=pl.MemorySpace.Vec),
-            addrs=[9792],
-            mutex_ids=[2],
-            depth=1,
-        )
-        view_73 = view_73_native[0]
-        view_74_native = pl.make_tile_group(
-            type=pl.TileType(shape=[1, 544], dtype=pl.DT_UINT8, target_memory=pl.MemorySpace.Vec),
-            addrs=[10336],
-            mutex_ids=[2],
-            depth=1,
-        )
-        view_74 = view_74_native[0]
-        view_77_native = pl.make_tile_group(
-            type=pl.TileType(shape=[1, 544], dtype=pl.DT_UINT8, target_memory=pl.MemorySpace.Vec),
-            addrs=[10880],
-            mutex_ids=[2],
-            depth=1,
-        )
-        view_77 = view_77_native[0]
-        view_78_native = pl.make_tile_group(
-            type=pl.TileType(shape=[1, 544], dtype=pl.DT_UINT8, target_memory=pl.MemorySpace.Vec),
-            addrs=[11424],
-            mutex_ids=[2],
-            depth=1,
-        )
-        view_78 = view_78_native[0]
-        view_81_native = pl.make_tile_group(
-            type=pl.TileType(shape=[1, 544], dtype=pl.DT_UINT8, target_memory=pl.MemorySpace.Vec),
-            addrs=[11968],
-            mutex_ids=[2],
-            depth=1,
-        )
-        view_81 = view_81_native[0]
-        view_82_native = pl.make_tile_group(
-            type=pl.TileType(shape=[1, 544], dtype=pl.DT_UINT8, target_memory=pl.MemorySpace.Vec),
-            addrs=[12512],
-            mutex_ids=[2],
-            depth=1,
-        )
-        view_82 = view_82_native[0]
-        view_85_native = pl.make_tile_group(
-            type=pl.TileType(shape=[1, 544], dtype=pl.DT_UINT8, target_memory=pl.MemorySpace.Vec),
-            addrs=[4352],
-            mutex_ids=[1],
-            depth=1,
-        )
-        view_85 = view_85_native[0]
-        view_86_native = pl.make_tile_group(
-            type=pl.TileType(shape=[1, 544], dtype=pl.DT_UINT8, target_memory=pl.MemorySpace.Vec),
-            addrs=[4896],
-            mutex_ids=[1],
-            depth=1,
-        )
-        view_86 = view_86_native[0]
-        view_89_native = pl.make_tile_group(
-            type=pl.TileType(shape=[1, 544], dtype=pl.DT_UINT8, target_memory=pl.MemorySpace.Vec),
-            addrs=[5440],
-            mutex_ids=[1],
-            depth=1,
-        )
-        view_89 = view_89_native[0]
-        view_90_native = pl.make_tile_group(
-            type=pl.TileType(shape=[1, 544], dtype=pl.DT_UINT8, target_memory=pl.MemorySpace.Vec),
-            addrs=[5984],
-            mutex_ids=[1],
-            depth=1,
-        )
-        view_90 = view_90_native[0]
-        view_93_native = pl.make_tile_group(
-            type=pl.TileType(shape=[1, 544], dtype=pl.DT_UINT8, target_memory=pl.MemorySpace.Vec),
-            addrs=[6528],
-            mutex_ids=[1],
-            depth=1,
-        )
-        view_93 = view_93_native[0]
-        view_94_native = pl.make_tile_group(
-            type=pl.TileType(shape=[1, 544], dtype=pl.DT_UINT8, target_memory=pl.MemorySpace.Vec),
-            addrs=[7072],
-            mutex_ids=[1],
-            depth=1,
-        )
-        view_94 = view_94_native[0]
-        view_97_native = pl.make_tile_group(
-            type=pl.TileType(shape=[1, 544], dtype=pl.DT_UINT8, target_memory=pl.MemorySpace.Vec),
-            addrs=[7616],
-            mutex_ids=[1],
-            depth=1,
-        )
-        view_97 = view_97_native[0]
-        view_98_native = pl.make_tile_group(
-            type=pl.TileType(shape=[1, 544], dtype=pl.DT_UINT8, target_memory=pl.MemorySpace.Vec),
-            addrs=[8160],
-            mutex_ids=[1],
-            depth=1,
-        )
-        view_98 = view_98_native[0]
-        view_101_native = pl.make_tile_group(
-            type=pl.TileType(shape=[1, 544], dtype=pl.DT_UINT8, target_memory=pl.MemorySpace.Vec),
-            addrs=[13056],
-            mutex_ids=[3],
-            depth=1,
-        )
-        view_101 = view_101_native[0]
-        view_102_native = pl.make_tile_group(
-            type=pl.TileType(shape=[1, 544], dtype=pl.DT_UINT8, target_memory=pl.MemorySpace.Vec),
-            addrs=[13600],
-            mutex_ids=[3],
-            depth=1,
-        )
-        view_102 = view_102_native[0]
-        view_105_native = pl.make_tile_group(
-            type=pl.TileType(shape=[1, 544], dtype=pl.DT_UINT8, target_memory=pl.MemorySpace.Vec),
-            addrs=[14144],
-            mutex_ids=[3],
-            depth=1,
-        )
-        view_105 = view_105_native[0]
-        view_106_native = pl.make_tile_group(
-            type=pl.TileType(shape=[1, 544], dtype=pl.DT_UINT8, target_memory=pl.MemorySpace.Vec),
-            addrs=[14688],
-            mutex_ids=[3],
-            depth=1,
-        )
-        view_106 = view_106_native[0]
-        view_109_native = pl.make_tile_group(
-            type=pl.TileType(shape=[1, 544], dtype=pl.DT_UINT8, target_memory=pl.MemorySpace.Vec),
-            addrs=[15232],
-            mutex_ids=[3],
-            depth=1,
-        )
-        view_109 = view_109_native[0]
-        view_110_native = pl.make_tile_group(
-            type=pl.TileType(shape=[1, 544], dtype=pl.DT_UINT8, target_memory=pl.MemorySpace.Vec),
-            addrs=[15776],
-            mutex_ids=[3],
-            depth=1,
-        )
-        view_110 = view_110_native[0]
-        view_113_native = pl.make_tile_group(
-            type=pl.TileType(shape=[1, 544], dtype=pl.DT_UINT8, target_memory=pl.MemorySpace.Vec),
-            addrs=[16320],
-            mutex_ids=[3],
-            depth=1,
-        )
-        view_113 = view_113_native[0]
-        view_114_native = pl.make_tile_group(
-            type=pl.TileType(shape=[1, 544], dtype=pl.DT_UINT8, target_memory=pl.MemorySpace.Vec),
-            addrs=[16864],
-            mutex_ids=[3],
-            depth=1,
-        )
-        view_114 = view_114_native[0]
         g_fp8_0_native = pl.make_tile_group(
             type=pl.TileType(shape=[8, 544], dtype=pl.DT_FP8E4M3FN, target_memory=pl.MemorySpace.Vec),
             addrs=[0],
@@ -2996,230 +2730,6 @@ def mixed_quant_sparse_flash_mla_kernel(
             depth=1,
         )
         view_140 = view_140_native[0]
-        view_143_native = pl.make_tile_group(
-            type=pl.TileType(shape=[1, 320], dtype=pl.DT_UINT8, target_memory=pl.MemorySpace.Vec),
-            addrs=[0],
-            mutex_ids=[0],
-            depth=1,
-        )
-        view_143 = view_143_native[0]
-        view_144_native = pl.make_tile_group(
-            type=pl.TileType(shape=[1, 320], dtype=pl.DT_UINT8, target_memory=pl.MemorySpace.Vec),
-            addrs=[320],
-            mutex_ids=[0],
-            depth=1,
-        )
-        view_144 = view_144_native[0]
-        view_147_native = pl.make_tile_group(
-            type=pl.TileType(shape=[1, 320], dtype=pl.DT_UINT8, target_memory=pl.MemorySpace.Vec),
-            addrs=[640],
-            mutex_ids=[0],
-            depth=1,
-        )
-        view_147 = view_147_native[0]
-        view_148_native = pl.make_tile_group(
-            type=pl.TileType(shape=[1, 320], dtype=pl.DT_UINT8, target_memory=pl.MemorySpace.Vec),
-            addrs=[960],
-            mutex_ids=[0],
-            depth=1,
-        )
-        view_148 = view_148_native[0]
-        view_151_native = pl.make_tile_group(
-            type=pl.TileType(shape=[1, 320], dtype=pl.DT_UINT8, target_memory=pl.MemorySpace.Vec),
-            addrs=[1280],
-            mutex_ids=[0],
-            depth=1,
-        )
-        view_151 = view_151_native[0]
-        view_152_native = pl.make_tile_group(
-            type=pl.TileType(shape=[1, 320], dtype=pl.DT_UINT8, target_memory=pl.MemorySpace.Vec),
-            addrs=[1600],
-            mutex_ids=[0],
-            depth=1,
-        )
-        view_152 = view_152_native[0]
-        view_155_native = pl.make_tile_group(
-            type=pl.TileType(shape=[1, 320], dtype=pl.DT_UINT8, target_memory=pl.MemorySpace.Vec),
-            addrs=[1920],
-            mutex_ids=[0],
-            depth=1,
-        )
-        view_155 = view_155_native[0]
-        view_156_native = pl.make_tile_group(
-            type=pl.TileType(shape=[1, 320], dtype=pl.DT_UINT8, target_memory=pl.MemorySpace.Vec),
-            addrs=[2240],
-            mutex_ids=[0],
-            depth=1,
-        )
-        view_156 = view_156_native[0]
-        view_159_native = pl.make_tile_group(
-            type=pl.TileType(shape=[1, 320], dtype=pl.DT_UINT8, target_memory=pl.MemorySpace.Vec),
-            addrs=[8704],
-            mutex_ids=[2],
-            depth=1,
-        )
-        view_159 = view_159_native[0]
-        view_160_native = pl.make_tile_group(
-            type=pl.TileType(shape=[1, 320], dtype=pl.DT_UINT8, target_memory=pl.MemorySpace.Vec),
-            addrs=[9024],
-            mutex_ids=[2],
-            depth=1,
-        )
-        view_160 = view_160_native[0]
-        view_163_native = pl.make_tile_group(
-            type=pl.TileType(shape=[1, 320], dtype=pl.DT_UINT8, target_memory=pl.MemorySpace.Vec),
-            addrs=[9344],
-            mutex_ids=[2],
-            depth=1,
-        )
-        view_163 = view_163_native[0]
-        view_164_native = pl.make_tile_group(
-            type=pl.TileType(shape=[1, 320], dtype=pl.DT_UINT8, target_memory=pl.MemorySpace.Vec),
-            addrs=[9664],
-            mutex_ids=[2],
-            depth=1,
-        )
-        view_164 = view_164_native[0]
-        view_167_native = pl.make_tile_group(
-            type=pl.TileType(shape=[1, 320], dtype=pl.DT_UINT8, target_memory=pl.MemorySpace.Vec),
-            addrs=[9984],
-            mutex_ids=[2],
-            depth=1,
-        )
-        view_167 = view_167_native[0]
-        view_168_native = pl.make_tile_group(
-            type=pl.TileType(shape=[1, 320], dtype=pl.DT_UINT8, target_memory=pl.MemorySpace.Vec),
-            addrs=[10304],
-            mutex_ids=[2],
-            depth=1,
-        )
-        view_168 = view_168_native[0]
-        view_171_native = pl.make_tile_group(
-            type=pl.TileType(shape=[1, 320], dtype=pl.DT_UINT8, target_memory=pl.MemorySpace.Vec),
-            addrs=[10624],
-            mutex_ids=[2],
-            depth=1,
-        )
-        view_171 = view_171_native[0]
-        view_172_native = pl.make_tile_group(
-            type=pl.TileType(shape=[1, 320], dtype=pl.DT_UINT8, target_memory=pl.MemorySpace.Vec),
-            addrs=[10944],
-            mutex_ids=[2],
-            depth=1,
-        )
-        view_172 = view_172_native[0]
-        view_175_native = pl.make_tile_group(
-            type=pl.TileType(shape=[1, 320], dtype=pl.DT_UINT8, target_memory=pl.MemorySpace.Vec),
-            addrs=[4352],
-            mutex_ids=[1],
-            depth=1,
-        )
-        view_175 = view_175_native[0]
-        view_176_native = pl.make_tile_group(
-            type=pl.TileType(shape=[1, 320], dtype=pl.DT_UINT8, target_memory=pl.MemorySpace.Vec),
-            addrs=[4672],
-            mutex_ids=[1],
-            depth=1,
-        )
-        view_176 = view_176_native[0]
-        view_179_native = pl.make_tile_group(
-            type=pl.TileType(shape=[1, 320], dtype=pl.DT_UINT8, target_memory=pl.MemorySpace.Vec),
-            addrs=[4992],
-            mutex_ids=[1],
-            depth=1,
-        )
-        view_179 = view_179_native[0]
-        view_180_native = pl.make_tile_group(
-            type=pl.TileType(shape=[1, 320], dtype=pl.DT_UINT8, target_memory=pl.MemorySpace.Vec),
-            addrs=[5312],
-            mutex_ids=[1],
-            depth=1,
-        )
-        view_180 = view_180_native[0]
-        view_183_native = pl.make_tile_group(
-            type=pl.TileType(shape=[1, 320], dtype=pl.DT_UINT8, target_memory=pl.MemorySpace.Vec),
-            addrs=[5632],
-            mutex_ids=[1],
-            depth=1,
-        )
-        view_183 = view_183_native[0]
-        view_184_native = pl.make_tile_group(
-            type=pl.TileType(shape=[1, 320], dtype=pl.DT_UINT8, target_memory=pl.MemorySpace.Vec),
-            addrs=[5952],
-            mutex_ids=[1],
-            depth=1,
-        )
-        view_184 = view_184_native[0]
-        view_187_native = pl.make_tile_group(
-            type=pl.TileType(shape=[1, 320], dtype=pl.DT_UINT8, target_memory=pl.MemorySpace.Vec),
-            addrs=[6272],
-            mutex_ids=[1],
-            depth=1,
-        )
-        view_187 = view_187_native[0]
-        view_188_native = pl.make_tile_group(
-            type=pl.TileType(shape=[1, 320], dtype=pl.DT_UINT8, target_memory=pl.MemorySpace.Vec),
-            addrs=[6592],
-            mutex_ids=[1],
-            depth=1,
-        )
-        view_188 = view_188_native[0]
-        view_191_native = pl.make_tile_group(
-            type=pl.TileType(shape=[1, 320], dtype=pl.DT_UINT8, target_memory=pl.MemorySpace.Vec),
-            addrs=[13056],
-            mutex_ids=[3],
-            depth=1,
-        )
-        view_191 = view_191_native[0]
-        view_192_native = pl.make_tile_group(
-            type=pl.TileType(shape=[1, 320], dtype=pl.DT_UINT8, target_memory=pl.MemorySpace.Vec),
-            addrs=[13376],
-            mutex_ids=[3],
-            depth=1,
-        )
-        view_192 = view_192_native[0]
-        view_195_native = pl.make_tile_group(
-            type=pl.TileType(shape=[1, 320], dtype=pl.DT_UINT8, target_memory=pl.MemorySpace.Vec),
-            addrs=[13696],
-            mutex_ids=[3],
-            depth=1,
-        )
-        view_195 = view_195_native[0]
-        view_196_native = pl.make_tile_group(
-            type=pl.TileType(shape=[1, 320], dtype=pl.DT_UINT8, target_memory=pl.MemorySpace.Vec),
-            addrs=[14016],
-            mutex_ids=[3],
-            depth=1,
-        )
-        view_196 = view_196_native[0]
-        view_199_native = pl.make_tile_group(
-            type=pl.TileType(shape=[1, 320], dtype=pl.DT_UINT8, target_memory=pl.MemorySpace.Vec),
-            addrs=[14336],
-            mutex_ids=[3],
-            depth=1,
-        )
-        view_199 = view_199_native[0]
-        view_200_native = pl.make_tile_group(
-            type=pl.TileType(shape=[1, 320], dtype=pl.DT_UINT8, target_memory=pl.MemorySpace.Vec),
-            addrs=[14656],
-            mutex_ids=[3],
-            depth=1,
-        )
-        view_200 = view_200_native[0]
-        view_203_native = pl.make_tile_group(
-            type=pl.TileType(shape=[1, 320], dtype=pl.DT_UINT8, target_memory=pl.MemorySpace.Vec),
-            addrs=[14976],
-            mutex_ids=[3],
-            depth=1,
-        )
-        view_203 = view_203_native[0]
-        view_204_native = pl.make_tile_group(
-            type=pl.TileType(shape=[1, 320], dtype=pl.DT_UINT8, target_memory=pl.MemorySpace.Vec),
-            addrs=[15296],
-            mutex_ids=[3],
-            depth=1,
-        )
-        view_204 = view_204_native[0]
         g_bfc_0_native = pl.make_tile_group(
             type=pl.TileType(shape=[8, 160], dtype=pl.DT_BF16, target_memory=pl.MemorySpace.Vec),
             addrs=[0],
@@ -3519,13 +3029,6 @@ def mixed_quant_sparse_flash_mla_kernel(
             depth=1,
         )
         view_229 = view_229_native[0]
-        view_230_native = pl.make_tile_group(
-            type=pl.TileType(shape=[1, 64], dtype=pl.DT_INT32, target_memory=pl.MemorySpace.Vec),
-            addrs=[28672],
-            mutex_ids=[5],
-            depth=1,
-        )
-        view_230 = view_230_native[0]
         view_233_native = pl.make_tile_group(
             type=pl.TileType(shape=[1, 128], dtype=pl.DT_INT32, target_memory=pl.MemorySpace.Vec),
             addrs=[17408],
@@ -3540,13 +3043,6 @@ def mixed_quant_sparse_flash_mla_kernel(
             depth=1,
         )
         view_234 = view_234_native[0]
-        view_235_native = pl.make_tile_group(
-            type=pl.TileType(shape=[1, 64], dtype=pl.DT_INT32, target_memory=pl.MemorySpace.Vec),
-            addrs=[28672],
-            mutex_ids=[5],
-            depth=1,
-        )
-        view_235 = view_235_native[0]
         view_238_native = pl.make_tile_group(
             type=pl.TileType(shape=[1, 64], dtype=pl.DT_FP32, target_memory=pl.MemorySpace.Vec),
             addrs=[221184],
@@ -4006,6 +3502,13 @@ def mixed_quant_sparse_flash_mla_kernel(
             depth=1,
         )
         view_443 = view_443_native[0]
+        fd_tail_native = pl.make_tile_group(
+            type=pl.TileType(shape=[32, 128], dtype=pl.DT_FP32, target_memory=pl.MemorySpace.Vec),
+            addrs=[46336],
+            mutex_ids=[7],
+            depth=1,
+        )
+        fd_tail = fd_tail_native[0]
         view_444_native = pl.make_tile_group(
             type=pl.TileType(shape=[1, 64], dtype=pl.DT_FP32, target_memory=pl.MemorySpace.Vec),
             addrs=[219904],
@@ -4210,40 +3713,8 @@ def mixed_quant_sparse_flash_mla_kernel(
             ub_knz0=ub_knz0,
             ub_knz1=ub_knz1,
             ub_pt=ub_pt,
-            view_101=view_101,
-            view_102=view_102,
-            view_105=view_105,
-            view_106=view_106,
-            view_109=view_109,
-            view_110=view_110,
-            view_113=view_113,
-            view_114=view_114,
             view_116=view_116,
             view_117=view_117,
-            view_53=view_53,
-            view_54=view_54,
-            view_57=view_57,
-            view_58=view_58,
-            view_61=view_61,
-            view_62=view_62,
-            view_65=view_65,
-            view_66=view_66,
-            view_69=view_69,
-            view_70=view_70,
-            view_73=view_73,
-            view_74=view_74,
-            view_77=view_77,
-            view_78=view_78,
-            view_81=view_81,
-            view_82=view_82,
-            view_85=view_85,
-            view_86=view_86,
-            view_89=view_89,
-            view_90=view_90,
-            view_93=view_93,
-            view_94=view_94,
-            view_97=view_97,
-            view_98=view_98,
             pair_53=pair_53,
             pair_57=pair_57,
             pair_61=pair_61,
@@ -4278,38 +3749,6 @@ def mixed_quant_sparse_flash_mla_kernel(
             ub_knz0=ub_knz0,
             ub_knz1=ub_knz1,
             ub_pt=ub_pt,
-            view_143=view_143,
-            view_144=view_144,
-            view_147=view_147,
-            view_148=view_148,
-            view_151=view_151,
-            view_152=view_152,
-            view_155=view_155,
-            view_156=view_156,
-            view_159=view_159,
-            view_160=view_160,
-            view_163=view_163,
-            view_164=view_164,
-            view_167=view_167,
-            view_168=view_168,
-            view_171=view_171,
-            view_172=view_172,
-            view_175=view_175,
-            view_176=view_176,
-            view_179=view_179,
-            view_180=view_180,
-            view_183=view_183,
-            view_184=view_184,
-            view_187=view_187,
-            view_188=view_188,
-            view_191=view_191,
-            view_192=view_192,
-            view_195=view_195,
-            view_196=view_196,
-            view_199=view_199,
-            view_200=view_200,
-            view_203=view_203,
-            view_204=view_204,
             view_206=view_206,
             view_207=view_207,
             pair_143=pair_143,
@@ -4393,15 +3832,51 @@ def mixed_quant_sparse_flash_mla_kernel(
                 pl.load(view_24, bt_c_v, [b, 0])
                 pl.set_validshape(view_24, [1, 8])
                 if tab_fast != 0:
-                    for _ in pl.range(0, 1, 1):
+                    segb = 0
+                    wb = 0
+                    cmp_9 = tl_1 < ori_tiles_1
+                    if cmp_9:
+                        segb = tl_1 + pl.get_block_idx() * 0
+                        wb = w_o_1 + pl.get_block_idx() * 0
+                    else:
+                        segb = tl_1 - ori_tiles_1
+                        wb = w_c_1 + pl.get_block_idx() * 0
+                    mul_6 = segb * 128
+                    anb = pl.min(128, (wb - mul_6))
+                    s128 = mul_6
+                    winb = s128 + (sub * 64)
+                    cmb = (s128 + anb) - 1
+                    negb = 0 - s128
+                    t8b = clk_1 & 7
+                    v_nb = 0
+                    if cmp_9:
+                        v_nb = pl.min(128, (k_ori - mul_6))
+                        pl.set_validshape(ub_tabs, [1, v_nb])
+                        pl.load(ub_tabs, ori_sparse_indices, [m_1, 0, s128])
+                        pl.set_validshape(ub_tabs, [1, 2304])
+                        build_pair_tab_vf(
+                            view_28, view_29, ub_pt_native[clk_1 & 1], fan_grp[clk_1 & 1], t8b, bso_v, stro_v, 544, negb, winb, cmb
+                        )
+                    else:
+                        v_nb = pl.min(128, (k_cmp - mul_6))
+                        pl.set_validshape(ub_tabs, [1, v_nb])
+                        pl.load(ub_tabs, si_v, [m_1, 0, s128])
+                        pl.set_validshape(ub_tabs, [1, 2304])
+                        build_pair_tab_vf(
+                            view_33, view_34, ub_pt_native[clk_1 & 1], fan_grp[clk_1 & 1], t8b, bsc_v, strc_v, 320, negb, winb, cmb
+                        )
+                # Second priming on its own index staging buffer (ub_tabs_b), so the two
+                # load->VF pairs do not share one single-buffered region.
+                if (tl_1 + 1) < th_1:
+                    if tab_fast != 0:
                         segb = 0
                         wb = 0
-                        cmp_9 = tl_1 < ori_tiles_1
+                        cmp_9 = (tl_1 + 1) < ori_tiles_1
                         if cmp_9:
-                            segb = tl_1 + pl.get_block_idx() * 0
+                            segb = (tl_1 + 1) + pl.get_block_idx() * 0
                             wb = w_o_1 + pl.get_block_idx() * 0
                         else:
-                            segb = tl_1 - ori_tiles_1
+                            segb = (tl_1 + 1) - ori_tiles_1
                             wb = w_c_1 + pl.get_block_idx() * 0
                         mul_6 = segb * 128
                         anb = pl.min(128, (wb - mul_6))
@@ -4409,23 +3884,23 @@ def mixed_quant_sparse_flash_mla_kernel(
                         winb = s128 + (sub * 64)
                         cmb = (s128 + anb) - 1
                         negb = 0 - s128
-                        t8b = clk_1 & 7
+                        t8b = (clk_1 + 1) & 7
                         v_nb = 0
                         if cmp_9:
                             v_nb = pl.min(128, (k_ori - mul_6))
-                            pl.set_validshape(ub_tabs, [1, v_nb])
-                            pl.load(ub_tabs, ori_sparse_indices, [m_1, 0, s128])
-                            pl.set_validshape(ub_tabs, [1, 2304])
+                            pl.set_validshape(ub_tabs_b, [1, v_nb])
+                            pl.load(ub_tabs_b, ori_sparse_indices, [m_1, 0, s128])
+                            pl.set_validshape(ub_tabs_b, [1, 2304])
                             build_pair_tab_vf(
-                                view_28, view_29, ub_pt, view_30, t8b, bso_v, stro_v, 544, negb, winb, cmb
+                                view_28b, view_29, ub_pt_native[(clk_1 + 1) & 1], fan_grp[(clk_1 + 1) & 1], t8b, bso_v, stro_v, 544, negb, winb, cmb
                             )
                         else:
                             v_nb = pl.min(128, (k_cmp - mul_6))
-                            pl.set_validshape(ub_tabs, [1, v_nb])
-                            pl.load(ub_tabs, si_v, [m_1, 0, s128])
-                            pl.set_validshape(ub_tabs, [1, 2304])
+                            pl.set_validshape(ub_tabs_b, [1, v_nb])
+                            pl.load(ub_tabs_b, si_v, [m_1, 0, s128])
+                            pl.set_validshape(ub_tabs_b, [1, 2304])
                             build_pair_tab_vf(
-                                view_33, view_34, ub_pt, view_35, t8b, bsc_v, strc_v, 320, negb, winb, cmb
+                                view_33b, view_34, ub_pt_native[(clk_1 + 1) & 1], fan_grp[(clk_1 + 1) & 1], t8b, bsc_v, strc_v, 320, negb, winb, cmb
                             )
                 if tl_1 == 0:
                     if rpar == 0:
@@ -4478,7 +3953,7 @@ def mixed_quant_sparse_flash_mla_kernel(
                                 )
                             nv = pl.min(pl.max((actual_n - mul_15), 0), 64)
                             for g in pl.range(0, 4, 1):
-                                dequant_ori(g, nv, ori_kv, slot, sub, tt, ttf, tail16, sub0, dq_ori)
+                                dequant_ori(g, nv, ori_kv, slot, sub, tt, ttf, tail16, sub0, dq_ori, ub_pt_native[clk_1 & 1])
                         else:
                             if tab_fast == 0:
                                 v_n_1 = pl.min(128, (k_cmp - mul_11))
@@ -4490,9 +3965,9 @@ def mixed_quant_sparse_flash_mla_kernel(
                                 )
                             nvc = pl.min(pl.max((actual_n - mul_15), 0), 64)
                             for g_1 in pl.range(0, 4, 1):
-                                dequant_cmp(cmp_kv, g_1, nvc, slot, sub, tt, ttf, tail16, sub0, dq_cmp)
+                                dequant_cmp(cmp_kv, g_1, nvc, slot, sub, tt, ttf, tail16, sub0, dq_cmp, ub_pt_native[clk_1 & 1])
                         if tab_fast != 0:
-                            tn = tgo + 1
+                            tn = tgo + 2
                             if tn < th_1:
                                 segn = 0
                                 wn = 0
@@ -4515,12 +3990,12 @@ def mixed_quant_sparse_flash_mla_kernel(
                                     pl.set_validshape(ub_tabs, [1, v_nn])
                                     pl.load(ub_tabs, ori_sparse_indices, [m_1, 0, s128n])
                                     pl.set_validshape(ub_tabs, [1, 2304])
-                                    mod_19 = (clk_1 + 1) & 7
+                                    mod_19 = (clk_1 + 2) & 7
                                     build_pair_tab_vf(
                                         view_228,
                                         view_229,
-                                        ub_pt,
-                                        view_230,
+                                        ub_pt_native[(clk_1 + 2) & 1],
+                                        fan_grp[(clk_1 + 2) & 1],
                                         mod_19,
                                         bso_v,
                                         stro_v,
@@ -4534,12 +4009,12 @@ def mixed_quant_sparse_flash_mla_kernel(
                                     pl.set_validshape(ub_tabs, [1, v_nn])
                                     pl.load(ub_tabs, si_v, [m_1, 0, s128n])
                                     pl.set_validshape(ub_tabs, [1, 2304])
-                                    mod_20 = (clk_1 + 1) & 7
+                                    mod_20 = (clk_1 + 2) & 7
                                     build_pair_tab_vf(
                                         view_233,
                                         view_234,
-                                        ub_pt,
-                                        view_235,
+                                        ub_pt_native[(clk_1 + 2) & 1],
+                                        fan_grp[(clk_1 + 2) & 1],
                                         mod_20,
                                         bsc_v,
                                         strc_v,
@@ -4602,11 +4077,16 @@ def mixed_quant_sparse_flash_mla_kernel(
                 add_587 = fws + 1
                 pl.load(view_434, fd_m, [add_587, 0, fms])
                 pl.load(view_436, fd_l, [add_587, 0, fms])
-                for cc in pl.range(0, 4, 1):
-                    mul_249 = cc * 128
-                    pl.load(t_4_1, fd_o, [fws, fms, mul_249])
-                    pl.load(t_5_1, fd_o, [(fws + 1), fms, mul_249])
-                    fd_merge_chunk_vf(t_4_1, t_5_1, view_440, view_441, view_442, view_443, ub_outc, cc)
+                # The reducing core produced the (fws + 1) half itself and its O chunks are
+                # still resident, so only the remote half crosses GM.
+                pl.load(fd_tail, fd_o, [fws, fms, 0])
+                fd_merge_chunk_vf(fd_tail, t_4_1, view_440, view_441, view_442, view_443, ub_outc, 0)
+                pl.load(fd_tail, fd_o, [fws, fms, 128])
+                fd_merge_chunk_vf(fd_tail, t_5_1, view_440, view_441, view_442, view_443, ub_outc, 1)
+                pl.load(fd_tail, fd_o, [fws, fms, 256])
+                fd_merge_chunk_vf(fd_tail, t_6_1, view_440, view_441, view_442, view_443, ub_outc, 2)
+                pl.load(fd_tail, fd_o, [fws, fms, 384])
+                fd_merge_chunk_vf(fd_tail, t_7_1, view_440, view_441, view_442, view_443, ub_outc, 3)
                 fd_lse_vf(view_444, view_445, view_446, view_447, view_448)
                 pl.store(out, view_450, [frow, fms, 0])
                 pl.store(lse, view_452, [0, frow, fms])
@@ -4647,10 +4127,11 @@ FD_HEADS_PER_AIV = 32
 
 TILE_N = 128  # KV tokens per S2 task (matches the kernel contract).
 # Flat partition only when the modelled critical path shrinks by at least this
-# factor. Measured on the board: a 1.15x-critical-path case nets ~0.98x (the
-# barrier + partial traffic eat the balance gain), 1.67x nets 1.145x, so only
-# clearly imbalanced cases are worth splitting.
-FD_MIN_GAIN = 1.3
+# factor. The reducer of a split is the core that ends the row, so that half is
+# still resident and only the remote partial crosses GM; a 1.25x-critical-path
+# case nets ~1.07x on the board (decode_6_long_s2: 34.9us -> 32.6us), while
+# keeping the write side of the balance gain against the barrier cost.
+FD_MIN_GAIN = 1.25
 # Below this many total tiles the barrier + partial traffic dominates, so keep
 # the whole-row schedule (tiny cases are already tile-starved, not imbalanced).
 FD_MIN_TOTAL_TILES = 64
@@ -4764,6 +4245,8 @@ def plan_metadata_fd(cu_q, len_ori, len_cmp=None, has_cmp=True, blocks=None, min
     (``s2_end == 0``) and inclusive when it stops inside a row, matching the
     kernel's ``row_count = m_end - m_start + (s2_end > 0)``.
     """
+    if blocks is None:
+        blocks = _get_cube_core_num()
     rows = int(cu_q[-1])
     blocks = _effective_blocks(blocks) if rows > 0 else int(blocks or 0)
     if rows <= 0 or blocks <= 0:
@@ -4827,16 +4310,18 @@ def plan_metadata_fd(cu_q, len_ori, len_cmp=None, has_cmp=True, blocks=None, min
         md[fa + FA_M_END_INDEX] = r1e - cu_q[b1]
         md[fa + FA_S2_END_INDEX] = 0 if e >= row_tiles[r1] else e
 
-    # Split k occupies workspace slots (2k head, 2k+1 tail); reducer is core k.
+    # Split at boundary c keeps slots (2c-2 head, 2c-1 tail).  The reducer is the block
+    # owning the tail slot, i.e. the core whose interval ends mid-row: it is the last
+    # thing that core does, so its half is still resident and never has to be re-read.
     # FA word 7/8 carry "slot + 1" for the partial this core must write (0 = none).
-    for k, (c, r) in enumerate(splits):
-        head_ws = 2 * k
-        tail_ws = 2 * k + 1
+    for _k, (c, r) in enumerate(splits):
+        head_ws = 2 * (c - 1)
+        tail_ws = 2 * (c - 1) + 1
         md[FA_METADATA_SIZE * c + FA_FIRST_FD_DATA_WORKSPACE_IDX_INDEX] = head_ws + 1
         md[FA_METADATA_SIZE * (c - 1) + 8] = tail_ws + 1
         b = _batch_of(cu_q, r)
         for half in range(2):
-            base = FD_METADATA_BASE + (2 * k + half) * FD_METADATA_SIZE
+            base = FD_METADATA_BASE + (2 * (c - 1) + half) * FD_METADATA_SIZE
             md[base + FD_CORE_ENABLE_INDEX] = 1
             md[base + FD_BN2_IDX_INDEX] = b
             md[base + FD_M_IDX_INDEX] = r - cu_q[b]
@@ -4851,6 +4336,7 @@ def plan_metadata_fd(cu_q, len_ori, len_cmp=None, has_cmp=True, blocks=None, min
 def plan_metadata(cu_q, len_ori, len_cmp=None, has_cmp=True, blocks=None, min_gain=FD_MIN_GAIN):
     """Dispatch: flat FD schedule when it pays, else uniform whole rows.
 
+    ``blocks`` defaults to the real AI-Cube core count of the target device.
     Returns ``(metadata_int32_1024, block_dim)``. ``len_ori``/``len_cmp`` are
     per-row effective widths (already clamped to K1/K2) and are required for the
     FD cost model.
@@ -4876,7 +4362,7 @@ def build_metadata(cu_q_tensor, len_ori_tensor, len_cmp_tensor=None, has_cmp=Tru
     if w_c is not None and k_cmp is not None:
         w_c = [min(k_cmp, max(v, 0)) for v in w_c]
     if blocks is None:
-        blocks = _get_cube_core_num()
+        blocks = _get_cube_core_num(len_ori_tensor.device.index)
     return plan_metadata(cu_q, w_o, w_c or ([0] * len(w_o)), has_cmp, blocks)
 
 

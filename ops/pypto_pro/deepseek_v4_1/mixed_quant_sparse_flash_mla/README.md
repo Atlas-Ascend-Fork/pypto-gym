@@ -11,7 +11,7 @@ tilingkey 只编译一份产物；共 13 条 P0 用例，精度 13/13 通过。�
 
 | 项目 | 说明 |
 | :--- | :--- |
-| 硬件平台 | Ascend 950PR（`Ascend950PR_9579`，`NpuArch=3510`）；28 Cube / 56 Vector |
+| 硬件平台 | Ascend 950PR（`NpuArch=3510`）；Cube / Vector 核数运行时取自设备属性（`Ascend950PR_9579` 为 28/56，`Ascend950PR_9589` 为 32/64） |
 | 使用的计算单元 | Cube 与 AI Vector 融合在单个 MIX kernel 内：Cube 承担 QK/PV 矩阵乘，Vector 承担反量化、在线 softmax、累加与写回 |
 | 软件环境 | CANN 9.2.0、PyPTO-Pro DSL（`pypto_pro`）、torch / torch_npu、Python 3.12 |
 | 设备侧 kernel 名 | `mixed_quant_sparse_flash_mla_kernel` |

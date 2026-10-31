@@ -22,6 +22,7 @@ case 参数以 ``_DEFAULT_PARAMS`` + ``_CASE_OVERRIDES`` 的形式内联在本�
 """
 
 import logging
+import os
 import sys
 
 import torch
@@ -73,10 +74,11 @@ FD_HEADS_PER_AIV = 32
 
 TILE_N = 128  # KV tokens per S2 task (matches the kernel contract).
 # Flat partition only when the modelled critical path shrinks by at least this
-# factor. Measured on the board: a 1.15x-critical-path case nets ~0.98x (the
-# barrier + partial traffic eat the balance gain), 1.67x nets 1.145x, so only
-# clearly imbalanced cases are worth splitting.
-FD_MIN_GAIN = 1.3
+# factor. The reducer of a split is the core that ends the row, so that half is
+# still resident and only the remote partial crosses GM; a 1.25x-critical-path
+# case nets ~1.07x on the board (decode_6_long_s2: 34.9us -> 32.6us), while
+# keeping the write side of the balance gain against the barrier cost.
+FD_MIN_GAIN = 1.25
 # Below this many total tiles the barrier + partial traffic dominates, so keep
 # the whole-row schedule (tiny cases are already tile-starved, not imbalanced).
 FD_MIN_TOTAL_TILES = 64
@@ -188,6 +190,8 @@ def plan_metadata_fd(cu_q, len_ori, len_cmp=None, has_cmp=True, blocks=None, min
     (``s2_end == 0``) and inclusive when it stops inside a row, matching the
     kernel's ``row_count = m_end - m_start + (s2_end > 0)``.
     """
+    if blocks is None:
+        blocks = _get_cube_core_num()
     rows = int(cu_q[-1])
     blocks = _effective_blocks(blocks) if rows > 0 else int(blocks or 0)
     if rows <= 0 or blocks <= 0:
@@ -251,16 +255,18 @@ def plan_metadata_fd(cu_q, len_ori, len_cmp=None, has_cmp=True, blocks=None, min
         md[fa + FA_M_END_INDEX] = r1e - cu_q[b1]
         md[fa + FA_S2_END_INDEX] = 0 if e >= row_tiles[r1] else e
 
-    # Split k occupies workspace slots (2k head, 2k+1 tail); reducer is core k.
+    # Split at boundary c keeps slots (2c-2 head, 2c-1 tail).  The reducer is the block
+    # owning the tail slot, i.e. the core whose interval ends mid-row: it is the last
+    # thing that core does, so its half is still resident and never has to be re-read.
     # FA word 7/8 carry "slot + 1" for the partial this core must write (0 = none).
-    for k, (c, r) in enumerate(splits):
-        head_ws = 2 * k
-        tail_ws = 2 * k + 1
+    for _k, (c, r) in enumerate(splits):
+        head_ws = 2 * (c - 1)
+        tail_ws = 2 * (c - 1) + 1
         md[FA_METADATA_SIZE * c + FA_FIRST_FD_DATA_WORKSPACE_IDX_INDEX] = head_ws + 1
         md[FA_METADATA_SIZE * (c - 1) + 8] = tail_ws + 1
         b = _batch_of(cu_q, r)
         for half in range(2):
-            base = FD_METADATA_BASE + (2 * k + half) * FD_METADATA_SIZE
+            base = FD_METADATA_BASE + (2 * (c - 1) + half) * FD_METADATA_SIZE
             md[base + FD_CORE_ENABLE_INDEX] = 1
             md[base + FD_BN2_IDX_INDEX] = b
             md[base + FD_M_IDX_INDEX] = r - cu_q[b]
@@ -275,6 +281,7 @@ def plan_metadata_fd(cu_q, len_ori, len_cmp=None, has_cmp=True, blocks=None, min
 def plan_metadata(cu_q, len_ori, len_cmp=None, has_cmp=True, blocks=None, min_gain=FD_MIN_GAIN):
     """Dispatch: flat FD schedule when it pays, else uniform whole rows.
 
+    ``blocks`` defaults to the runtime AI-Cube core count of the target device.
     Returns ``(metadata_int32_1024, block_dim)``. ``len_ori``/``len_cmp`` are
     per-row effective widths (already clamped to K1/K2) and are required for the
     FD cost model.
@@ -300,7 +307,7 @@ def build_metadata(cu_q_tensor, len_ori_tensor, len_cmp_tensor=None, has_cmp=Tru
     if w_c is not None and k_cmp is not None:
         w_c = [min(k_cmp, max(v, 0)) for v in w_c]
     if blocks is None:
-        blocks = _get_cube_core_num()
+        blocks = _get_cube_core_num(len_ori_tensor.device.index)
     return plan_metadata(cu_q, w_o, w_c or ([0] * len(w_o)), has_cmp, blocks)
 
 
