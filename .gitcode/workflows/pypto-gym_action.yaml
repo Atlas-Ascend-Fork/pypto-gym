@@ -13,10 +13,10 @@ on:
   pull_request_comment:
     types: [created]
     branches: [ '**' ]
-    comments: [ '^(?:\/)?compile*' ]
+    comments: [ '^/?compile(@[A-Za-z0-9._-]+)?$' ]
   pr_comment:
     types: [ created ]
-    keyword: '^(?:\/)?compile*'
+    keyword: '^/?compile(@[A-Za-z0-9._-]+)?$'
 
 env:
   org_name: "${{ vars.ORG_NAME }}"
@@ -40,7 +40,8 @@ stages:
             with:
               repo_name: ${{ env.repo_name }}
               target_branch: ${{ env.TARGET_BRANCH }}
-              repo_url: ${{ vars.CI_PATH }}
+              comment: ${{ atomgit.event.comment.body }}
+              token: ${{ secrets.TESTTOKEN }}
         runs-on: [self-hosted, arch=x64, spec=small]
         container:
           image: swr.cn-north-4.myhuaweicloud.com/ci_cann/ubuntu20.04.05_x86:k8s_v1.1006
@@ -59,6 +60,24 @@ stages:
         with:
           precommit_image_version: ${{ jobs.JOB_image.outputs.precommit }}
           codecheck_image_version: ${{ jobs.JOB_image.outputs.codecheck }}
+      JOB_x86_compile_ubuntu24:
+        name: Compile_X86_ubuntu24
+        uses: .gitcode/workflows/compile_action.yml
+        with:
+          task_name: 'x86_compile_ubuntu24'
+          arch: 'x64'
+          size: 'large'
+          package_name: 'build_whl_run_x86_64.tar.gz'
+          image_version: ${{ jobs.JOB_image.outputs.Compile_Ascend_X86_ubuntu24 }}
+      JOB_arm_compile_ubuntu24:
+        name: Compile_arm_ubuntu24
+        uses: .gitcode/workflows/compile_action.yml
+        with:
+          task_name: 'arm_compile_ubuntu24'
+          arch: 'arm64'
+          size: 'xlarge'
+          package_name: 'build_whl_run_aarch64.tar.gz'
+          image_version: ${{ jobs.JOB_image.outputs.Compile_Ascend_ARM_ubuntu24 }}
     pre:
     - type: auto
     fail-fast: false
