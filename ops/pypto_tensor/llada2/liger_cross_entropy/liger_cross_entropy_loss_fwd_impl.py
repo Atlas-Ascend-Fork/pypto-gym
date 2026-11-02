@@ -12,12 +12,11 @@
 
 v（词表大小）用 **``pypto.STATIC``** 标注：编译期静态轴、运行时值可变
 （每次调用的 v 由输入 shape 决定，PyPTO 按该值编译对应变体）。bt 为 DYNAMIC。
-因此 kernel 内 ``x.shape[1]`` 是 Python int，可直接做全部 tile 划分算术
-（n_v_tiles / last_v_size）、``for range`` 展开与尾块判断，wrapper 不传任何
-shape 元数、不对数据 padding：
+因此 kernel 内 ``x.shape[1]`` 是 Python int，可直接算 ``n_v_tiles``。v 轴走
+``pypto.loop``，vec tile 用常量 ``TILE_V``，offset / valid_shape 用
+``(v - t * TILE_V).min(TILE_V)`` 表达尾块。wrapper 不传 shape 元数、不对数据 padding：
 
-  - v 非对齐（如 157184 % 2048 = 1536 ≠ 0）：``for t in range(n_v_tiles)`` 展开，
-    末尾 tile 用实际长度 [bt, last_v_size] view —— 不越界。
+  - v 非对齐（如 157184 % 1024 ≠ 0）：loop 不展开，尾块靠 valid_shape 截断。
   - bt 动态：``pypto.loop`` + valid_shape 尾块。
 
 与动态版（custom/liger_cross_entropy_loss）的区别仅在于 v 轴的 STATIC 标注与
@@ -30,6 +29,9 @@ import torch_npu  # noqa: F401
 
 TILE_BT = 8
 TILE_V = 1024
+# Row vectors are logically [TILE_BT, 1]. The vec tile last dim must be 32-byte
+# aligned: 16 covers both fp32 (8) and bf16 (16).
+ROW_ALIGN = 16
 
 
 @pypto.frontend.jit(
@@ -70,14 +72,13 @@ def _ce_fwd_kernel_bf16(
 ):
     """Fused forward kernel — v=STATIC、bt=DYNAMIC；kernel 内算全部 tile 元数。
 
-    ``v = x.shape[1]`` 为 Python int（STATIC 轴）：n_v_tiles / last_v_size、
-    哨兵等全部 kernel 内派生；bt 用 SymbolicScalar + valid_shape 尾块。
+    ``v = x.shape[1]`` 为 Python int（STATIC 轴）：n_v_tiles 在 kernel 内派生。
+    v 轴 loop 的 vec tile 为常量，尾块长度用符号表达式。bt 用 valid_shape 尾块。
     """
     bt = x.shape[0]  # SymbolicScalar（DYNAMIC）
     v = x.shape[1]   # Python int（STATIC）
     n_bt_tiles = (bt + TILE_BT - 1) // TILE_BT
     n_v_tiles = (v + TILE_V - 1) // TILE_V
-    last_v_size = v - (n_v_tiles - 1) * TILE_V
 
     # kernel 内算派生标量（label_smoothing 参数 + v 常量，Python 侧求值）
     eps_f = label_smoothing / v
@@ -92,7 +93,7 @@ def _ce_fwd_kernel_bf16(
         actual_bt = (bt - bt_off).min(TILE_BT)
 
         # ---- ignore mask (golden L138-141) ----
-        pypto.set_vec_tile_shapes(TILE_BT, 1)
+        pypto.set_vec_tile_shapes(TILE_BT, ROW_ALIGN)
         tgt_tile = pypto.view(target, [TILE_BT, 1], [bt_off, 0],
                               valid_shape=[actual_bt, 1])
         ig_elem = pypto.Element(pypto.DT_FP32, ignore_index)
@@ -107,14 +108,15 @@ def _ce_fwd_kernel_bf16(
         tsum = pypto.tensor([TILE_BT, 1], pypto.DT_FP32, "tsum")
         scaled_x_sum = pypto.tensor([TILE_BT, 1], pypto.DT_FP32, "scaled_x_sum")
 
-        for t in range(n_v_tiles):
+        # for t in range(n_v_tiles):
+        for t in pypto.loop(n_v_tiles, name="v_softmax_loop"):
             v_off = t * TILE_V
-            cur_v = last_v_size if t == n_v_tiles - 1 else TILE_V
+            actual_v = (v - v_off).min(TILE_V)
 
             pypto.set_pass_options(sg_set_scope=1)
-            pypto.set_vec_tile_shapes(TILE_BT, cur_v)
-            row = pypto.view(x, [TILE_BT, cur_v], [bt_off, v_off],
-                             valid_shape=[actual_bt, cur_v])
+            pypto.set_vec_tile_shapes(TILE_BT, TILE_V)
+            row = pypto.view(x, [TILE_BT, TILE_V], [bt_off, v_off],
+                             valid_shape=[actual_bt, actual_v])
             r = pypto.cast(row, pypto.DT_FP32)
 
             if has_softcap:
@@ -128,8 +130,8 @@ def _ce_fwd_kernel_bf16(
 
             if label_smoothing > 0.0:
                 if has_weight:
-                    w_tile = pypto.view(weight_vec, [1, cur_v], [0, v_off],
-                                        valid_shape=[1, cur_v])
+                    w_tile = pypto.view(weight_vec, [1, TILE_V], [0, v_off],
+                                        valid_shape=[1, actual_v])
                     wx = pypto.mul(r, w_tile)
                     local_sxs = pypto.mul(pypto.sum(wx, dim=-1, keepdim=True), -eps_f)
                 else:
@@ -158,7 +160,7 @@ def _ce_fwd_kernel_bf16(
         # ============================================================
         # Loss computation (golden L184-214)
         # ============================================================
-        pypto.set_vec_tile_shapes(TILE_BT, 1)
+        pypto.set_vec_tile_shapes(TILE_BT, ROW_ALIGN)
         oy = pypto.view(ori_x_y, [TILE_BT, 1], [bt_off, 0], valid_shape=[actual_bt, 1])
         wy = pypto.view(weight_y, [TILE_BT, 1], [bt_off, 0], valid_shape=[actual_bt, 1])
 
@@ -190,30 +192,31 @@ def _ce_fwd_kernel_bf16(
         # First-occurrence argmax (golden L236-256)
         # ============================================================
         if compute_token_acc or compute_pred_tokens:
-            pypto.set_vec_tile_shapes(1, 1)
+            pypto.set_vec_tile_shapes(1, ROW_ALIGN)
             pred_idx = pypto.full([TILE_BT, 1], float(v), pypto.DT_FP32)
             pypto.set_vec_tile_shapes(TILE_BT, TILE_V)
 
-            for t in range(n_v_tiles):
+            # for t in range(n_v_tiles):
+            for t in pypto.loop(n_v_tiles, name="v_pred_loop"):
                 v_off = t * TILE_V
-                cur_v = last_v_size if t == n_v_tiles - 1 else TILE_V
+                actual_v = (v - v_off).min(TILE_V)
 
-                pypto.set_vec_tile_shapes(TILE_BT, cur_v)
-                row = pypto.view(x, [TILE_BT, cur_v], [bt_off, v_off],
-                                 valid_shape=[actual_bt, cur_v])
+                pypto.set_vec_tile_shapes(TILE_BT, TILE_V)
+                row = pypto.view(x, [TILE_BT, TILE_V], [bt_off, v_off],
+                                 valid_shape=[actual_bt, actual_v])
                 r = pypto.cast(row, pypto.DT_FP32)
 
                 is_max = pypto.eq(r, gmax)
-                col_tile = pypto.view(col_idx, [1, cur_v], [0, v_off],
-                                      valid_shape=[1, cur_v])
+                col_tile = pypto.view(col_idx, [1, TILE_V], [0, v_off],
+                                      valid_shape=[1, actual_v])
                 candidate = pypto.where(is_max, col_tile,
                                         pypto.Element(pypto.DT_FP32, float(v)))
                 tile_min = pypto.amin(candidate, dim=-1, keepdim=True)
-                pypto.set_vec_tile_shapes(1, 1)
+                pypto.set_vec_tile_shapes(1, ROW_ALIGN)
                 pred_idx[:] = pypto.minimum(pred_idx, tile_min)
-                pypto.set_vec_tile_shapes(TILE_BT, cur_v)
+                pypto.set_vec_tile_shapes(TILE_BT, TILE_V)
 
-            pypto.set_vec_tile_shapes(TILE_BT, 1)
+            pypto.set_vec_tile_shapes(TILE_BT, ROW_ALIGN)
             pred_tokens_fp32 = pypto.where(
                 is_ignore, pypto.Element(pypto.DT_FP32, -1.0), pred_idx)
             pypto.assemble(pred_tokens_fp32, [bt_off, 0], pred_tokens_out)
@@ -229,14 +232,15 @@ def _ce_fwd_kernel_bf16(
         # Pass 2: gradient (golden L263-305)
         # ============================================================
         if has_gradients:
-            for t in range(n_v_tiles):
+            # for t in range(n_v_tiles):
+            for t in pypto.loop(n_v_tiles, name="v_grad_loop"):
                 v_off = t * TILE_V
-                cur_v = last_v_size if t == n_v_tiles - 1 else TILE_V
+                actual_v = (v - v_off).min(TILE_V)
 
                 pypto.set_pass_options(sg_set_scope=1)
-                pypto.set_vec_tile_shapes(TILE_BT, cur_v)
-                row = pypto.view(x, [TILE_BT, cur_v], [bt_off, v_off],
-                                 valid_shape=[actual_bt, cur_v])
+                pypto.set_vec_tile_shapes(TILE_BT, TILE_V)
+                row = pypto.view(x, [TILE_BT, TILE_V], [bt_off, v_off],
+                                 valid_shape=[actual_bt, actual_v])
                 r = pypto.cast(row, pypto.DT_FP32)
 
                 if has_softcap:
@@ -249,8 +253,8 @@ def _ce_fwd_kernel_bf16(
                 if has_weight:
                     pw = pypto.mul(p, wy)
                     dloss_ori = pypto.mul(pw, one_minus_ls)
-                    w_tile = pypto.view(weight_vec, [1, cur_v], [0, v_off],
-                                        valid_shape=[1, cur_v])
+                    w_tile = pypto.view(weight_vec, [1, TILE_V], [0, v_off],
+                                        valid_shape=[1, actual_v])
                     neg_w = pypto.mul(w_tile, -1.0)
                     pws = pypto.mul(p, weight_sum)
                     smooth_base = pypto.add(neg_w, pws)
@@ -273,8 +277,8 @@ def _ce_fwd_kernel_bf16(
                     dx = pypto.mul(dx, inv_n_grad)
 
                 # target class correction (golden L274-276 / L291-294)
-                col_tile = pypto.view(col_idx, [1, cur_v], [0, v_off],
-                                      valid_shape=[1, cur_v])
+                col_tile = pypto.view(col_idx, [1, TILE_V], [0, v_off],
+                                      valid_shape=[1, actual_v])
                 is_target = pypto.eq(col_tile, tgt_tile)
                 if has_weight:
                     corr_effect = pypto.mul(pypto.mul(wy, one_minus_ls), inv_n_grad)
@@ -296,13 +300,14 @@ def _ce_fwd_kernel_bf16(
                 pypto.assemble(dx_bf16, [bt_off, v_off], saved_input)
                 pypto.set_pass_options(sg_set_scope=-1)
         else:
-            for t in range(n_v_tiles):
+            # for t in range(n_v_tiles):
+            for t in pypto.loop(n_v_tiles, name="v_out_loop"):
                 v_off = t * TILE_V
-                cur_v = last_v_size if t == n_v_tiles - 1 else TILE_V
+                actual_v = (v - v_off).min(TILE_V)
 
-                pypto.set_vec_tile_shapes(TILE_BT, cur_v)
-                row = pypto.view(x, [TILE_BT, cur_v], [bt_off, v_off],
-                                 valid_shape=[actual_bt, cur_v])
+                pypto.set_vec_tile_shapes(TILE_BT, TILE_V)
+                row = pypto.view(x, [TILE_BT, TILE_V], [bt_off, v_off],
+                                 valid_shape=[actual_bt, actual_v])
                 r = pypto.cast(row, pypto.DT_FP32)
                 r_masked = pypto.mul(r, mask_tile)
                 r_bf16 = pypto.cast(r_masked, pypto.DT_BF16)

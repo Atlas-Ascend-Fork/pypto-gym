@@ -11,7 +11,8 @@
 """PyPTO LigerCrossEntropyLoss Backward — static-V（pypto.STATIC）适配版。
 
 V 用 ``pypto.STATIC``：编译期静态轴、运行时值可变。kernel 内 ``x.shape[1]``
-为 Python int，直接算 N_V_TILES / LAST_V_SIZE，尾块用实际长度 view。
+为 Python int，直接算 n_v_tiles。v 轴走 loop，vec tile 用常量 TILE_V，
+尾块长度放进 valid_shape。
 wrapper 不传 shape 元数、不对数据 padding。
 """
 
@@ -21,6 +22,8 @@ import torch_npu  # noqa: F401
 
 TILE_BT = 4
 TILE_V = 8192
+# Row vectors are logically [TILE_BT, 1]. bf16 last dim needs 16 elements for 32 bytes.
+ROW_ALIGN = 16
 
 
 @pypto.frontend.jit(
@@ -38,7 +41,7 @@ def _ce_bwd_kernel_bf16(
     grad_vec: pypto.Tensor([pypto.DYNAMIC, 1], pypto.DT_BF16),
     grad_input: pypto.Tensor([pypto.DYNAMIC, pypto.STATIC], pypto.DT_BF16),
 ):
-    """Fused backward kernel — V=STATIC、BT=DYNAMIC；尾块用 last_v_size。
+    """Fused backward kernel — V=STATIC、BT=DYNAMIC；尾块用 valid_shape。
 
     逆路径统一为「逐行乘 grad_vec[bt]」（[BT,1] 乘子）：
       - golden path2（reduction='none'）：grad_vec[bt] = grad_output[bt]（逐行不同）
@@ -49,24 +52,24 @@ def _ce_bwd_kernel_bf16(
     v = saved_input.shape[1]
     n_bt_tiles = (bt + TILE_BT - 1) // TILE_BT
     n_v_tiles = (v + TILE_V - 1) // TILE_V
-    last_v_size = v - (n_v_tiles - 1) * TILE_V
 
     for bt_idx in pypto.loop(n_bt_tiles, name="bt_loop", unroll_list=[4, 1]):
         bt_off = bt_idx * TILE_BT
         actual_bt = (bt - bt_off).min(TILE_BT)
 
-        pypto.set_vec_tile_shapes(TILE_BT, 1)
+        pypto.set_vec_tile_shapes(TILE_BT, ROW_ALIGN)
         gv = pypto.view(grad_vec, [TILE_BT, 1], [bt_off, 0],
                         valid_shape=[actual_bt, 1])
 
-        for t in range(n_v_tiles):
+        # for t in range(n_v_tiles):
+        for t in pypto.loop(n_v_tiles, name="v_bwd_loop"):
             v_off = t * TILE_V
-            cur_v = last_v_size if t == n_v_tiles - 1 else TILE_V
+            actual_v = (v - v_off).min(TILE_V)
 
             pypto.set_pass_options(sg_set_scope=1)
-            pypto.set_vec_tile_shapes(TILE_BT, cur_v)
-            row = pypto.view(saved_input, [TILE_BT, cur_v], [bt_off, v_off],
-                             valid_shape=[actual_bt, cur_v])
+            pypto.set_vec_tile_shapes(TILE_BT, TILE_V)
+            row = pypto.view(saved_input, [TILE_BT, TILE_V], [bt_off, v_off],
+                             valid_shape=[actual_bt, actual_v])
 
             result = pypto.mul(row, gv)
 
