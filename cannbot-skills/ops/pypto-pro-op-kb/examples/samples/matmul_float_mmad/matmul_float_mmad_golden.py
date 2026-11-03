@@ -6,7 +6,7 @@
 # INCLUDING BUT NOT LIMITED TO NON-INFRINGEMENT, MERCHANTABILITY, OR FITNESS FOR A PARTICULAR PURPOSE.
 # See LICENSE in the root of the software repository for the full text of the License.
 # -----------------------------------------------------------------------------------------------------------
-# Golden for the matmul_float_mmad transfer (pure torch, NO pypto — lint D3).
+# Golden for the matmul_float_mmad transfer (pure torch, no pypto).
 #
 # SAMPLE PROVENANCE -- describes THIS reference implementation only.
 # Do not copy this header into generated code: a generated kernel inherits

@@ -266,7 +266,7 @@ def _load_previous(config):
     return previous
 
 
-def _reject_legacy_installation(config, root_target, previous, tool):
+def _reject_legacy_installation(config, root_target, tool):
     """Refuse old active entry points; do not migrate or claim shared resources."""
 
     def reject(path):
@@ -313,16 +313,10 @@ def _reject_legacy_installation(config, root_target, previous, tool):
     if tool != "opencode":
         return
     for name in (
-        "pypto-pro-op-lint.ts",
         "pypto-pro-state-transition.ts",
         "pypto-pro-scriptor.ts",
     ):
-        relative = f"plugins/{name}"
-        if name == "pypto-pro-op-lint.ts" and relative in previous.get(
-            "owned_files", {}
-        ):
-            continue  # Receipt retirement below verifies its hash before backup.
-        path = config / relative
+        path = config / "plugins" / name
         if path.exists() or is_link(path):
             reject(path)
 
@@ -599,7 +593,7 @@ def install(project, *, tool="opencode", global_level=False):
     previous = _load_previous(config)
     root_name = "CLAUDE.md" if tool == "claude" else "AGENTS.md"
     root_target = (config if global_level else project) / root_name
-    _reject_legacy_installation(config, root_target, previous, tool)
+    _reject_legacy_installation(config, root_target, tool)
     retire = set()
     sources = {}
     desired = {}

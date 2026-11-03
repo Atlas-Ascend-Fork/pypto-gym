@@ -355,7 +355,6 @@ class InstallationTest(unittest.TestCase):
                 "cannbot-manifest.json",
                 json.dumps({"team": installer.PLUGIN, "version": "2.0.0"}),
             ),
-            ("plugins/pypto-pro-op-lint.ts", "Old automatic lint hook\n"),
             ("plugins/pypto-pro-state-transition.ts", "Old state transition hook\n"),
             ("plugins/pypto-pro-scriptor.ts", "Old Scriptor hook\n"),
         )
@@ -406,7 +405,7 @@ class InstallationTest(unittest.TestCase):
 
     def test_independent_generic_resources_are_not_claimed(self):
         retained = (
-            "hooks/pypto-pro-op-lint/tool.py",
+            "hooks/user/tool.py",
             "user-tools/helper.py",
             "skills/pypto-pro-op-develop/SKILL.md",
             "references/user.md",
@@ -426,8 +425,6 @@ class InstallationTest(unittest.TestCase):
                 }
             ),
         )
-        flag = self.project / ".pypto-pro-op-lint-enabled"
-        flag.write_bytes(b"true\r\n")
         preserved = {
             relative: (self.config / relative).read_bytes()
             for relative in (
@@ -442,37 +439,6 @@ class InstallationTest(unittest.TestCase):
         for relative, original in preserved.items():
             self.assertEqual((self.config / relative).read_bytes(), original)
             self.assertNotIn(relative, owned)
-        self.assertEqual(flag.read_bytes(), b"true\r\n")
-
-    def test_receipt_owned_wrapper_is_retired_only_when_unchanged(self):
-        for modified in (False, True):
-            with self.subTest(modified=modified):
-                self.project = self.root / f"owned-wrapper-{modified}"
-                self.config = self.project / ".opencode"
-                self.install()
-                relative = "plugins/pypto-pro-op-lint.ts"
-                target = self.config / relative
-                original = b"Previously managed wrapper\n"
-                target.parent.mkdir(parents=True)
-                target.write_bytes(original)
-                receipt = installer.read_json(self.config / installer.RECEIPT)
-                receipt["owned_files"][relative] = installer.digest(original)
-                write(self.config / installer.RECEIPT, json.dumps(receipt))
-                if modified:
-                    target.write_bytes(b"User modifications\n")
-                    before = self.tree_snapshot()
-                    with self.assertRaisesRegex(
-                        installer.InstallError, "modified retired installation resource"
-                    ):
-                        self.install()
-                    self.assertEqual(self.tree_snapshot(), before)
-                else:
-                    result = self.install()
-                    self.assertFalse(target.exists())
-                    self.assertEqual(
-                        (Path(result["backup"]) / relative).read_bytes(), original
-                    )
-                    self.assertIsNone(self.install()["backup"])
 
     def test_current_receipt_does_not_claim_independent_shared_skills(self):
         target = self.config / "skills/pypto-pro-op-develop/SKILL.md"
@@ -512,15 +478,6 @@ class InstallationTest(unittest.TestCase):
         self.install()
         self.assertTrue(installer.is_link(target))
         self.assertEqual((target / "helper.py").read_text(), self.independent_content)
-
-    def test_unowned_pro_autoload_wrapper_requires_new_workspace_before_writes(self):
-        target = self.config / "plugins/pypto-pro-op-lint.ts"
-        write(target, "Unknown owner\n")
-        with self.assertRaisesRegex(installer.InstallError, "new working directory"):
-            self.install()
-        self.assertEqual(target.read_text(), "Unknown owner\n")
-        self.assertFalse((self.config / "skills").exists())
-        self.assertFalse((self.project / "AGENTS.md").exists())
 
     def test_custom_root_instructions_survive_refresh(self):
         write(self.project / "AGENTS.md", "# Project policy\nKeep my rules.\n")
@@ -771,7 +728,7 @@ class InstallationTest(unittest.TestCase):
         self,
     ):
         write(
-            self.config / "hooks/pypto-pro-op-lint/independent.py",
+            self.config / "hooks/user/independent.py",
             self.independent_content,
         )
         write(self.project / "AGENTS.md", "# User policy\n")

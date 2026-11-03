@@ -128,11 +128,7 @@ custom/softmax/
 
 当前入口使用 [pypto-pro-kernel](../../ops/pypto-pro-kernel/SKILL.md) 完成原生实现、验证、调试、计时、优化和交付。协作角色与派工方式见[协作说明](references/multi-agent-workflow.md)。
 
-### 参考资料与可选工具
-
 可按当前问题查阅[性能原则](references/kernel-core-principles.md)、[A5 实践](references/kernel-perf-pypto-pro-a5.md)和[实现约束](references/performance-constraints.md)。
-
-可选 lint 不自动加入工作流，参数可用 `python hooks/pypto-pro-op-lint/pypto_pro_op_lint.py --help` 查看。
 
 ## 四、常见问题
 
@@ -150,8 +146,6 @@ bash init.sh --help
 ### Q: 如何更新？
 
 更新仓库后，从插件目录按原参数重跑初始化，仍指定同一项目目录。需要替换的受管文件会备份到配置目录的 `.pypto-pro-op-orchestrator-backups/`。用户文件和其他插件保留；受管文件被修改或同名文件冲突时，先报错，不覆盖。
-
-旧模式工作目录需另建目录初始化，不自动迁移旧配置。
 
 ### Q: PyPTO 和 PyPTO-Pro 如何选择？
 
