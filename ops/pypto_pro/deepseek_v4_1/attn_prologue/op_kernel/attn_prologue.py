@@ -599,6 +599,13 @@ def _a1_group(x, wgt, dsw, ws_out, sa_l1, sb_l1, a_l1, b_nz, b_zn, l0a, l0b,
     as the ungrouped V1 did per block; only the X load is shared.  sb_l1 rotates
     depth-2 so both blocks' weight scales stay resident across the kk loop.
     """
+    # Tail tile: the NZ L1 X window is loaded with rows_full rows, so the L0A
+    # move must be narrowed to match (rounded up to the 16-row NZ fractal, as
+    # indexer_prologue_qw does).  Moving a full [BASE_M,K0] window instead
+    # corrupts the WHOLE tail tile, not just the unloaded rows: measured on
+    # DAV_3510, only output columns [0,16) of each BN_A block stayed correct
+    # and the rest became NaN/~FLT_MAX whenever roundup16(rows_full) < BASE_M.
+    rows_r = (rows_full + 15) // 16 * 16
     sb0 = sb_l1.next()
     pl.set_validshape(sb0, [SQ_ALL_A, BN_A])
     pl.load(sb0, dsw, [c0, 0, 0], order=[1, 0])
@@ -614,7 +621,7 @@ def _a1_group(x, wgt, dsw, ws_out, sa_l1, sb_l1, a_l1, b_nz, b_zn, l0a, l0b,
         pl.set_validshape(wqn, [BN_A, K0])
         pl.load(wqn, wgt, [c0, kk * K0])
         la = l0a.next()
-        pl.set_validshape(la, [BASE_M, K0])
+        pl.set_validshape(la, [rows_r, K0])
         pl.move(la, xa)
         lb = l0b.next()
         pl.move(lb, b_zn.next())
@@ -631,7 +638,7 @@ def _a1_group(x, wgt, dsw, ws_out, sa_l1, sb_l1, a_l1, b_nz, b_zn, l0a, l0b,
         pl.set_validshape(wqn, [BN_A, K0])
         pl.load(wqn, wgt, [c1, kk * K0])
         la = l0a.next()
-        pl.set_validshape(la, [BASE_M, K0])
+        pl.set_validshape(la, [rows_r, K0])
         pl.move(la, xa)
         lb = l0b.next()
         pl.move(lb, b_zn.next())
@@ -656,6 +663,13 @@ def _a1_block(x, wgt, dsw, ws_out, sa_l1, sb_l1, a_l1, b_nz, b_zn, l0a, l0b,
     the cores (grouping would halve A1 parallelism); 14 blocks/tile engage up to 14
     cores vs 7 for groups, and at decode A1 is weight-bandwidth-bound so more cores
     issuing MTE2 finishes sooner.  sb_l1[0] is a fixed slot (one block at a time)."""
+    # Tail tile: the NZ L1 X window is loaded with rows_full rows, so the L0A
+    # move must be narrowed to match (rounded up to the 16-row NZ fractal, as
+    # indexer_prologue_qw does).  Moving a full [BASE_M,K0] window instead
+    # corrupts the WHOLE tail tile, not just the unloaded rows: measured on
+    # DAV_3510, only output columns [0,16) of each BN_A block stayed correct
+    # and the rest became NaN/~FLT_MAX whenever roundup16(rows_full) < BASE_M.
+    rows_r = (rows_full + 15) // 16 * 16
     sb = sb_l1[0]
     pl.set_validshape(sb, [SQ_ALL_A, BN_A])
     pl.load(sb, dsw, [c0, 0, 0], order=[1, 0])
@@ -667,7 +681,7 @@ def _a1_block(x, wgt, dsw, ws_out, sa_l1, sb_l1, a_l1, b_nz, b_zn, l0a, l0b,
         pl.set_validshape(wqn, [BN_A, K0])
         pl.load(wqn, wgt, [c0, kk * K0])
         la = l0a.next()
-        pl.set_validshape(la, [BASE_M, K0])
+        pl.set_validshape(la, [rows_r, K0])
         pl.move(la, xa)
         lb = l0b.next()
         pl.move(lb, b_zn.next())
@@ -696,6 +710,13 @@ def _a1_block_sk(x, wgt, dsw, ws_out, sa_l1, sb_l1, a_l1, b_nz, b_zn, l0a, l0b,
     same ``fl(band0 + band1)`` (compensation starts at 0), keeping the summation
     order inside the FP64-adjudicated byte gate.
     """
+    # Tail tile: the NZ L1 X window is loaded with rows_full rows, so the L0A
+    # move must be narrowed to match (rounded up to the 16-row NZ fractal, as
+    # indexer_prologue_qw does).  Moving a full [BASE_M,K0] window instead
+    # corrupts the WHOLE tail tile, not just the unloaded rows: measured on
+    # DAV_3510, only output columns [0,16) of each BN_A block stayed correct
+    # and the rest became NaN/~FLT_MAX whenever roundup16(rows_full) < BASE_M.
+    rows_r = (rows_full + 15) // 16 * 16
     sb = sb_l1[0]
     pl.set_validshape(sb, [SQ_ALL_A, BN_A])
     pl.load(sb, dsw, [c0, 0, 0], order=[1, 0])
@@ -707,7 +728,7 @@ def _a1_block_sk(x, wgt, dsw, ws_out, sa_l1, sb_l1, a_l1, b_nz, b_zn, l0a, l0b,
         pl.set_validshape(wqn, [BN_A, K0])
         pl.load(wqn, wgt, [c0, kk * K0])
         la = l0a.next()
-        pl.set_validshape(la, [BASE_M, K0])
+        pl.set_validshape(la, [rows_r, K0])
         pl.move(la, xa)
         lb = l0b.next()
         pl.move(lb, b_zn.next())
