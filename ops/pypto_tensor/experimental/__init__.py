@@ -15,12 +15,9 @@ PyPTO 实验性算子目录
 本目录收录处于开发阶段的实验性算子实现，按类别组织在以下子目录中：
 
 子类别：
-- attention/: 注意力机制实验算子 (BSA/BWD/FWD, Chunked GDR, Incre Flash Attention GQA/MLA, PFA Flash Attention)
-- distributed/: 分布式计算实验算子 (config, swimlane analyzer)
-- matmul/: 矩阵乘法实验算子 (GMM, MHC, Quant Batch Matmul, Transpose Quant Batch Matmul)
+- matmul/: 矩阵乘法实验算子 (MXFP8 GMM)
 - ops_transformer/: Transformer 结构实验算子 (Flash Attention MHA/Grad/Score,
   Fused SwiGLU, Lightning Indexer, MLA Prolog, Page Attention, Sparse Attention)
-- vector/: 向量运算实验算子 (AdamW, RMSProp, AvgPool, BN, RMSNorm, RoPE, Scatter/Gather, MoE)
 
 注意：
 - 实验性算子默认不参与 CI 测试 (pytest.ini 中 norecursedirs 自动排除)

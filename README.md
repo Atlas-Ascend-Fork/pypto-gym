@@ -270,13 +270,11 @@ pypto-gym/
 | `qwen3_next/` | gated_delta_rule | Chunk Gated Delta Rule，线性复杂度 O(n)，支持 1K-1M+ 序列长度（覆盖 Qwen3.5-9B / Qwen3.6-27B 场景） |
 | `qwen3_vl_8b_instruct_unredacted_max/` | rms_norm | RMSNorm（hidden_size=2048） |
 | `spatial_ssrl_3b/` | rms_norm, rope | RMSNorm + RoPE（Vision 2D / 多模态 3D） |
-| `experimental/attention/` | BSA, chunked_gdr, incre_flash_attention_gqa_antiquant, incre_flash_attention_mla, incre_flash_attention, pfa_flash_attention | BSA、Chunk GDR、增量 Flash Attention（GQA/MLA）、PFA Flash Attention 等算子 |
-| `experimental/matmul/` | gmm_mxfp8, grouped_matmul_finalize_routing, grouped_matmul_swiglu_quant, quant_batch_matmul, quant_grouped_matmul_inplace_add, quant_matmul_reduce_sum, transpose_quant_batch_matmul | MXFP8 GMM、量化分组矩阵乘、量化批量矩阵乘、转置量化矩阵乘等算子 |
+| `experimental/matmul/` | gmm_mxfp8 | MXFP8 GMM 算子 |
 | `experimental/ops_transformer/` | flash_attention_mha, flash_attention_mha_grad, flash_attention_score, flash_attention_score_grad, fused_swiglu, fused_swiglu_grad, lightning_indexer, mla_prolog, mla_prolog_mxfp_quant_v3, mla_prolog_quant_hifp8_v3, page_attention_quant, sparse_attention_antiquant_fp8, sparse_attention_antiquant_kv_split, sparse_attention_grad_tnd, sparse_attention_tnd, attention_worker_combine, engram, flash_attention_fp8, kimi_attention_residuals | Flash Attention（MHA/Score/FP8，含量化/反向）、MLA Prolog（含量化）、SwiGLU、Page Attention、稀疏注意力、Engram、Kimi Attention Residuals 等算子 |
 | `pypto_pro/deepseek_v4_1/` | engram_gate, indexer_prologue_k, indexer_prologue_qw | DeepSeek V4.1 IFA Pro 算子（PyPTO Pro DSL） |
 | `pypto_pro/llada2/` | liger_cross_entropy_loss | Liger Cross Entropy Loss（Pro 实现） |
 | `pypto_pro/experimental/ops_transformer/` | engram, kda 系列 | 实验性 Pro 算子（Engram、KDA 等） |
-| `experimental/vector/` | ApplyAdamWV2, GatherPaKvCache, QkvRmsNormRopeCache, ApplyRMSProp, BNTrainingReduce, InplaceAddRmsNorm, InterleaveRope, moe_gating_topk 等 | AdamW / RMSProp 更新、Paged Attention KV cache gather、QKV RMSNorm RoPE cache 融合、RMSNorm、RoPE、MoE 门控等算子 |
 
 ## 添加新算子
 
