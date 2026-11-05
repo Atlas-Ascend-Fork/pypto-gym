@@ -17,7 +17,8 @@ okf_version: "0.2"
 - PIPE：`pipe/`，7 张，`pipe-01` 至 `pipe-07`
 - SCALAR：`scalar/`，3 张，`scalar-01` 至 `scalar-03`
 - 同步：`sync/`，1 张，`sync-01`
-- 算法等价改写：`algo/`，1 张，`algo-01`
+- 算法等价改写：`algo/`，2 张，`algo-01` 至 `algo-02`
+- 递推结构：`recurrence/`，3 张，`recurrence-01` 至 `recurrence-03`
 
 结构受限算子的四类结构维度（操作数数值类型、片上驻留、工作分解、计算图等价改写）
 逐项对应 `cube-09`、`mem-06`、`pipe-06`、`algo-01`；判定与触发条件见
@@ -79,6 +80,10 @@ okf_version: "0.2"
 | `scalar-02` | [热循环查表与守卫的 load-store 减载](scalar/scalar-02-lut-guard-load-shed.md) | `stable` | `SCALARLDST、SCALAR` | 热循环内存在 getval 结果再作为下一个 getval 偏移的链式查表，或每轮读取 state 类守卫标量；表项 launch 后不变且表很小，守卫条件首轮后恒成立 | 仅限 Ascend 950PR 或 950DT；须核验 pl.getval/pl.setval 动态偏移与运行期标量分支 |
 | `scalar-03` | [小 tile 固定开销与粒度修正](scalar/scalar-03-small-tile-granularity.md) | `stable` | `SCALAR` | 总计算量小或 shape 小，块数远大于每块工作量（如行块高取 1~2）；scalar 占比高、发射率低，热点在逐块固定标量开销而非数据搬运或计算本身 | 仅限已核验 pl.make_tile_group/TileType、pl.range、pl.min、pl.set_validshape 的 Ascend 950PR 或 950DT 工具链 |
 | `algo-01` | [门控 / 超越函数加权收缩的等价改写（逐元素实现改为 cube GEMM）](algo/algo-01-reformulate-transcendental-contraction.md) | `stable` | `VEC、MAC、MTE2` | 关键路径存在门控或超越函数加权的 (查询 × 键) 型收缩，当前以 Vector 逐元素实现、呈 VEC 或依赖受限；权重可按差值分解为行项与列项之积，且存在参考点使指数中间量落在可表示范围内 | 依赖已核验的 exp、逐元素乘、转置与 cube matmul 及其 dtype 组合；分解数值范围须按目标版本核验 |
+| `algo-02` | [分块三角求逆](algo/algo-02-block-triangular-inverse.md) | `stable` | `VEC、SCALAR、MAC、FIXPIPE` | 单位下三角求逆由逐行依赖主导，叶子可独立稳定求解，跨块合并及操作数舍入满足原精度合同 | 核验矩阵乘、累加精度、布局、结果转操作数及跨引擎可见性；不依赖特定扩展 API |
+| `recurrence-01` | [长仿射递推分段](recurrence/recurrence-01-affine-state-segmentation.md) | `stable` | `PIPELINE、MAC` | 天然独立链远少于核数，状态转移及观测可按入口状态作仿射分解，收益覆盖摘要与恢复成本 | 核验映射运算、状态精度、工作区及跨任务发布/消费；遵守项目 launch 合同 |
+| `recurrence-02` | [独立逻辑块打包](recurrence/recurrence-02-pack-logical-chunks.md) | `stable` | `VEC、MTE2、PIPELINE` | 小逻辑块的局部预处理独立，批处理摊销固定开销且容量允许，后续依赖仍按逻辑边界处理 | 核验分段归约/prefix、关系矩阵 mask、切片、physical/valid shape、容量与同步 |
+| `recurrence-03` | [窄精度副本精确全零时跳过对应矩阵乘](recurrence/recurrence-03-exact-zero-rounded-map.md) | `stable` | `MAC、PIPELINE` | 实际窄操作数全零，其他操作数及累加输入有限，原数值合同允许跳过矩阵乘且宽精度路径保留 | 核验完整判定、分片 flag 合并、跨任务可见性及分支写入；不得阈值剪枝或忽略特殊值语义 |
 | `sync-01` | [核间同步选型：全局屏障与核间事件的成本模型](sync/sync-01-barrier-vs-event-cost-model.md) | `stable` | `PIPELINE、SCALAR` | 循环体内每轮存在跨核生产/消费依赖，当前使用全局屏障，且屏障总成本或全局锁步等待在总耗时中占比高 | 仅限 Ascend 950PR 或 950DT；依赖 set_cross_core/wait_cross_core 与 CrossCoreSyncMode.INTRA_BLOCK，须核验事件 ID 与屏障占用 ID 不冲突 |
 
 ## ID 与状态规则

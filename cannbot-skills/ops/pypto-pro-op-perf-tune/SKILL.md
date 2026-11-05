@@ -17,6 +17,10 @@ description: 为已有 PyPTO-Pro 实现保留性能采集、证据归档与候�
 
 性能分析可参考 `$CANNBOT_CONFIG_ROOT/references/kernel-core-principles.md` 与 `kernel-perf-pypto-pro-a5.md`。按 `B4` 优先定位关键路径，用匹配设备、工作负载与测量口径的实测校准估计（`M5`）；`G1`–`G6` 仅作诊断参考，按观测瓶颈选择检查项，不作为验收或停止调优的依据。
 
+诊断既有多 launch 调用、输入预处理迁移或 mean/p50/p90 比较时，读取
+[完整调用测量](references/complete-call-measurement.md)。按一次完整调用实际触发的 kernel/launch
+集合归属和统计；正式 compare 仍使用证据协议规定的单 target launch。
+
 ## 1. 目标与边界
 
 保持外部功能合同和下列实现约束不变，找全、落实并关闭全部优化项；冻结 baseline
