@@ -36,7 +36,7 @@ target_api_gate: "仅限 Ascend 950PR 或 950DT；依赖 pl.get_block_idx/pl.get
 ## 怎么改（before / after）
 
 以下为结构嵌入片段，展示映射方式改动；所用 `pl.*` 形态（`pl.get_block_idx`/`pl.get_block_num`、
-`pl.range` 步幅遍历、`pl.min`）取自本仓已上板 kernel 与 KB 官方样例的已核验用法。片段是教学级
+`pl.range` 步幅遍历、`pl.min`）来自历史结构片段，不能继承为当前目标的完整验收。片段是教学级
 最小示意：例题设定 `nc` 个相互独立的工作项（如 chunk），每项再分 `n_bh` 个头/分片，
 `n_tasks = nc * n_bh`；`process_item` 代表按 `(c, bh)` 解码并处理一个工作项。维度解码、
 任务均分与边界守卫须按当前 kernel 核验后嵌入。
@@ -82,4 +82,4 @@ with pl.section_cube():
 
 ## 参考资料
 
-- PyPTO-Pro KB：`patterns/batched-2d-contraction.md`（批维在 kernel 内折叠）。
+- [当前 GEMM grid/worker mapping](../../../../pypto-pro-kernel/references/api/gemm.md#count-the-complete-output-grid-before-assigning-workers) 与 [batch-row folding](../../../../pypto-pro-kernel/references/api/gemm.md#fold-shared-rhs-batch-rows-when-their-physical-mapping-permits-it)：折叠前先证明原坐标与物理连续性。

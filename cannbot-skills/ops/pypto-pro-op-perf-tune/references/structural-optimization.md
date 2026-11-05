@@ -44,8 +44,7 @@ tags: ["pypto-pro", "performance", "structural", "redesign", "prior-art"]
 ## 3. 结构维度判定与关闭
 
 按顺序逐维度给出“当前取值 → 候选取值 → 精度/合规影响 → 预期收益”，作为账本 `structural` 条目。
-候选涉及精度或 kernel 契约时，先按主 Skill §2 的**约束分栏审计**区分验收硬门与自述约束：只有验收
-硬门为冻结边界；被自述约束阻断的候选须作为合同变更候选提交用户，不得据此关闭维度。
+候选涉及精度或 kernel 契约时，按主 Skill §2 追溯约束来源：合同内的实现选择进入受控实验；改变明确任务要求须先获用户确认。保留未获许可的原要求与候选限制，不把它误报为目标能力缺失。
 
 | 维度 | 判定内容 |
 |---|---|
@@ -93,4 +92,4 @@ T_lb ≈ 总计算量 / (AI Core 数 × 单核峰值 × 目标效率)
 - 来源 id：`structural`，位于主 Skill §3.5，先于 `bottleneck_derived` 闭合；
 - §2 的最佳已知结构实现与 §3 的每个维度各形成一个原子项，按受控闭环执行；
 - 维度候选涉及精度或契约时，按 [Design Skill](../../pypto-pro-op-design/SKILL.md) 与
-  [KB 合同](../../pypto-pro-op-kb/CONTRACT.md) 同步最终事实记录。
+  [当前优化纪律](../../pypto-pro-kernel/references/workflows/optimization.md#change-discipline) 同步 DESIGN 中真实来源、适用条件、不变量与最终验证证据。

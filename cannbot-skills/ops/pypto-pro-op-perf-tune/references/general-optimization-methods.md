@@ -1,7 +1,6 @@
 # 通用优化手段
 
-本页汇总历史性能调优材料中经逐行对照当前 `pypto-pro-op-kb` 后仍未被完整覆盖的独特优化
-增量。它是性能调优的一个独立预置优化项来源，不属于知识卡片库，也不替代已选 KB 合同。
+本页保留历史调优材料中的候选动作与实验索引，不宣称这些动作尚未被当前工作流覆盖。技术合法性统一由 [pypto-pro-kernel](../../pypto-pro-kernel/SKILL.md) 及任务合同决定；采用前与当前已落实机制去重，并保留每项适用性与真实实验结论。
 
 执行者必须逐行枚举下表中 `lifecycle=active && optimization_eligible=yes` 的 item，并使用
 `source_kind=general_method` 登记。明确不适用时以 hard-gate 证据关闭；可能适用或现有证据
@@ -57,10 +56,7 @@ playbook 以 `quick_not_promoted` 和 quick 原始证据关闭。
 - **关闭证据**：完整覆盖单拍、多拍、槽位回绕、aligned/tail；同时记录代码/生成物 live-range、
   容量变化、formal compare，以及同一 target task、同一 lane 上可映射到相邻 work item 的
   timeline。
-- **KB 边界**：[buffer-reuse-lifetime.md](../../pypto-pro-op-kb/patterns/buffer-reuse-lifetime.md)
-  已规定角色生命周期、轮转槽和别名正确性；本项只保留“合法别名仍可能因 fold 长生命周期
-  破坏流水”的性能增量。
-
+- **当前 owner**：[allocation/lifetimes](../../pypto-pro-kernel/references/api/memory-allocation.md) 负责角色、槽位和别名正确性；本项比较长期 fold 状态是否阻碍下一输入槽的复用。
 <a id="general-02"></a>
 ### `general-02`：按 `value_range` 门控重关联
 
@@ -73,9 +69,7 @@ playbook 以 `quick_not_promoted` 和 quick 原始证据关闭。
 - **关闭证据**：逐个可达 range class 验证边界值、特殊值、随机值和全部 P0，记录值域合同、
   误差统计、依赖层数与 formal compare；NaN/Inf、signed zero、溢出/下溢和 tie 语义按 SPEC
   覆盖。
-- **KB 边界**：[precision.md](../../pypto-pro-op-kb/constraints/precision.md) 已规定精度合同；
-  本项只保留“重关联快路必须由 value range 而非 shape tier 门控”的优化决策。
-
+- **当前 owner**：[numerical contracts](../../pypto-pro-kernel/references/api/numerics.md) 负责精度与中间范围；本项的快路仍须由合法值域而非观测 shape tier 证明。
 <a id="general-03"></a>
 ### `general-03`：TopK 截断与分层树形归并
 
@@ -87,9 +81,7 @@ playbook 以 `quick_not_promoted` 和 quick 原始证据关闭。
   不适用。结构中的 `local_topk`、`merge` 只是算法描述，不是 PyPTO-Pro API。
 - **关闭证据**：记录候选数、比较/归并层数、中间存储和字节；完整覆盖 K=1、K 接近 N、尾块、
   全相等、边界 tie、NaN/Inf、signed zero，并分别回归升序与降序，再做同协议 formal compare。
-- **KB 边界**：当前 KB 没有通用 TopK 截断合同；scan 类 pattern 不能证明 TopK 截断与
-  tie-break。
-
+- **当前 owner**：[ordered selection](../../pypto-pro-kernel/references/patterns/ordered-selection.md) 负责局部 TopK 保留证明、完整比较序与验证；不能用 scan 的正确性替代截断证明。
 <a id="general-04"></a>
 ### `general-04`：有限精确域的 histogram / threshold 替代
 
@@ -102,9 +94,7 @@ playbook 以 `quick_not_promoted` 和 quick 原始证据关闭。
   也不得假设存在任意索引原子加法或 histogram API。
 - **关闭证据**：记录 N、域大小、counter dtype/容量、初始化与归并成本；覆盖域边界、极端偏斜、
   最大计数、tail、重复 threshold 和完整输出语义，并与精确 Golden 和 formal compare 闭环。
-- **KB 边界**：当前 KB 没有通用有限域 histogram/threshold pattern；精度、owner、同步和 tail
-  约束仍分别有效。
-
+- **当前 owner**：[VF histogram semantics](../../pypto-pro-kernel/references/api/vf.md#34-histograms-accumulate-is-global-accumulation-bin_type-only-selects-a-window) 与 [outer reduction](../../pypto-pro-kernel/references/patterns/vf-outer-reduce.md) 负责具体接口和累计 owner；有限域与稳定输出仍须本任务证明。
 <a id="general-05"></a>
 ### `general-05`：删除不会被消费的 candidate 链
 
@@ -116,9 +106,7 @@ playbook 以 `quick_not_promoted` 和 quick 原始证据关闭。
   padding、安全地址时不能删。当前 case 未命中不是不可达证明。
 - **关闭证据**：覆盖所有公共合同路径和边界，确认生成物中的整条生产链、字节和 live range
   实际消失，再做完整正确性与 formal compare。
-- **KB 边界**：当前 KB 没有通用 dead-candidate 性能 pattern；已选 precision/tail/owner 合同
-  仍决定 sentinel、fallback 与可达路径。
-
+- **当前 owner**：[optimization change discipline](../../pypto-pro-kernel/references/workflows/optimization.md#change-discipline) 与任务数值/有效域决定哪些链确实不可观察；当前 case 没消费不能证明 dead。
 <a id="general-06"></a>
 ### `general-06`：跳过无效 lane 的非必要工作
 
@@ -131,9 +119,7 @@ playbook 以 `quick_not_promoted` 和 quick 原始证据关闭。
   大于节省时拒绝。不能少处理合法元素或只在最终 store 裁剪。
 - **关闭证据**：覆盖 valid=0（若合法）、1、VL−1、VL、VL+1、最大 tail、aligned 与多 tile；
   由生成物/实测证明指令或搬运确实减少，并完成 formal compare。
-- **KB 边界**：[tail-validshape.md](../../pypto-pro-op-kb/constraints/tail-validshape.md) 已定义正确
-  有效域；本项只保留满足该合同后继续删除无效 lane 下游工作的性能增量。
-
+- **当前 owner**：[data movement](../../pypto-pro-kernel/references/api/datamove.md) 和 [VF gather](../../pypto-pro-kernel/references/api/vf.md#31-gather-has-two-forms-out-of-bounds-behavior-is-defined-for-only-one) 负责实际读写范围；结果 mask 不能修复已发出的非法读取。
 <a id="general-07"></a>
 ### `general-07`：合并语义等价的重复工作
 
@@ -145,9 +131,7 @@ playbook 以 `quick_not_promoted` 和 quick 原始证据关闭。
   实施。不得合并随机状态、owner-local 状态、可变 descriptor 或不同 tail mask。
 - **关闭证据**：记录删除的 pass、指令、descriptor、字节及共享 live range；覆盖所有消费者和
   tail/dtype/layout 边界，生成物确认重复链减少，再做 formal compare。
-- **KB 边界**：KB 有若干 mask、gather 中间项、TileGroup/Cube operand 等特定复用实例；本项只
-  保留跨形态的“先证明完全等价，再共享具体重复生产链”的通用增量。
-
+- **当前 owner**：[allocation/lifetimes](../../pypto-pro-kernel/references/api/memory-allocation.md) 负责共享的物理合法性；本项仍须逐字段证明两条生产链完全等价。
 <a id="general-08"></a>
 ### `general-08`：`block_dim / owner / tail` 联合调优
 
@@ -160,10 +144,7 @@ playbook 以 `quick_not_promoted` 和 quick 原始证据关闭。
   shape 元数据计算 launch 参数。不得破坏 barrier 参与者、subblock 映射或公共边界。
 - **关闭证据**：逐候选记录实际 launched blocks、每核 work/bytes/descriptor、最慢核、离散度和
   tail；覆盖 task 数小于/等于/大于 block 数及不能整除的边界，任一 P0 不能被 geomean 掩盖。
-- **KB 边界**：[pypto-pro-launch-block-dim.md](../../pypto-pro-op-kb/references/pypto-pro-launch-block-dim.md)
-  已提供版本事实、安全门和单变量核数验证；本项只保留 blocks/owner/tail 三者联合作为一个
-  性能候选的增量。
-
+- **当前 owner**：[launch and group semantics](../../pypto-pro-kernel/references/api/support.md) 及 [work distribution](../../pypto-pro-kernel/references/diagnostics/performance.md#read-work-distribution-before-pipe-ratios) 负责实际参与者；blocks/owner/tail 联合候选不能改变数据覆盖。
 <a id="general-09"></a>
 ### `general-09`：提升热循环中的恒定分支
 
@@ -175,9 +156,7 @@ playbook 以 `quick_not_promoted` 和 quick 原始证据关闭。
   Tensor，或删除未证明 class 的 fallback。专门化数量必须有界。
 - **关闭证据**：覆盖每个 mode、分类边界、owner/stage、tail 和全部 P0；记录 branch/setup、
   Scalar/control、代码体积、资源压力和 formal compare。
-- **KB 边界**：wrapper、shape、owner 与 TilingKey 资料提供合法 dispatch 门；本项只保留把当前
-  已证明恒定的热循环分支提升到外层的通用性能动作。
-
+- **当前 owner**：[generalization/specialization](../../pypto-pro-kernel/references/workflows/authoring.md#generalization-and-specialization) 与 [VF loop form](../../pypto-pro-kernel/references/api/vf.md#keep-runtime-dispatch-out-of-vf-loops) 负责合法 dispatch 和实际 lowering；本项只外提已证明不变的条件。
 <a id="general-10"></a>
 ### `general-10`：提升一般循环不变量 setup
 
@@ -189,9 +168,7 @@ playbook 以 `quick_not_promoted` 和 quick 原始证据关闭。
   单位、layout、异步消费和 API 生命周期，且不能因 live range 扩大引发 spill/容量/流水退化。
 - **关闭证据**：覆盖 shape/axis/dtype、首尾 item、owner 边界、tail 与槽位回绕；用生成物证明
   setup 真正移出循环，并记录 Scalar/SCALARLDST、descriptor、资源和 formal compare。
-- **KB 边界**：KB 已覆盖 full-mask、部分地址/TileGroup 等具体提升实例；本项不重复这些动作，
-  只保留其它经逐字段证明的一般 shape/axis/base/stride/descriptor 不变量提升。
-
+- **当前 owner**：[VF masks](../../pypto-pro-kernel/references/api/vf.md#repeated-runtime-masks-in-vf-loops) 和当前 API 负责具体外提条件；一般 setup 仍须逐字段证明单位、有效期与消费者范围。
 <a id="general-11"></a>
 ### `general-11`：删除没有消费者的同步边
 
@@ -204,10 +181,7 @@ playbook 以 `quick_not_promoted` 和 quick 原始证据关闭。
 - **关闭证据**：逐边记录原同步、消费者证明、生成物位置和 ablation diff；覆盖单拍、多拍、槽位
   回绕、aligned/tail，检查 wait、同-lane overlap、错误/超时与 formal compare。出现 hang、stale
   value 或设备告警立即恢复。
-- **KB 边界**：[sync-stitch.md](../../pypto-pro-op-kb/constraints/sync-stitch.md) 已规定同步正确性和
-  受管理依赖边；本项只保留“证明无消费者后逐边删除”的独特性能动作，不重复删除已被
-  auto-managed dependency 覆盖的通用指导。
-
+- **当前 owner**：[cross-core dependencies](../../pypto-pro-kernel/references/api/crosscore-sync.md) 与 [same-VF dependencies](../../pypto-pro-kernel/references/api/vf.md#212-multiple-memory-accesses-to-the-same-tile-inside-vf-have-no-ordering-guarantee) 负责同步合法性；本项只删除确实无消费者的边。
 <a id="general-12"></a>
 ### `general-12`：一个 task 批处理多个独立 work item
 
@@ -223,10 +197,7 @@ playbook 以 `quick_not_promoted` 和 quick 原始证据关闭。
 - **关闭证据**：扫描少量有依据的批大小，记录 task/descriptor/VF setup 数、每 task 工作量、
   逐核负载、最慢核、容量与 formal compare；覆盖 item 数小于、等于、大于批大小，不能整除、
   单 item、最大 tail、dtype/layout 和 owner 边界，并证明每个逻辑 item 恰好处理一次。
-- **KB 边界**：[vec-row-reduce-broadcast.md](../../pypto-pro-op-kb/patterns/vec-row-reduce-broadcast.md)
-  已给出独立行归约的批行模式；本项不复制该特定 pattern，只保留可跨拓扑验证的通用
-  independent work-item/task batching 增量。
-
+- **当前 owner**：[row batching](../../pypto-pro-kernel/references/patterns/vf-row-reduce.md#batch-independent-rows-even-when-each-row-fits) 已包含独立行模式；其它 work-item batching 也须证明 metadata、owner、tail 和完整调用成本。
 <a id="general-13"></a>
 ### `general-13`：增大单个逻辑 item 的合法 Tile/strip
 
@@ -241,11 +212,7 @@ playbook 以 `quick_not_promoted` 和 quick 原始证据关闭。
 - **关闭证据**：记录 tile/setup/descriptor/sync 次数、每拍字节、容量/slot/寄存器、逐核工作和
   formal compare；覆盖小于一 tile、恰好一 tile、多个整 tile、余数 1、最大余数、槽位回绕和
   全部 P0。结构变化使历史参数判断失效时，重开受影响候选。
-- **KB 边界**：[pypto-pro-framework-findings.md](../../pypto-pro-op-kb/references/pypto-pro-framework-findings.md)
-  已覆盖“DMA 太窄时加宽 column tile”的具体方法，[tiling.md](../../pypto-pro-op-kb/constraints/tiling.md)
-  规定合法性门；本项不复制窄 DMA 指导，只保留由 descriptor/mask/VF/Cube setup、轮转或同步
-  固定成本主导时，减少单 item tile 数以摊薄固定成本的独特增量。
-
+- **当前 owner**：[transfer/register blocks](../../pypto-pro-kernel/references/patterns/vf-outer-reduce.md#choose-transfer-and-register-blocks-separately) 与 [resource planning](../../pypto-pro-kernel/references/api/memory-allocation.md) 负责合法粒度；不要把历史 DMA 膝点变成固定 strip 规则。
 <a id="general-15"></a>
 ### `general-15`：消除数据并行路径的 Scalar 往返与循环
 
@@ -257,9 +224,7 @@ playbook 以 `quick_not_promoted` 和 quick 原始证据关闭。
   适用时遵守 `general-02`、`general-16` 的边界；存在真实串行依赖、目标 API 不支持，或额外
   cast/workspace/sync 抵消收益时不实施。覆盖全部 P0 和 tail，用生成物证明往返/循环消失，并记录
   Scalar、Vector 与 formal compare。
-- **KB 边界**：[vec.md](../../pypto-pro-op-kb/constraints/vec.md)负责合法实现 surface；本项只保留
-  “消除本可并行的数据路径中的 Scalar 往返”这一通用性能动作。
-
+- **当前 owner**：[current authoring policy](../../pypto-pro-kernel/SKILL.md#constraints-and-workspace-policy) 规定合法计算 surface；数据并行改写须使用实际存在的 VF/SIMT/Cube 路径。
 <a id="general-16"></a>
 ### `general-16`：静态化有界小控制与归约拓扑
 
@@ -269,10 +234,7 @@ playbook 以 `quick_not_promoted` 和 quick 原始证据关闭。
   静态结构；数学工作量、owner 与输出语义不变。
 - **边界与证据**：动态范围、代码体积、寄存器/片上容量或浮点次序风险不能被证明时不实施。记录
   依赖深度、生成物、spill/容量、精度边界和 formal compare。
-- **KB 边界**：[precision.md](../../pypto-pro-op-kb/constraints/precision.md)的 deep-K 累加和
-  [fixed-arity pattern](../../pypto-pro-op-kb/patterns/vec-tensorlist-fixed-arity.md)优先；本项只覆盖
-  未被已选 KB 完整规定的通用控制/归约拓扑。
-
+- **当前 owner**：[accumulation hierarchy](../../pypto-pro-kernel/references/api/numerics.md#3-centering-and-accumulation-order) 与 [bounded collection ABI](../../pypto-pro-kernel/references/api/support.md#16-bounded-tensor-collections-under-a-fixed-arity-interface) 负责各自前提；有界不等于应当全部展开。
 <a id="general-17"></a>
 ### `general-17`：按消费者所需域缩小计算范围
 
@@ -282,29 +244,25 @@ playbook 以 `quick_not_promoted` 和 quick 原始证据关闭。
   与 tail 语义。
 - **边界与证据**：不得从样本推断合法域；TopK、dead candidate、无效 lane 和重复生产链分别归
   `general-03/05/06/07`。记录等价证明、工作量/字节变化、边界正确性与 formal compare。
-- **KB 边界**：已选 scan/sort/reduction pattern 的完整语义优先；本项不复制其具体算法或 API。
-
+- **当前 owner**：[coupled lane state](../../pypto-pro-kernel/references/api/vf.md#grouped-state-and-boundaries-in-lane-exchange) 与 [ordered selection](../../pypto-pro-kernel/references/patterns/ordered-selection.md) 负责完整语义；消费者域缩减须另给等价证明。
 <a id="general-18"></a>
 ### `general-18`：按已证明值域窄化内部表示
 
 - **适用**：内部 key、index 或 value 的完整可达范围可由冻结合同或允许的 host metadata 证明，且
   当前宽度造成可测的 Scalar、Vector、寄存器或搬运成本。
 - **动作**：只把内部表示改为目标 API 支持的最窄安全宽度；公开输入输出 dtype 与数值合同不变。
-- **边界与证据**：不得扫描 Tensor、按样本缩窄或绕过溢出/精度门；已选 KB 的具体位宽规则优先。
+- **边界与证据**：不得扫描 Tensor、按样本缩窄或绕过溢出/精度门；实际索引 API 和数值合同的位宽约束优先。
   覆盖范围边界和特殊值，核对生成物、容量/字节、正确性及 formal compare。
-- **KB 边界**：gather/scatter 与 precision 页面已有的具体宽度要求不在本项重复。
-
+- **当前 owner**：[indexed-address bounds](../../pypto-pro-kernel/references/patterns/indexed-gather.md) 与 [numerics](../../pypto-pro-kernel/references/api/numerics.md) 决定最窄合法表示；不把整数位宽推断当作 bit packing 许可。
 <a id="general-19"></a>
 ### `general-19`：消除非合同边界的中间落盘与回读
 
 - **适用**：仍被消费的中间值先写 GM 或额外 UB staging 再读回，但 producer/consumer 的 live range、
   dtype、owner、同步与容量证明允许直接衔接或合法片上驻留。
 - **动作**：删除该非必要 store/load 或 staging copy，保持数据流、精度和公开边界不变。
-- **边界与证据**：公开输出、已选 precision 要求的 GM 中间、合法 fusion/engine 边界、容量或同步
+- **边界与证据**：公开输出、数值合同要求保留的中间舍入/存储、合法 fusion/engine 边界、容量或同步
   不允许时不得删除。记录 live-range/DAG、实际字节和指令、timeline、完整正确性与 formal compare。
-- **KB 边界**：本项不替代 memory-layout、sync、tiling 和 wrapper 合同，也不重复
-  `general-05` 的 dead chain 或 `general-07` 的重复生产链。
-
+- **当前 owner**：[dependent-phase residency](../../pypto-pro-kernel/references/patterns/vf-row-reduce.md#choose-where-dependent-phases-share-state) 与 [Host boundary](../../pypto-pro-kernel/references/workflows/delivery.md#host-wrapper-boundary) 负责阶段边界；本项不重复 dead chain 或重复生产链。
 ## 使用边界
 
 - 索引中的 active item 都是待验证候选，不是无条件代码要求；逐项评估并按

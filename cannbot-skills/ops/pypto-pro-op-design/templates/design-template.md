@@ -7,11 +7,13 @@
 
 ---
 
-## Knowledge Bindings
+## 任务设计依据
 
-> 完整、机器可读的 requirement 清单保存在生成后与本文同目录的 `DESIGN_BINDINGS.json`。
-> 本文只记录 R0–R8 的实际设计决策；每条活动 requirement 的 `planned_location` 必须准确指向
-> 对应决策及最终 `test_<op>.py` file/symbol，不复制 Binding 分组或 requirement 表格。
+在对应 R0–R8 决策旁填写下列信息；可用此紧凑表汇总，不另建知识选择或使用 JSON。来源按当前 `pypto-pro-kernel` owner 定位，概念候选与历史验证保留各自最窄范围。
+
+| 来源路径与章节 | 当前适用事实/条件 | 具体 invariant | 设计与计划实现位置 | 验证方法与所需输入 |
+|---|---|---|---|---|
+| {真实 owner/source} | {shape/dtype/target/layout 等事实} | {可核验的任务条件} | {本 DESIGN 决策 + 最终 file/symbol} | {静态/CPU/设备检查，未执行则明确标注} |
 
 ---
 
@@ -26,7 +28,7 @@
 
 | SPEC 输入 shape | kernel 接收 | kernel 内索引/stride 映射 | 输出形态 |
 |-----------------|-------------|---------------------------|----------|
-| {如 1D [L]} | {原始 [L]} | {直接按 L 索引，不做 host reshape} | {SPEC 要求形态} |
+| {如 1D [L]} | {原始 [L]} | {按真实 stride/offset 索引} | {SPEC 要求形态} |
 | {2D [M,N]} | {原始 [M,N]} | {按原始 stride/offset 访问} | {SPEC 要求形态} |
 
 ### Wrapper 边界外操作
@@ -68,10 +70,10 @@
 > ```
 > vector_selection:
 >   step:                  <本 §1 中的哪一步>
->   implementation:        vf | tile_op
+>   implementation:        vf | tile_sort
 >   api_sequence:          <vf.* 或 pl.* API 序列>
->   decision_reason:       default_vf | kb_template_required
->   kb_template_evidence:  <default_vf 写 n/a；tile_op 写已选 KB 路径、明确要求的原文/片段>
+>   decision_reason:       current_authoring_policy
+>   source_evidence:       <当前 owner 路径、目标 API 原文及排序例外的适用条件>
 >   target_version:        <目标软件/框架版本>
 >   applicable_conditions: <dtype/shape/layout/算子条件>
 > ```
@@ -167,9 +169,9 @@ SCALE = 1.0 / sqrt({D_logical})  # 缩放因子（若算子有 scale 步骤）
 
 ### 分配方式选择
 
-> **性能强制**：所有需要 buffer 切换/轮转的 tile 一律用 `make_tile_group` + `auto_mutex`；`make_tile` 仅限单次使用 scratch tile（不参与 buffer 轮转）。禁止用 `make_tile` + 手动 `sync_src`/`sync_dst` 管理 buffer 轮转。
+> 按 [当前 allocation/lifetimes owner](../../pypto-pro-kernel/references/api/memory-allocation.md) 记录实际角色、槽位、地址和访问依赖；本模板不增加“单 Tile 只能单次 scratch”的约束。
 
-- **方案**: make_tile_group + auto_mutex（TileGroup提供多槽buffer，通过`next()`或显式下标选择槽位；auto_mutex根据mutex信息管理core内跨Pipe依赖）；若有单次使用 scratch tile 用 make_tile
+- **方案**: {常驻/轮转/scratch 各角色的实际分配方式；TileGroup 槽位选择及 auto_mutex 覆盖的真实跨 Pipe 访问，不覆盖的依赖单独说明}
 - **依据算子**: {EXPLORE_REPORT §4 定位的最相似官方指定算子路径}
 - **理由**: {基于 R0 Module 划分，说明槽位选择方式，以及auto_mutex如何覆盖本算子的core内跨Pipe依赖}
 
@@ -231,9 +233,9 @@ SCALE = 1.0 / sqrt({D_logical})  # 缩放因子（若算子有 scale 步骤）
 ### 分核方式
 
 - **方案**: strided loop —— {扁平切 `pl.range(core_id, m_tiles*n_tiles, num_cores)` / 二维切 外 `range(core_id, m_tiles, num_cores)`+内 `range(0, n_tiles, 1)`} + {选择理由}
-- **host 侧 block_dim**: {仅Vector Kernel使用`vector_core_num`，Cube或混合Kernel使用`core_num`}；`total_tasks > 0` 时 `block_dim = min(max_blocks, total_tasks)`；`total_tasks = 0` 时仅允许经目标验证的 `block_dim=1` 空工作单次启动，否则报 `design_violation`，禁止 `block_dim=0` 或跳过启动
-- **交付 launch 合同**: 恰好 1 次；唯一 kernel `{kernel_symbol}` 由 `{wrapper_symbol}` 在 host 循环外调用一次；若做不到，记录证据并返回 `failure_category: design_violation`，不得填写多 launch fallback
-- **TensorList ABI（不涉及则填 N/A）**: {冻结合同中的有限 `L_MAX` 及 `B_MAX=L_MAX`；多个 TensorList 形参间的长度关系；每槽有限元素数上限 `N_MAX` 对所有 `DT_INT32` 派生式的安全性；只生成一组 `B_MAX` 个固定槽位，每个 TensorList 形参逐槽展开为独立 Ptr 参数；wrapper 对真实槽位的校验和 `n_i=0` 填充；连续且 rank 无关的适用依据，或非连续/rank 相关情形所需的独立有界 ABI；地址值不进入 tiling 数据}
+- **host 侧 block_dim**: {仅Vector Kernel使用`vector_core_num`，Cube或混合Kernel使用`core_num`}；`total_tasks > 0` 时 `block_dim = min(max_blocks, total_tasks)`；`total_tasks = 0` 时说明合同允许的空工作策略及目标验证，不臆造合法 launch 值
+- **交付 entry 与阶段序列**: {当前 delivery owner 下的 module-level entry、tiling keys、阶段启动、workspace 和完整调用成本；区分入口数/变体数/native tasks}
+- **TensorList ABI（不涉及则填 N/A）**: {当前接口支持证据；有限 slot/元素/地址运算范围；目标上已验证或待验证的 ABI；非连续/rank 相关的 shape/stride 映射；空列表/零工作/填充槽安全性；完整阶段成本，不预设固定 arity 或单 launch}
 - **A5 CV 的两个 Vector subblock 分工**: {不涉及 / 切分轴；subblock 0和1各自的索引范围、尾块归属和工作量；未同时使用两个subblock的原因}
 - **两个 Vector subblock 的结果依赖**: {无依赖，可独立处理 / 存在归约等依赖：为何不能改切非归约轴、GM部分结果的shape与地址、最终合并者；同步细节见§6}
 

@@ -32,12 +32,12 @@ target_api_gate: "仅限 Ascend 950PR 或 950DT；依赖 make_tile/TileGroup 的
 
 每次迭代对状态做“GM 写回 → 下一次 GM 读入”会在关键路径上串入两段 MTE 搬运，并叠加 L2/主存延迟；
 状态在片上单 buffer 常驻后，生产与消费直接经片上通路衔接，串行搬运被消除。常驻 buffer 的生命周期覆盖整个
-循环，与轮转输入 buffer 分离，复用依据见 buffer-reuse-lifetime 的角色划分。
+循环，与轮转输入 buffer 分离，复用依据见 当前 allocation owner 的角色与生命周期规则。
 
 ## 怎么改（before / after）
 
 以下为结构示意，展示数据流改动；所用 `pl.*` 形态（`pl.make_tile` 固定地址、`pl.load`/`pl.store` 二维
-整块搬运、`pl.range`）取自本仓 KB 官方样例的已核验用法。片段是教学级最小示意：例题设定循环携带
+整块搬运、`pl.range`）是历史结构示意，未作为当前目标的完整实现重新验证。片段是教学级最小示意：例题设定循环携带
 状态 `S[D, D]`（如线性注意力递推状态），`update_state_vf` 代表“读旧状态 + 本迭代输入、写新状态”
 的就地更新；常驻 buffer 地址、容量与循环内轮转 tile group 的地址区间规划须按当前 DESIGN 核验后嵌入。
 
@@ -70,7 +70,7 @@ with pl.section_vector():
 ```
 
 **关键陷阱**：常驻 buffer 必须与循环内输入/输出的轮转 tile group 使用不重叠的地址区间（角色划分见
-buffer-reuse-lifetime）；把常驻 buffer 地址并进轮转组会被下一拍覆盖，表现为运行值被重置或读到陈旧值。
+当前 allocation owner）；把常驻 buffer 地址并进轮转组会被下一拍覆盖，表现为运行值被重置或读到陈旧值。
 
 ## 性能与验证指标
 
@@ -85,4 +85,4 @@ buffer-reuse-lifetime）；把常驻 buffer 地址并进轮转组会被下一拍
 
 ## 参考资料
 
-- PyPTO-Pro KB：`patterns/buffer-reuse-lifetime.md`（持久/轮转/scratch 角色与 buffer 计数）。
+- [当前 allocation/lifetimes owner](../../../../pypto-pro-kernel/references/api/memory-allocation.md)：持久/轮转/scratch 角色、slot 与完整容量；[row state residency](../../../../pypto-pro-kernel/references/patterns/vf-row-reduce.md#choose-where-dependent-phases-share-state) 提供当前数据流候选。

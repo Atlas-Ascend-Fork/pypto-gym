@@ -245,6 +245,21 @@ Two additional measurements:
 - **mask_reg has a fixed total width of 256 bits; bits per element depend on dtype**: FP32 uses 4 bits/element (64 × 4 = 256), FP16 uses 2, and INT8 uses 1. This is why mask dtype must match data dtype.
 - **`mask_gen_with_reg_tensor` `offset` counts 8-byte DataBlocks, not elements.** For FP32, 256B contains 32 blocks; `offset=0` takes the 64 bits of lanes 0..1.
 
+#### Convert a data-dependent predicate between element widths
+
+Search the MaskReg overloads of `vf.interleave` / `vf.de_interleave` as well as APIs named `mask`. A predicate is a physical bit pattern; changing a destination's dtype label does not re-space an existing data-dependent pattern for another consumer. First map each logical lane to the bits read by the source and destination instructions, including any load/cast/packing permutation.
+
+The following are historical predicate-conversion routes to verify against the target documentation, `_vf_api.py` and a lane-distinguishing probe. Here `lo` and `hi` mean the first and second logical lane groups, in the consuming port's actual order; they do not follow merely from two register variable names. The explicit `dtype=` selects the **finer element width** of the adjacent pair, rather than always naming the source or destination width.
+
+| Logical predicate conversion | Candidate MaskReg call |
+| --- | --- |
+| Two b32 groups of 64 lanes → one b16 group of 128 | `m16, unused = vf.de_interleave(m32_lo, m32_hi, dtype=pl.DT_UINT16)` |
+| Two b16 groups of 128 lanes → one b8 group of 256 | `m8, unused = vf.de_interleave(m16_lo, m16_hi, dtype=pl.DT_UINT8)` |
+| One b16 group of 128 lanes → two b32 groups of 64 | `m32_lo, m32_hi = vf.interleave(m16, m16, dtype=pl.DT_UINT16)` |
+| One b8 group of 256 lanes → two b16 groups of 128 | `m16_lo, m16_hi = vf.interleave(m8, m8, dtype=pl.DT_UINT8)` |
+
+Bind both returned predicates to distinct destinations, and verify which output carries each logical group before dropping an unused result. A historical official sample (`pro_ops/fa/test_flex_attention.py`) used the b32→b16 route; a historical device probe checked b16→b32. Neither establishes current-device acceptance. The bundled API snapshot confirms the operation names and signatures, not MaskReg overload semantics or support for every row. Check the installed overload, selector and output order, then observe converted predicates with `vf.select(ones, zeros, predicate)` on full and partial groups. Do not observe them with an uninitialized partial-mask `vf.move`. A b32↔b8 chain is only a derived composition of adjacent conversions until its complete lane map and target behavior have been verified; no instruction-count or timing claim follows from this table.
+
 ### 2.6. An unreliable observation method produced four wrong conclusions
 
 A probe used `vf.move(a, mask)` to observe masks, assuming inactive lanes would be zeroed. They actually contained another input's values: the compiler allocates the destination register, so inactive contents depend on which register it reuses. Thus, all four conclusions, including “`and_` intersection is all true,” “`get_mask_spr` is all true,” and “`not_` has no effect,” were wrong.
@@ -467,6 +482,12 @@ Scalar constants must also fit the operand dtype's range. For a U32 index regist
 Define within-block results and already-merged results as distinct states, making clear when old state has already contributed. When forming the next state from a merged result, do not add the same carry or scaling again. Derive all new fields from the same old state, then update them together. Multi-block inputs without resets expose repeated merges; a single block or one handoff is insufficient.
 
 reg→reg gather wrapping guarantees defined instruction indices, not that the algorithm permits crossing logical boundaries. When expressing shifts with wrapped indices, boundary lanes must retain old state or select the algorithm's identity element; do not mix fields from the opposite end or tail padding into a prefix. Distinguish the current register's active range, the whole row/segment range, and cross-block carry state, and check consistent handling of every state component across these ranges.
+
+For an extrema or arg-scan assembled from comparisons and selects, prove its initializer against the actual NaN, tie and signed-zero rules: an infinity sentinel is not automatically an identity for that combine. Compare explicit validity or seeding the first valid `(value,index)` and folding subsequent elements, with a separate empty-domain result. A native reduction primitive's rules do not establish a custom scan's behavior. Probe NaNs at the first and later valid positions, repeated extrema and tied indices spanning register/chunk boundaries; check exact index outputs as well as values. If the reference and written contract disagree, resolve that inconsistency before choosing the combine. This is a semantic design check, not validation of a new extrema-scan kernel.
+
+The scan-axis mapping is a separate dataflow choice. For `[outer,scan,inner]` with `inner>1`, lanes can own distinct retained inner coordinates while a loop advances through `scan` in order, avoiding a cross-lane prefix network. Batch contiguous transfers using [separate transfer/register blocks](../patterns/vf-outer-reduce.md#choose-transfer-and-register-blocks-separately); keep carry in registers within a VF call and explicit synchronized UB state across calls. This strided-axis organization is a candidate to validate for the actual combine, dtype, tails and state reset; the contiguous scan examples below do not validate it. It exposes parallelism across independent sequences, not across the recurrence dependency itself.
+
+For value-only additive prefixes, the identity `cumsum(x)=x@U` with an upper-triangular matrix of ones supplies a Cube candidate; include its `O(n²)` work, constant construction/transport within the task's Host boundary and changed rounding in the complete-call comparison, and do not apply this sum identity to product, logsumexp or extrema scans.
 
 Tests should include no state resets, reset at every element, sparse resets, and boundaries `VL-1`, `VL`, `VL+1`, and one remaining element after multiple registers. Dense random flags alone can hide incorrect carry loss behind the next reset. This is a method for checking state propagation, not a requirement for a particular scan network or thread assignment. Full consumer: [segmented_scan](../../examples/algorithms/segmented_scan/). Stable value/index selection and preservation of original bit patterns: [row_top2](../../examples/algorithms/row_top2/).
 

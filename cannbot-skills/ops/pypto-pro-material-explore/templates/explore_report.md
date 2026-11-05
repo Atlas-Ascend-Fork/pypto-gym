@@ -26,7 +26,7 @@ feasibility: {feasibility}
 ### 1.3 可能会涉及的 API 类别
 
 > 以下为常见类别提示，实际 API 以本次 PRO_MATERIAL_INDEX §A 扫描结果为准。
-> Vector 规则见 [Design Skill](../../pypto-pro-op-design/SKILL.md)的“两条实现约束”；本阶段记录默认 VF 映射，KB 模板例外交 Stage 3 裁定。
+> Vector surface 按当前 kernel authoring policy；除明确列出的排序外使用 VF。本阶段记录目标版本事实，在实际来源表中填入真实 owner 路径，任务设计交 Stage 3。
 
 | 类别 | 是否涉及 | 关键 API | 指定算子是否覆盖 |
 |------|---------|----------|------------------|
@@ -64,7 +64,7 @@ feasibility: {feasibility}
 
 | 步骤 | 默认 VF 映射 | API 依据 | 目标版本 | 适用条件 | 交接状态 |
 |------|---------------|----------|----------|----------|----------|
-| {n} | `vf.{api}` | {API path + excerpt} | {version} | {dtype/shape/layout} | 待 Stage 3 核对已选 KB 模板 |
+| {n} | `vf.{api}` | {API path + excerpt} | {version} | {dtype/shape/layout} | 待 Stage 3 核对来源、条件与验证计划 |
 
 ### 3.3 API 约束
 
@@ -164,14 +164,14 @@ feasibility: {feasibility}
 <!-- REQUIRED -->
 ## 6. Stage 3 设计事实输入
 
-> **综合来源**: §3 API 约束 + §4 样例参考 + §5 教程指导。本节是 Stage 3 的消费入口，只汇总事实与待裁定项，
-> 不冻结 tile、Module、同步事件或 topology；这些由 Stage 3 决定。
+> **综合来源**: §3 API 约束 + §4 样例参考 + §5 教程指导及按需读取的当前 kernel owner。本节是 Stage 3 的消费入口，记录来源路径/章节、当前任务适用条件与 invariant、设计作用和待验证问题；只汇总事实与待裁定项，
+> 不冻结 tile、Module、同步事件或 topology；这些由 Stage 3 决定。当前 owner 填在下方真实来源字段，采用 planner 所支持的规范路径与确实存在的章节，同时说明具体条件与设计作用，不只列路由。
 
 ### 6.1 Tile / 同步约束证据
 
 | 设计问题 | 已证实约束 | 证据路径 | Stage 3 待裁定项 |
 |----------|------------|----------|------------------|
-| {tile_or_sync_question} | {documented_constraint} | {path + section} | {decision_needed} |
+| {tile_or_sync_question} | {documented_constraint + task_applicability/invariant} | `{kernel_owner_path}` | {design_effect + verification_question} |
 
 ---
 

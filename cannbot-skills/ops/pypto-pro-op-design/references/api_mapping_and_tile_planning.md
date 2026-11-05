@@ -5,7 +5,7 @@
 - API映射：分解数学步骤、核对API约束、明确逻辑Tile并分析数值安全边界。
 - Tile规划：确定Tile属性、容量和缓冲深度，并选择`make_tile`或`make_tile_group`。
 
-算子设计通常从数学公式开始，但公式不能直接决定Kernel的写法。首先确定每一步由Cube还是Vector执行。Vector计算可以使用Tile API，也可以使用向量函数（Vector Function，简称VF）API：Tile API直接对Tile进行计算；需要在寄存器中组织数据并显式编排向量指令以获取更好性能时，使用VF API。在此基础上，再确定Tile的shape、dtype、内存空间和layout。API映射与Tile规划前后衔接，但关注点不同：前者保证计算链语义正确、接口可用，后者把接口要求落实为可分配的片上数据。通常先完成API映射，再做Tile规划，最后进入片上地址规划。
+从数学公式确定每步的执行域，再规划 Tile 的 shape、dtype、内存空间和 layout。Vector 计算遵守 [当前 authoring policy](../../pypto-pro-kernel/SKILL.md#constraints-and-workspace-policy)，不按模板或性能猜测放宽 tile compute 例外。API 映射负责语义与接口可行性，Tile 规划负责实际存储，最后落实地址布局。
 
 API映射完成后规划Tile，Tile规格和缓冲数量确定后分配片上地址。地址容量不足时，依次处理地址空洞、重复分配和可以复用的地址区间，再缩小Tile或减少缓冲槽位。若容量仍然不足，且主要空间由接口要求的临时Tile或格式转换占用，则重新选择API调用链。
 
@@ -31,7 +31,7 @@ x ── reduce_max(N) ── max
 
 ### 2. 核对API文档与约束
 
-确定API时先选择执行域。矩阵相关计算在Cube侧完成；逐元素、广播和归约等通用计算在Vector侧完成。Vector侧提供Tile API和VF API两种编程方式。Tile API直接处理UB中的Tile，适合使用已有接口组合计算，易用性更高。VF API通过`@pl.vector_function`定义向量函数，使用`vf.load*`将UB数据读入寄存器，以`vf.*`接口完成寄存器计算，再通过`vf.store*`写回UB，适合需要显式控制寄存器数据组织和指令流水的计算，有更高的性能。采用哪种方式应结合接口能力和实际性能结果确定。
+按当前 policy 与目标接口选择执行域：VF 通过 `@pl.vector_function` 中的 `vf.load*`、`vf.*` 和 `vf.store*` 组织寄存器计算；允许的排序与 SIMT 路径分别核对其契约。Cube 默认从 [GEMM owner](../../pypto-pro-kernel/references/patterns/gemm-desugar.md) 开始。下述手写搬运/矩阵乘链用于解释物理数据通路，仅在该 owner 允许的例外下作为实现方案，不替代默认入口。
 
 Cube路径尤其受硬件数据通路约束。`pl.matmul(dst, lhs, rhs)`要求`lhs`位于Left（L0A）、`rhs`位于Right（L0B）、`dst`位于Acc（L0C），所以一次矩阵乘通常展开为：
 
@@ -195,59 +195,11 @@ manual_sync_db = pl.make_tile_group(
 
 #### `make_tile`的使用范围
 
-`make_tile`创建的Tile不带mutex元数据。在本文采用的`auto_mutex`工作流中，只把它用于单次scratch：写入一次、读取一次，不参与缓冲轮转，也不跨循环迭代保留。典型场景是某次API调用独占的临时空间，或不迭代更新的归约标量。需要多次读写、参与GM搬入或写回、跨迭代保存状态，或者需要在不同pipe之间自动管理依赖时，使用`make_tile_group`。
+分配方式由 [当前 allocation/lifetimes owner](../../pypto-pro-kernel/references/api/memory-allocation.md) 决定，不能把“单 Tile”一概等同于单次 scratch，或把 TileGroup 等同于所有依赖都已同步。逐项说明常驻/轮转/临时角色、实际地址区间、首次写入、最后读取、复用位置及所需的跨 Pipe/跨核或同 VF 排序；`auto_mutex` 只覆盖其确实管理的访问。
 
-用于输入搬入、输出写回或跨迭代保存状态的Tile使用`make_tile_group`。ping-pong和N-buffer也使用`make_tile_group`，并通过`auto_mutex=True`管理核内跨Pipe依赖。Cube Section中的Tile不使用`make_tile`。
+若某个受支持接口确实要求独立临时空间，按该接口的实际 shape/dtype/别名合同规划。例如合同要求 `[64,128]` FP32 的临时 Tile 时，它占 `64*128*4=32768` 字节；基址 `0x18000` 对应 `[0x18000,0x20000)`。只有生命周期确实不重叠，且旧消费者已完成时才能把该区间给另一角色。这是资源算例，不表示当前 VF select 需要这个临时 Tile，也不授权使用历史 tile-Vector select 代码。
 
-以`select`为例，`tmp`是接口执行过程中使用的临时空间，其shape和dtype与输出Tile相同，并且不能与输出或两个输入Tile共用地址。接口定义见`$PYPTO_DEVKIT_DIR/docs/pypto_pro/api/SIMD-API/tile_vector_computation/selection/select.md`。示例中的`a`、`b`和`mask_in`从GM搬入，`out`写回GM，相应Tile使用TileGroup管理；比较结果`mask`也使用单槽TileGroup保存。`select_tmp`只供一次`select`调用使用，不从GM搬入、不写回GM，也不跨迭代保留，因此使用`make_tile`绑定固定地址：
-
-```python
-@pl.jit(auto_mutex=True)
-def select_kernel(
-    a: pl.Tensor[[64, 128], pl.DT_FP32],
-    b: pl.Tensor[[64, 128], pl.DT_FP32],
-    mask_in: pl.Tensor[[64, 128], pl.DT_FP16],
-    out: pl.Tensor[[64, 128], pl.DT_FP32],
-):
-    fp32_type = pl.TileType(
-        shape=[64, 128], dtype=pl.DT_FP32,
-        target_memory=pl.MemorySpace.Vec)
-    a_group = pl.make_tile_group(
-        type=fp32_type, addrs=0x0000, mutex_ids=[0])
-    b_group = pl.make_tile_group(
-        type=fp32_type, addrs=0x8000, mutex_ids=[1])
-    out_group = pl.make_tile_group(
-        type=fp32_type, addrs=0x10000, mutex_ids=[2])
-    mask_in_group = pl.make_tile_group(
-        type=pl.TileType(shape=[64, 128], dtype=pl.DT_FP16,
-                         target_memory=pl.MemorySpace.Vec),
-        addrs=0x20000, mutex_ids=[3])
-    mask_group = pl.make_tile_group(
-        type=pl.TileType(shape=[64, 128], dtype=pl.DT_UINT8,
-                         target_memory=pl.MemorySpace.Vec),
-        addrs=0x24000, mutex_ids=[4])
-
-    select_tmp = pl.make_tile(
-        fp32_type, addr=0x18000, size=64 * 128 * 4)
-
-    with pl.section_vector():
-        tile_a = a_group.current()
-        tile_b = b_group.current()
-        tile_out = out_group.current()
-        mask_src = mask_in_group.current()
-        mask = mask_group.current()
-
-        pl.load(tile_a, a, [0, 0])
-        pl.load(tile_b, b, [0, 0])
-        pl.load(mask_src, mask_in, [0, 0])
-        pl.gt(mask, mask_src, 0.0)
-        pl.select(tile_out, mask, tile_a, tile_b, select_tmp)
-        pl.store(out, tile_out, [0, 0])
-```
-
-`select_tmp`包含`64 × 128`个FP32元素，占用`64 × 128 × 4 = 32768`字节，对应地址区间`[0x18000, 0x20000)`。它只参与当前一次`select`计算，不需要mutex元数据；调用结束后，该地址可以分配给生命周期不重叠的其他临时Tile。
-
-`make_tile`和`make_tile_group`的参数与调用方法见`$PYPTO_DEVKIT_DIR/docs/pypto_pro/api/SIMD-API/resource_management/`中的对应API文档。
+具体条件选择及 mask 的当前接口见 [VF owner](../../pypto-pro-kernel/references/api/vf.md#25-combining-masks-with-existing-comparisons-and-selection)，不要把旧 Tile mask/temporary 契约套到 MaskReg 或仅替换 API 前缀。
 
 设计文档需要记录API调用链和Tile清单。API调用链按执行顺序写明计算步骤、所用接口、输入输出Tile、关键约束和对应的API参考页。Tile清单记录变量名、shape、dtype、MemorySpace、layout、有效形状、缓冲数、单槽字节数和使用范围。多槽TileGroup还要记录使用`next()`轮转还是用`group[i]`显式选择；采用下标时，写明下标表达式及其有界依据。每个Tile操作数都应能在清单中找到对应条目，每个Tile也应注明用于哪个计算步骤。
 

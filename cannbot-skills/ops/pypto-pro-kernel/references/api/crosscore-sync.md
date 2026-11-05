@@ -93,6 +93,12 @@ Reserve UB capacity using the aligned size first; the consumer handles only the 
 
 The rule is in the official AccToVecMode (`pypto/docs/zh/api/pro_api/SIMD-API/basic_data_structures/AccToVecMode.md`) documentation; `backend_cce_block_out_ops.cpp::MakeBlockOutMoveCodegenCCE` rounds effective Acc M up to 2 and effective N up to 32 in `872df763f`. The `move` Python docstring describes dual-mode type and rider restrictions but does not give the tail-split formulas; the geometry cannot be inferred from that docstring alone. Offset extraction, other layouts, and paths with additional control parameters require checking their own contracts separately.
 
+### Prove the final GM stores' physical ownership
+
+The two AIVs' logical output regions can be disjoint while their final store paths touch additional bytes or require ownership at a larger update granule. Establish the actual writing operation's byte footprint, alignment, padding and ownership requirements from the matching target documentation and generated path before deriving a safety gate. A logical mask or valid extent limits that footprint only when the selected store contract says so; the Acc split above establishes neither a universal GM write granule nor a universal row-width threshold.
+
+When the path requires exclusive ownership of granules of `G` bytes, map each nonempty written interval `[begin, end)` to blocks `begin // G` through `(end - 1) // G`. Check the actual row strides, tails and legal starting-address phases for both writers. Disjoint touched blocks are a conservative sufficient check under that contract; sharing a transaction block alone does not prove a race for a store that guarantees preservation of the other bytes. If the required ownership cannot be established, retain a contract-preserving single writer or another supported ordered drain. Probe the selected path on the target with both AIVs, boundary extents, guards and changed inputs on repeated calls; a passing logical coverage test does not establish the write-footprint argument. Use the [stride and guard contract](datamove.md#host-tensor-strides-and-boundary-guards) without changing the public output layout.
+
 ### Logical validity is not transfer capacity
 
 Keep three quantities distinct when adapting a padded kernel: the rows used by the mathematical result, the effective Acc extent actually passed to FIX, and each AIV's receiving allocation. An example may use one constant for two of these because they happen to coincide at its original shape. Changing that constant everywhere can shrink a destination while leaving its producer unchanged.
@@ -308,6 +314,10 @@ The official documentation says:
 **The requirement is explicit, but the primitives do not implement it for you**—you must pair the reverse direction with another event ID.
 
 A one-shot handover that writes once and reads once, outside a loop, needs only forward synchronization.
+
+For a hand-written protocol whose event state spans a whole-core MIX barrier, balanced dynamic set/wait counts do not by themselves establish the token's lifetime through `sync_all`. Before relying on that composition, probe its actual `seed -> first wave -> MIX barrier -> second wave` sequence on the matching target, retaining producer/consumer participation, empty-lane paths, slot reuse and final drain. Check bounded completion separately from numerical values, tail coverage and guards. A barrier-free primitive probe omits the boundary under investigation.
+
+This is a validation requirement for an unestablished composition, not a claim that the barrier resets events or that every such protocol is unsupported. B-layer transformed loops and the [drained pipeline followed by a MIX merge](#part--sync_all--part-two-phase-mega-kernel-board-evidence-2026-09-30) have their own lifetime argument; neither route proves a different C-layer protocol's event state survives across the barrier. Keep a verified ordered handover while the new protocol remains unresolved, and use the existing [device-fault isolation](../verification/board-runs.md#isolating-device-faults) rules for its probe.
 
 ### 3. Choose `sync_mode` from the Actual Producer and Consumer; Do Not Ask Only “Is It Cross-core?”
 

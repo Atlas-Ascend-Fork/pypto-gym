@@ -634,7 +634,7 @@
         7
       ],
       "target": "impl",
-      "rule": "Layer K host wrapper 内禁止调用 pypto.zeros / pypto.empty / pypto.ones / pypto.full —— 这些是 JIT-context creation API, 在 host 上下文调用会 runtime crash (`device=` kwarg 不接受, 或 `F21003 INVALID_TYPE`)。output buffer 必须用 torch.empty / torch.zeros / torch.empty_like 等 torch allocation API (显式 dtype= 与 device=) 预先分配, 再作为参数传给 @pypto.frontend.jit 入口。每个传入 JIT 入口的 Name 参数必须解析到 wrapper 参数, 或 torch.* allocation, 或对 wrapper 参数的 torch 变换 (例 .reshape / .contiguous)——此处只解析参数来源，不表示这些变换是推荐做法；会 materialize 的变换应移入 kernel，见 pypto-pro-op-kb/constraints/wrapper-boundary.md"
+      "rule": "Layer K host wrapper 内禁止调用 pypto.zeros / pypto.empty / pypto.ones / pypto.full —— 这些是 JIT-context creation API, 在 host 上下文调用会 runtime crash (`device=` kwarg 不接受, 或 `F21003 INVALID_TYPE`)。output buffer 必须用 torch.empty / torch.zeros / torch.empty_like 等 torch allocation API (显式 dtype= 与 device=) 预先分配, 再作为参数传给 @pypto.frontend.jit 入口。每个传入 JIT 入口的 Name 参数必须解析到 wrapper 参数, 或 torch.* allocation, 或对 wrapper 参数的 torch 变换 (例 .reshape / .contiguous)——此处只解析参数来源，不表示这些变换是推荐做法；会 materialize 的变换应移入 kernel，仅任务明确允许的 preprocessing 可保留且计入完整调用。以上为classic随包共同边界；仓内来源为 pypto-pro-kernel/references/workflows/delivery.md#host-wrapper-boundary（仅供溯源，不要求安装Pro skill，classic API 仍按本插件）"
     },
     {
       "id": "OL52",
@@ -686,7 +686,7 @@
         7
       ],
       "target": "impl",
-      "rule": "<op>_impl.py 内 torch 仅可用于 layout/alloc/cast/reshape；任何 torch 张量算术 (torch.matmul / .exp / .sum / `@` / F.* 等) 即 FAIL。算子数值计算必须在 @pypto.frontend.jit 图内用 pypto.* op 实现。封堵 dummy-JIT 全谱 (dead JIT+host torch / 小 JIT+torch 主计算 / torch 旁路再计算)。AST 检测，忽略注释与 __main__/_validate 等自测块。**本规则判定的是「是否把计算搬到 host 作弊」，不是 wrapper 允许做什么的清单**——layout/cast/reshape 不构成作弊，但它们仍是被计入分数的 device 算子，由 pypto-pro-op-kb/constraints/wrapper-boundary.md 单独约束；本规则放行不等于允许。"
+      "rule": "<op>_impl.py 内 torch 仅可用于 layout/alloc/cast/reshape；任何 torch 张量算术 (torch.matmul / .exp / .sum / `@` / F.* 等) 即 FAIL。算子数值计算必须在 @pypto.frontend.jit 图内用 pypto.* op 实现。封堵 dummy-JIT 全谱 (dead JIT+host torch / 小 JIT+torch 主计算 / torch 旁路再计算)。AST 检测，忽略注释与 __main__/_validate 等自测块。**本规则判定的是「是否把计算搬到 host 作弊」，不是 wrapper 允许做什么的清单**——layout/cast/reshape 不构成作弊；metadata-only view 与会 materialize 的 device 工作须区分，后者仅在任务允许时保留且计入完整调用；这些共同边界在classic规则中独立执行，本规则放行不等于允许。仓内来源为 pypto-pro-kernel/references/workflows/delivery.md#host-wrapper-boundary（仅供溯源，不要求安装Pro skill，classic API 仍按本插件）。"
     },
     {
       "id": "OL53",

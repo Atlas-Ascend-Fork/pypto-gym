@@ -1,6 +1,6 @@
 ---
 name: pypto-pro-op-plan
-description: 将算子需求整理为 PyPTO-Pro 开发所需的规格、资料证据、kernel 契约和知识选择。用于建立可验证、可复用的完整算子规划产物。
+description: 将算子需求整理为 PyPTO-Pro 开发所需的规格、目标版本资料证据和 kernel 契约，结合当前 pypto-pro-kernel 的适用指导形成可验证的规划产物。
 ---
 
 # PyPTO-Pro 算子规划
@@ -10,9 +10,10 @@ description: 将算子需求整理为 PyPTO-Pro 开发所需的规格、资料�
 
 ## 输入与产物
 
-输入：用户已授权的算子需求、目标版本 devkit 缓存、KB 根目录和共享 `performance-constraints.md` 的路径。
-已有安装可分别从 `$PYPTO_DEVKIT_DIR`、`$CANNBOT_CONFIG_ROOT/pypto-pro-op-kb/` 和
-`$CANNBOT_CONFIG_ROOT/references/performance-constraints.md` 定位。所复用的两个 Skill 及其脚本须可加载。
+输入：用户已授权的算子需求、目标版本 devkit 缓存、当前 `pypto-pro-kernel` 和共享
+`performance-constraints.md` 的路径。已有安装可从 `$PYPTO_DEVKIT_DIR`、同级
+`pypto-pro-kernel/` 和 `$CANNBOT_CONFIG_ROOT/references/performance-constraints.md` 定位。
+所复用的两个 Skill 及其脚本须可加载。
 
 使用任务指定的输出目录 `<op-dir>`，默认 `custom/<op>/`；目录名 `<op>` 与 SPEC 算子名一致。在其中生成：
 
@@ -21,14 +22,13 @@ description: 将算子需求整理为 PyPTO-Pro 开发所需的规格、资料�
 | `SPEC.md` | 数学语义、公开接口、P0 cases |
 | `PRO_MATERIAL_INDEX.md` | 本次目标版本资料目录 |
 | `EXPLORE_REPORT.md` | API 可行性、约束和证据 |
-| `KB_SELECTION.json` | 当前 class 的知识路由结果 |
 
 调用上述 Skill 时传入本次 SPEC、输出目录、缓存和共享规则的实际路径，替换命令中的默认路径；
 需求确认与资料阅读遵循各自 Skill 的规则。
 
 ## 生成与校验
 
-复用已提供且校验有效的产物，按以下依赖补齐：先明确规格，再核实 API 可行性，最后依据完整事实生成知识选择。
+复用已提供且校验有效的产物，按以下依赖补齐：先明确规格，再核实 API 可行性，最后将适用指导与待验证问题写回探索报告。
 
 ### 1. 冻结需求语义
 
@@ -53,59 +53,46 @@ description: 将算子需求整理为 PyPTO-Pro 开发所需的规格、资料�
 索引并生成 `PRO_MATERIAL_INDEX.md` 与 `EXPLORE_REPORT.md`。结论须保持 SPEC 的数学语义；
 若发现公式、接口或 P0 case 有问题，返回 intent-understand，按其规则修订和校验。
 
-### 4. 冻结知识选择
+### 4. 对接当前 kernel 工作流
 
-阅读输入 KB 根下的 `CONTRACT.md`、`ROUTER.md` 与 `topology-map.json`，为每个 class
-逐 class 生成 `KB_SELECTION.json`：flat 布局落在 `<op-dir>/KB_SELECTION.json`，此时
-`class_id` 必须为字面量 `"."`；split 布局逐一落在
-`<op-dir>/<class>/KB_SELECTION.json`，`class_id` 必须等于该 class 目录名。
+阅读 [pypto-pro-kernel](../pypto-pro-kernel/SKILL.md) 的当前阶段与约束，并从其
+[reference index](../pypto-pro-kernel/references/index.md) 进入实际 owner。根据公式、
+支持范围、dtype/layout、目标版本和数据依赖选择指导；不按算子名称猜选，也不强行归入某一模式。
+融合算子的多个有效机制都要考虑；无适用 pattern 时如实说明，仍须检查通用 API、资源和数值约束。
 
-执行规则：
+将本 class 的具体指导放在 `EXPLORE_REPORT.md` 现有 §5/§6，保持报告模板的二级标题：
+每项说明来源、适用前提、影响的设计决定或 invariant、以及待验证问题。引用采用可搬迁的
+`pypto-pro-kernel/SKILL.md` 或 `pypto-pro-kernel/references/...md#section` 路径，
+用行内代码或 Markdown 链接表示，章节锚点必须真实存在；无需另建知识选择 JSON、拓扑表或原文副本。
 
-1. 从公式的计算拓扑和已确认 properties 路由，禁止按算子名称猜选。
-2. **允许命中零个或多个拓扑，不做唯一选择、不做覆盖**：融合算子同时符合
-   `multi-phase-fusion` 与其组成部分（如 `cube-matmul`、`row-reduction`）时全部选入。
-   若公式不符合任何已声明拓扑，必须如实记录 `topologies: []`，不得强行选择最接近的类别。
-   `[]` 只表示已完成公式路由且没有当前键命中，不能表示未知、未分析或跳过；信息不足时必须
-   继续补充分析依据，任何实际命中都不得遗漏。
-   数组中的每个元素都必须是 `topology-map.json.topologies` 的当前键；不维护本地枚举副本。
-3. 收集全部命中 `topologies` 的并集（空并集合法）、properties、已确认 target 和 mandatory
-   触发的全部 constraints（去重合并，不得截断、不得只收其一）。拓扑数组为空时，后三类
-   路由仍须正常执行。
-4. optional pattern 候选来自全部命中拓扑与适用 property modifier 路由结果的并集；只保留
-   适用前提成立且会产生独立、具体设计作用的条目，不限数量。
-5. 无适用 pattern 时设置 `no_matching_pattern: true`，但不得删除 required constraints。
-6. 每条引用使用 KB 根相对路径，记录 class-specific reason 与当前文件 SHA-256；不得记录
-   安装前缀、绝对路径或占位哈希。
-7. `properties` 只来自 SPEC、cases 或已确认环境事实。target 未指定时按默认 A5
-   触发 `constraints/arch-a5.md`；已明确为非 A5 时不触发。
-
-布局、`class_id` 与完整字段合同以所提供 KB 的 `CONTRACT.md` 为准；路由算法和数据分别以同一 KB 的
-`ROUTER.md` 与 `topology-map.json` 为准。
+原文 owner 保持权威。规划阶段记录设计依据与开放问题；下游按真实实现继续补读相关 owner，
+不受冻结参考清单限制。区分官方契约、安装源码、历史测量和本次验证，不能把旧通过记录当作
+当前 target 的验收。target 未确认时保留 SPEC 的默认假设及核验风险，不能从历史样例填硬件常量。
 
 ### 5. 收尾自检
 
-将 `<skill-dir>`、`<kb-root>`、`<缓存绝对路径>` 和 `<op-dir>` 替换为实际路径，保留引号，运行只读检查器：
-它复用 SPEC/索引校验器，检查报告结构、引用及样例/指南路径覆盖，以及 KB_SELECTION 的字段、路径和哈希。
+将 `<skill-dir>`、`<缓存绝对路径>` 和 `<op-dir>` 替换为实际路径，保留引号，运行只读检查器：
+它复用 SPEC/索引校验器，检查报告结构、引用及样例/指南路径覆盖，以及当前 kernel 引用文件和锚点。
 另按公式步骤、接口约束和当前风险核对报告证据是否充分。
 
 ```bash
 python "<skill-dir>/scripts/validate_plan.py" \
   --op-dir "<op-dir>" \
-  --devkit "<缓存绝对路径>" \
-  --kb-root "<kb-root>"
+  --devkit "<缓存绝对路径>"
 ```
+
+检查器默认使用同级 `pypto-pro-kernel`；安装位置不同时传 `--kernel-root "<kernel-root>"`。
+路径检查不能证明引用适用、API 在目标版本可用或规划已在设备验收。
 
 输出非 0 时一次性修正全部 `[FAIL]` 后重跑。
 
 ## 完成条件
 
-- 四类规划产物均存在；
+- 三类规划产物均存在；
 - SPEC 校验通过，探索结论与其数学语义一致；
 - INDEX 的 §A/§B/§C 与本次缓存一致；
 - EXPLORE_REPORT 没有未解决的 `unsupported` 阻断；
-- KB_SELECTION 的 `schema_version` 等于 `topology-map.json` 中当前的
-  `contract.contract_version`，所有路径和哈希真实可复核；
-- 规格语义、资料结论与知识选择相互一致。
+- 报告中的当前 kernel owner 引用可解析，适用条件与本 class 的事实一致；
+- 规格语义、资料结论与待验证设计问题相互一致。
 
 返回产物路径、已完成的校验及其结果、剩余风险和需要补齐的证据。

@@ -30,6 +30,8 @@
 
 ## <a id="discovery"></a>Discovery profile：确认真实 lowering Op Name
 
+以下单 target discovery/compare 只覆盖所选 lowering task；公开调用包含多个阶段时，必须按 [当前 native-task timing](../../../pypto-pro-kernel/references/verification/native-timing.md) 证明全部必要 task 的覆盖与计时。单阶段明细仍可作诊断，不得拿一项 Task Duration 或本协议的单 target Golden ratio 声称完整算子变快。
+
 正式 baseline 前先做一次 **discovery profile**。discovery runner 必须只选择一个已知 case 并只 launch 一次 target kernel；它用于读取真实 lowering `Op Name`，不进入 baseline/final 统计。完整正确性与 JIT 预热已通过后运行：
 
 ```bash
@@ -230,7 +232,7 @@ Timeline（Pipe 流水图）、Core Occupancy（核间负载）与 Roofline（�
 - `DAV_3510` 加上核数不唯一确定 SKU；拿不到可验证的设备名/HAL 时，数值 roofline 标记 unavailable。
 - 公式中的符号必须先归一化到 SI 单位（例如 `cube_freq=1650` MHz 是 `1.650e9 cycles/s`；`vec_freq` 同理）。`ddr_rate` 在所选 ini/schema 未说明是 bytes/cycle/core、速率系数还是已归一化带宽之前，不得代入带宽公式。算不出单位就宁可不给数字。
 - 数据墙（字节不可约减 + 占用率达到设备极限）只用于关闭受证据支配的候选，本身不是调优成功条件；目标差距可提高候选优先级，但全部来源、候选与 final sweep 合法闭合后不阻止交付。
-- 停止纪律见 [`pypto-pro-op-kb/references/investigation-discipline.md`](../../../pypto-pro-op-kb/references/investigation-discipline.md)：保留反事实证据、如实报告阻断，禁止把历史阈值转写成当前成功。
+- 停止纪律见 [当前 source-bound evidence](../../../pypto-pro-kernel/references/diagnostics/performance.md#test-a-mechanism-with-source-bound-evidence) 与 [退出条件](../../../pypto-pro-kernel/references/workflows/optimization.md#exit-criteria)：保留反事实证据、如实报告阻断，禁止把历史阈值转写成当前成功。
 
 ## <a id="msprof-op-boundary"></a>msprof op 证据优先级与补充边界
 

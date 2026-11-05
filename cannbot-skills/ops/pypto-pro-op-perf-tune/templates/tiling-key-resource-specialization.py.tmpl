@@ -1,5 +1,6 @@
 # PyPTO-Pro single-JIT compile-time resource specialization.
-# Keep the wrapper at one launch and verify every emitted key-specific IR.
+# This example uses one stage; the task and current delivery owner govern launch
+# count. Verify every emitted key-specific IR.
 
 from pypto_pro.runtime.tilingkey import TilingKeyField
 
@@ -29,7 +30,7 @@ def fused_kernel(public_tensor, public_output):
 def wrapper(public_tensor):
     # Host scalar metadata may choose a key. Both branches still need full
     # contract, precision, ownership and capacity validation. The wrapper may
-    # allocate only outputs declared by that public contract.
+    # allocate outputs/workspaces required by that public contract and stage plan.
     mode = 1 if use_optimized_static_mode() else 0
     public_output = torch.empty(...)  # shape/dtype/device from frozen metadata
     fused_kernel[None, block_dim, {"KernelMode": mode}](

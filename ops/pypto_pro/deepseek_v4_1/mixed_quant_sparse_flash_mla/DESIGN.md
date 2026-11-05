@@ -183,8 +183,7 @@ AIV 侧用 `V` / `MTE3`）。16 个事件 id 使用 0–9，10–15 预留。
   `mod_29` × `actnm <= 16` 的**互斥分支**中，每 tile 只执行一处。
 - 不占事件 id 的同步：AIV 本地的 `pl.system.bar_all()`（store / 写回排序，`PIPE_ALL`），以及
   FD 收尾的 `pl.system.sync_all(core_type=MIX)`（发布所有 partial；归约核只读远端那一半）。
-- 成对与到达规则沿用知识库约束 `sync-stitch.md`
-  （`cannbot-skills/ops/pypto-pro-op-kb/constraints/`）。
+- 成对与到达规则的复核入口为[当前原生跨核同步合同](../../../../cannbot-skills/ops/pypto-pro-kernel/references/api/crosscore-sync.md)。本文记录原阶段协议；后续修改仍须按实际 producer/consumer、slot 与事件生命周期重新验证。
 
 ## 6. 尾块与边界
 

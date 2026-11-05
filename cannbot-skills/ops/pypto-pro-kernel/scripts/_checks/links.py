@@ -68,6 +68,12 @@ def prose_lines(text: str):
             yield lineno, line
 
 
+def inline_targets(line: str):
+    """Yield raw inline-link targets outside code spans, without angle brackets."""
+    for match in _LINK.finditer(_CODE.sub("", line)):
+        yield match["target"].strip("<>")
+
+
 def anchors(text: str) -> set[str]:
     """Collect ATX heading slugs, duplicate suffixes and explicit HTML anchors."""
     found: set[str] = set()
@@ -127,8 +133,8 @@ def collect(targets: tuple[Path, ...] | list[Path] = DOC_ROOTS) -> LinkReport:
             findings.append(Finding(document, 1, RULE, f"Cannot read document: {exc}"))
             continue
         for lineno, line in prose_lines(text):
-            for match in _LINK.finditer(_CODE.sub("", line)):
-                target = html.unescape(match["target"].strip("<>"))
+            for target in inline_targets(line):
+                target = html.unescape(target)
                 target = re.sub(
                     r"\\([!\"#$%&'()*+,\-./:;<=>?@\[\]^_`{|}~\\])", r"\1", target
                 )

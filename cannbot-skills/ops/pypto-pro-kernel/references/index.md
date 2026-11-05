@@ -42,6 +42,8 @@ Choose the current workflow from [SKILL.md](../SKILL.md), then consult the match
 | Softmax or attention requiring a blocked large axis | [Online softmax](patterns/online-softmax.md) |
 | Thread-style indexing, direct GM access or atomic updates | [SIMT entry](patterns/simt-first.md) |
 | Indexed copy/packing or contiguous elements sharing runtime metadata | [SIMT transport units and record ownership](patterns/simt-payload.md) |
+| Each output element indexes a source axis independently | [Indexed-axis gather coordinates, source strips and pass costs](patterns/indexed-gather.md) |
+| Pairwise rotation with a reusable position-indexed table | [Pairing maps and coefficient-table access regimes](patterns/paired-rotation.md) |
 
 ## API topics
 
@@ -56,9 +58,9 @@ Choose the current workflow from [SKILL.md](../SKILL.md), then consult the match
 | SIMT | [simt.md](api/simt.md): two launch levels, static shapes, grid coverage, mathematical precision and atomics |
 | Data movement and views | [datamove.md](api/datamove.md): offset units, padding, valid shapes, strides, SSBUF and barriers |
 | Fixpipe | [fixpipe.md](api/fixpipe.md): final output conversion, on-path quantization, scale/offset, dual modes and dtype/layout combinations |
-| Supporting interfaces | [support.md](api/support.md): CTRL, SPR, blocks, dtype carriers, layout checks and debug probes |
-| Quantized computation | [quantization.md](api/quantization.md): W8A16 routes, dequantization placement and error scales |
-| Numerical contracts | [numerics.md](api/numerics.md): error scales, tiny normalized ratios, accumulation order, bounded exponential references and preserved bit patterns |
+| Supporting interfaces | [support.md](api/support.md): CTRL, SPR, blocks, dtype carriers, layout checks, debug probes and bounded tensor-collection interface candidates |
+| Quantized computation | [quantization.md](api/quantization.md): integer-to-floating epilogues, dynamic row scales, W8A16 routes and dequantization placement |
+| Numerical contracts | [numerics.md](api/numerics.md): error scales, stage substitution, tiny normalized ratios, accumulation order, bounded exponential references and preserved bit patterns |
 
 ## Troubleshooting
 
@@ -67,7 +69,7 @@ Choose the current workflow from [SKILL.md](../SKILL.md), then consult the match
 | Whether checks cover the current construct | [Check coverage and blind spots](diagnostics/check-coverage.md) |
 | Tests pass but results may still be wrong | [Validation traps](diagnostics/validation-traps.md) |
 | Missing warnings, inaccurate locations or broken error matching | [Diagnostic messages and locations](diagnostics/messages.md) |
-| Upstream ST or combined regression failures | [Regression leads](diagnostics/regressions.md); historical behavior is not a skip whitelist |
+| Unmatched frontend/lowering errors, upstream ST or combined regression failures | [Regression leads](diagnostics/regressions.md); historical behavior is not a skip whitelist |
 | Task durations are known but the bottleneck needs explanation | [Performance diagnosis](diagnostics/performance.md): pipe counters, timelines, bandwidth and critical paths |
 | A specific framework defect is suspected | [Defect references](diagnostics/defects/); start Fixpipe cases at the [disposition overview](diagnostics/defects/fixpipe-overview.md) |
 

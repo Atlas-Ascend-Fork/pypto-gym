@@ -1,11 +1,11 @@
 ---
 name: pypto-pro-op-perf-tune
-description: 优化并验收已通过正确性验证的 PyPTO-Pro 单 kernel 实现；冻结规格与测量协议，依次验证已选 KB、通用方法、知识卡片、模板和当前瓶颈提出的优化项，保留最佳合规实现及证据。也用于独立性能采集、比较和瓶颈分析。
+description: 为已有 PyPTO-Pro 实现保留性能采集、证据归档与候选实验工具；冻结规格与测量协议，验证通用方法、知识卡片、模板和当前瓶颈提出的优化项，保留最佳合规实现及证据。也用于独立性能采集、比较和瓶颈分析。
 ---
 
 # PyPTO-Pro 性能优化
 
-本 Skill 定义性能调优的优化来源、执行顺序和交付边界。具体账本、实验、重开、最佳版本选择
+当前生成与调优的技术规范统一由 [pypto-pro-kernel](../pypto-pro-kernel/SKILL.md) 及其 [optimization owner](../pypto-pro-kernel/references/workflows/optimization.md) 拥有。本 Skill 保留既有工程显式使用的采集工具、候选索引与证据归档流程；不另设技术边界。具体账本、实验、重开、最佳版本选择
 与停止规则统一见[优化项实验闭环](references/optimization-playbook.md)。性能采集和分析按需读取：
 
 - 性能分析总入口（工具选择、分析主流程与跨 Skill 采集辅助）：[性能分析](references/perf-analysis/performance-analyze.md)；
@@ -23,16 +23,15 @@ description: 优化并验收已通过正确性验证的 PyPTO-Pro 单 kernel 实
 与本轮正式评价的候选只在正确、合规时纳入排名，留下冻结聚合指标最优的版本与可复算性能证据。用户数值目标
 或默认 Golden 参考是理想目标，用于指引优化和披露差距，不是调优能否交付的硬门禁。
 
-- 一个交付文件只含一个 `@pl.jit` kernel，核心计算全部在该 kernel 内；wrapper 只启动一次
-  kernel，且启动不在 host 循环内。wrapper 仅做参数检查、合同允许的只读元数据读取、纯 Python
-  整数推导及声明输出的 `torch.empty` 分配；完整 host 调用链均须满足该边界。
-- 轮转 tile 使用 `make_tile_group` + `auto_mutex`，不得叠加手动 `sync_src`/`sync_dst`；`make_tile`
-  仅用于单次 scratch。`auto_mutex` 只管理核内互斥，跨核依赖须单独同步。Vector 数值计算默认使用 VF；
-  已选 KB 明确要求当前步骤使用 tile-op 时遵从原要求。
+- native entry、tiling key 和阶段启动按 [delivery 规则](../pypto-pro-kernel/references/workflows/delivery.md#kernel-definitions-and-dispatch)。[Host wrapper](../pypto-pro-kernel/references/workflows/delivery.md#host-wrapper-boundary) 使用 `torch.empty` 或 `torch.empty_like` 分配输出/workspace；其他 Host Torch 操作（含 view）或独立预处理须有本任务对该操作的显式批准。
+- 局部 buffer 与跨核依赖按当前 [memory allocation](../pypto-pro-kernel/references/api/memory-allocation.md) 和 [cross-core synchronization](../pypto-pro-kernel/references/api/crosscore-sync.md) owner。Vector surface 按当前 authoring policy，旧模板不授权额外 tile compute。
 - 代码、知识落实、设计一致性和证据问题在调优闭环中修复并重新验收。环境阻断、用户中止或冻结
   输入之间存在无法合法消解的矛盾时，报告根因、证据与待解决项。
+- 精确 `Op Name` 采集器及下文 discovery、七指标 compare/quick 和固定三件套仅适用于单 target-task 调用；CSV/Golden ratio 只证明该范围的结果。
 - 只修改可维护的 Python DSL 和必要的最终事实记录。`build/**`、`kernel.cpp`、trace 与指令生成物
   只读，只能作为证据。
+
+多阶段或已获逐项批准的 preprocessing 参与比较时，baseline、筛选、formal compare 和终验按 [native timing owner](../pypto-pro-kernel/references/verification/native-timing.md) 覆盖完整调用，保留全部 task 归属与成对比较原始结果。单阶段采集器只作诊断，不能代替整体排名；不要求它输出不支持的整体三件套，也不强制把调用改成一次 launch。
 
 ## 2. 开始前读取与冻结
 
@@ -44,9 +43,7 @@ I/O、支持范围、精度、输入分布、性能 case 与用户目标；下�
 项目已建立或明确要求以下资料时，读取并交叉核对：
 
 - `EXPLORE_REPORT.md`、`PRO_MATERIAL_INDEX.md`、`MEMORY.md` 及项目性能约束；
-- `DESIGN.md`、`DESIGN_BINDINGS.json`、`module_interfaces.yaml`；
-- 每个 class 的 `KB_SELECTION.json`、其中选中的每个 pattern/constraint 原文及对应
-  `KB_USAGE.json`。
+- `DESIGN.md`、`module_interfaces.yaml`，以及实际决策引用的当前 kernel owner、适用条件、具体不变量和原验证方法。
 
 优化来源读取：
 
@@ -64,7 +61,6 @@ I/O、支持范围、精度、输入分布、性能 case 与用户目标；下�
 
 - SPEC 数学语义、I/O、支持范围、P0、输入分布、精度门与用户目标；
 - Golden 数学实现和完整正确性测试语义；
-- 项目已有 `KB_SELECTION.json` 的选择、引用、理由和内容哈希；
 - `module_interfaces.yaml`、staged Module、公开 wrapper 的 callable/签名/I/O/optional 语义与 host
   边界合同（项目有相应产物时读取原文），以及 §1 的实现约束；wrapper body 只能在这些合同内调整；
 - `PERFORMANCE_CASES.json` 及其中的目标 case，在任何调优采集或改码前冻结；
@@ -74,45 +70,28 @@ I/O、支持范围、精度、输入分布、性能 case 与用户目标；下�
 冻结前先执行一次**约束分栏审计**，将待冻结项分为两类：
 
 - **验收硬门**（binding，冻结边界）：数学语义、I/O 与公开 dtype、支持范围、P0、输入分布、精度门
-  （容差与 nonfinite）、正确性测试语义、作为理想参考的用户数值目标；
-- **自述 / 实现约束**（descriptive，可协商）：内部计算精度、kernel 数量、操作数精度、查询形状范围，
-  及测量协议以外的实现选择；此类项仅描述当前实现，不构成验收条件。
+  （含合同规定的中间精度、舍入与 nonfinite）、正确性测试语义及任务明确指定的实现限制；用户数值目标保持冻结，仍按 §1 作为理想参考。
+- **实现选择**（descriptive）：未被任务合同约束的块宽、buffer 深度、排程等当前实现事实。
+  不能按字段名把内部精度、操作数 dtype、launch 数或查询形状范围一概归为此类。
 
-审计要求：自述约束须在冻结前对照验收硬门逐条论证必要性。当某条自述约束阻断某个合法优化来源
-（例如 selected KB 的 BF16 操作数、结构重设计维度）时，不得径行视为冻结并据此关闭该来源，须在
-改码前将其作为**合同变更候选**提交用户确认并记录结论。放宽自述约束属合同变更，由用户裁定；不得
-静默执行，亦不得因约束未放宽而将来源登记为“能力/契约阻断”。
+逐项追溯约束来源：合同内的实现选择可进入受控实验；只有候选确需改变明确的任务要求时，才在改码前
+提交合同变更并由用户裁定。未获变更许可时保留原要求，如实记录该候选的合同限制，不误报为目标能力缺失。
 
-调优可以更新最终 `test_{op}.py`、性能交付物，以及项目中为匹配最终接受实现所必需的
-`DESIGN.md`、`DESIGN_BINDINGS.json` 和 `KB_USAGE.json`。事实记录不得删除、降级或
-改写已选 KB 义务，也不得用文档修改掩盖代码未落实；未接受的实验不能写成最终事实。更新前按需
-读取 [Design Skill](../pypto-pro-op-design/SKILL.md)、[Develop Skill](../pypto-pro-op-develop/SKILL.md)
-及 [KB 合同](../pypto-pro-op-kb/CONTRACT.md)，只按各自产物 owner 定义的 schema 同步最终事实。
+调优可以更新最终源码、性能交付物，以及为匹配最终接受实现所必需的 `DESIGN.md`。保留任务的真实条件、来源、数值边界、实现位置和验证方法；不能用文档修改掩盖代码遗漏，未接受实验不能写成最终事实。Module/staged 合同仍按原有流程只读；若候选需要修改，按具体冲突提交设计修订。
 
 ## 3. 优化项来源与顺序
 
-优化项只有以下六类，按顺序处理。其中 `knowledge_card` 是核心来源，`kb_selected`、`general_method`、
-`template` 与 `structural` 是补充：`kb_selected` 补齐开发阶段已选 KB 模板、约束与样例中尚未在代码里
-落实的部分，`general_method` 与 `template` 补充卡片之外的机会，`structural` 补足同结构微调无法覆盖
-的结构维度；补充来源均不能代替 `knowledge_card` 的覆盖。命中[结构性优化重审与可达目标取证](references/structural-optimization.md)
-的触发条件时，`structural` 与其余来源并列闭合，且在 `bottleneck_derived` 之前完成。
-第一次修改代码前，按[优化项实验闭环](references/optimization-playbook.md)建立来源覆盖账本。
+优化候选分为 `general_method`、`knowledge_card`、`template`、`structural` 与 `bottleneck_derived` 五类，按下列规则处理。知识卡片、通用方法与模板只提供待验证候选；技术合法性由当前 kernel owner 与任务合同决定。第一次修改代码前按 [实验闭环](references/optimization-playbook.md) 建立本地来源覆盖账本；不把技术规范中的全部参考页变成必须逐条尝试的清单。
 
-### 3.1 `kb_selected`：已选 KB 的未落实要点
+### 3.1 开始前核对任务设计不变量
 
-项目没有已选 KB 时记录本来源为 0 项；已有选择时，逐 class、逐行读取
-`KB_SELECTION.json.optional_patterns` 与 `required_constraints` 指向的原文，
-先按 Design Skill 的 source-first 合同核对并修正 `DESIGN_BINDINGS.json`。通过 owner schema 自检后
-形成本轮原子 requirement 清单；`kb_selected` 分母只包含其中 `kind=obligation` 的原子项，precondition 与
-validation scope 作为适用性和验证证据保留。再把每条义务与最终代码、DESIGN/BINDINGS 和 KB_USAGE
-核对：已落实、未触发和真实缺口都进入账本；前提触发但代码未落实的缺口必须最终真实落实，不能
-因无性能收益而拒绝。
+读取 DESIGN.md 实际决策所引用的来源及其条件，对照当前代码确认地址/owner、数值边界、buffer lifetime、同步和 tail 等具体不变量。正确性或合同缺口先修复并执行原验证方法，不能因没有性能收益而忽略。适用性变化或设计冲突保留证据并修订设计；无需参考选择/使用 JSON，也不把每条规范另列为优化来源。当前实现已满足的条件只需给出实际代码与方法证据。
 
 ### 3.2 `general_method`：通用优化手段
 
 枚举[通用优化手段](references/general-optimization-methods.md)索引中的全部 active/eligible 原子项。
 明确不适用或目标/API 不支持时用证据关闭；其它可能适用项逐个进入受控实验。通用项仍要与本次
-selected KB 去重，同一改动可以共享实验，但每个 source id 单独关闭。
+当前已落实机制去重，同一改动可以共享实验，但每个 source id 单独关闭。
 
 ### 3.3 `knowledge_card`：知识卡片
 
@@ -150,8 +129,8 @@ selected KB 去重，同一改动可以共享实验，但每个 source id 单独
 
 ### 3.6 `bottleneck_derived`：当前瓶颈自主项
 
-前五类预置来源全部闭合后，才可根据当前接受实现的 profiler 与源码、生成物或 Tile DAG 证据
-提出自主项。每项必须指向尚未尝试的具体瓶颈、使用与当前代码哈希匹配的新鲜分析、与前五类和
+前四类预置来源全部闭合后，才可根据当前接受实现的 profiler 与源码、生成物或 Tile DAG 证据
+提出自主项。每项必须指向尚未尝试的具体瓶颈、使用与当前代码哈希匹配的新鲜分析、与前四类和
 既有自主项去重，并按同一受控闭环验证。接受改动后必须在新代码上刷新瓶颈证据，再建立下一项。
 
 profiler、代码分析、平台资料和 general knowledge 可以共同解释新鲜瓶颈并形成假设；平台资料和
@@ -169,9 +148,7 @@ general knowledge 本身不是优化项来源，假设必须先按前述证据�
    无用户数值目标时，按证据协议采集并冻结一次 Golden 理想参考。未生成性能
    Golden 合同时记录 `unavailable`，不能据此否定有效的 PyPTO baseline→candidate 选择证据；已有
    合同矛盾或不可复算时必须修复证据。
-3. **建立来源覆盖账本**：先按 §3.1 核对并形成 selected-KB 原子 requirement 清单，再枚举其中全部
-   obligation、全部通用方法、Active 知识卡片和 active/eligible 模板优化项；账本字段和关闭状态按实验
-   闭环填写。
+3. **核对设计并建立候选账本**：完成 §3.1 的任务不变量核对，再枚举通用方法、Active 知识卡片、active/eligible 模板及触发的结构项；账本字段和关闭状态按实验闭环填写。
 4. **建立正式 baseline**：discovery 确认唯一、完整 lowering `Op Name`，再按 manifest 逐 case、
    逐 repeat 采集七指标 baseline 并归档原始证据。
 5. **分析瓶颈并排序**：按[性能分析](references/perf-analysis/performance-analyze.md)入口选择工具，使用既有
@@ -181,10 +158,10 @@ general knowledge 本身不是优化项来源，假设必须先按前述证据�
    [结构性优化重审与可达目标取证](references/structural-optimization.md) §1 强制或触发条件，引入
    `structural` 来源，按其 §2 取证最佳已知结构、按其 §3 逐维判定、按其 §4 得到可达目标
    `T_best`/`T_lb`。
-6. **闭合预置来源**：依次处理 `kb_selected`、`general_method`、`knowledge_card`、`template`、
+6. **闭合预置来源**：依次处理 `general_method`、`knowledge_card`、`template`、
    `structural`（命中触发条件时）。每个待实验项执行“改源码 → 完整正确性 → quick → 必要时
    formal compare → 机制核对 → 接受或恢复 → 写回账本”。
-7. **进入自主优化**：确认五类预置来源全部闭合，并刷新当前最佳实现的瓶颈证据；证据不足先补证，
+7. **进入自主优化**：确认四类预置来源全部闭合，并刷新当前最佳实现的瓶颈证据；证据不足先补证，
    再根据当前瓶颈逐个建立 `bottleneck_derived`，接受改动后重新分析。
 8. **闭合与停止**：关闭全部来源和已创建项，并在最终代码上执行 fresh candidate sweep。性能目标
    差距和残留瓶颈用于提出、排序候选；仍有合法未尝试项就继续。停止前必须闭合 `structural`
@@ -193,7 +170,7 @@ general knowledge 本身不是优化项来源，假设必须先按前述证据�
    效率范围，或每个被跳过项都有可复现的能力/契约阻断证据时，方可停止。冻结结构上测得的“地板/
    上限”、无最小复现的“能力缺口”均不构成停止依据。确认没有新候选时记录候选闭合与最佳版本选择
    证据。达到或未达到理想目标本身都不能提前结束或阻止交付。
-9. **同步最终事实**：项目有相关记录时，按上述 owner 合同依据最终接受代码更新 DESIGN/BINDINGS/KB_USAGE，
+9. **同步最终事实**：项目有相关记录时，按上述 owner 合同依据最终接受代码更新 DESIGN 中的最终实现事实与验证证据，
    逐项核对引用、file/symbol、验证方法与代码一致。
 10. **最终验收**：对同一最终实现连续执行完整正确性、独立 final formal compare 和每个 P0 的
     补充 timeline；若终验使预置项结论失效，返回第 6 步重开，若发现新的自主项则返回第 7 步。
@@ -207,11 +184,11 @@ KEEP/final 文字与实际交付源码相反。按下表交付最终实现和正
 
 | 交付 | 要求 |
 |---|---|
-| `test_{op}.py` | 正确、合规的冻结 baseline 与本轮正式评价候选中，按冻结聚合指标选出的最佳实现 |
+| 最终实现（沿用项目路径） | 交付冻结聚合指标最优的正确、合规版本；既有编排评测保留 `test_{op}.py`，独立算子包按 [当前 delivery 格式](../pypto-pro-kernel/references/workflows/delivery.md#required-layout) 分离实现、测试与参考 |
 | `PERFORMANCE_CASES.json` | SPEC P0 与既有测试的一一映射，以及冻结的目标 case；baseline/final 共用 |
 | `PERFORMANCE_REPORT.md` | 冻结合同、目标 case、来源账本、逐 case baseline/final/目标、实验、候选比较、结构维度结论与可达目标 `T_lb` 比值、终态和证据路径 |
 | `performance.json` / `performance.log` / `perf_report.md` | final formal compare 产物；quick 不能替代 |
 | `docs/perf/round_NNN/` | baseline/final 原始 CSV、measurement/collection 与逐 case timeline |
-| 最终事实记录 | 项目已有或要求的 DESIGN、DESIGN_BINDINGS 和 KB_USAGE，与接受代码一致 |
+| 最终事实记录 | 项目已有或要求的 DESIGN 中来源、适用条件、不变量、实现位置及验证结果，与接受代码一致 |
 
 验收失败时按原始证据定点修复，重新执行受影响验证和最终验收。

@@ -132,7 +132,7 @@ compare/quick 输出仍按上面的模式说明生成。
 
 完整 `test_{op}.py` 的 profile 会混入输入生成、Golden 和精度检查，不能把其中的 `aclnn*`
 直接归因给 wrapper，也不能据此计算 wrapper 占比。PyPTO-Pro wrapper 合规由
-[wrapper 边界合同](../../../pypto-pro-op-kb/constraints/wrapper-boundary.md)裁决；profile 只提供性能
+[wrapper 边界合同](../../../pypto-pro-kernel/references/workflows/delivery.md#host-wrapper-boundary)裁决；profile 只提供性能
 证据，不能授权越界。性能结论只使用可唯一归属到目标 kernel 或冻结 case 的字段和计时口径。
 
 ---
@@ -276,7 +276,7 @@ ops/{算子名}/docs/perf/
   [优化项实验闭环](../optimization-playbook.md)。
 
 更完整的 sibling/floor/证伪纪律见
-[KB investigation discipline](../../../pypto-pro-op-kb/references/investigation-discipline.md)。
+[current source-bound mechanism evidence](../../../pypto-pro-kernel/references/diagnostics/performance.md#test-a-mechanism-with-source-bound-evidence) 与 [optimization exit criteria](../../../pypto-pro-kernel/references/workflows/optimization.md#exit-criteria)。
 
 ---
 

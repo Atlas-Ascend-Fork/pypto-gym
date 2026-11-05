@@ -4,11 +4,12 @@
 # 开发流程见 SKILL.md：以 DESIGN.md（施工图）和 EXPLORE_REPORT.md（API 约束/样例模式）为主要依据，
 # PRO_MATERIAL_INDEX.md / API 文档 / 官方指定算子 / 教学文档按需取用。
 #
-# ⚠️ 两条性能强制（违反即性能不可接受）：
-#   1. buffer 管理：需要 buffer 切换/轮转的 tile 一律用 make_tile_group + auto_mutex，
-#      make_tile 仅限单次使用 scratch tile（不参与轮转），禁止 make_tile + 手动 sync 管 buffer 轮转
-#   2. Vector 计算：Vector 数值计算用 vf.* 指令手写（在 section_vector() 内通过 @pl.vector_function 执行）
-#      （@pl.vector_function 装饰器 或 @pl.inline + with pl.section_vf(): 块，以 vf API 文档为准）
+# 这是既有 Module 工程的文件/测试骨架，不是当前 API 或目标验收记录。
+# 技术 owner: ../../pypto-pro-kernel/SKILL.md，及 allocation / VF / delivery。
+# buffer 按实际常驻/轮转/scratch 角色、地址和依赖设计；TileGroup/auto_mutex
+# 不自动证明每条同 VF 或跨核依赖。Vector compute 遵守当前 VF/排序例外规则。
+# 最终 standalone 交付按 current delivery 的五种文件角色拆分；本地开发单文件
+# 布局不能被误当作对最终测试/reference/comparator 组织方式的通用要求。
 
 import logging
 import os
@@ -74,7 +75,7 @@ def {op}_kernel(
     #       out: pl.Tensor[[S, D_PAD], pl.DT_FP16],
 
     # ---- Tile 声明 (逐条复制 DESIGN.md §3 地址映射表) ----
-    # ⚠️ 性能强制：优先使用 make_tile_group + auto_mutex，非必要不用 make_tile + 手动 sync。
+    # 分配方式、全部 slots 和真实依赖取自 DESIGN 及当前 allocation owner。
     {TILE_DECLS}
     # 例如:
     # tile_type = pl.TileType(shape=[TS, TD], dtype=pl.DT_FP16, target_memory=pl.MemorySpace.Vec)
@@ -86,7 +87,7 @@ def {op}_kernel(
 
     # ---- Section 声明 (来自 DESIGN.md §0 Module 划分) ----
     with {SECTION_TYPE}():
-        # ⚠️ 性能强制：Vector 数值计算用 @pl.vector_function + vf.* 手写（pl.* 计算API不得用于Vector数值计算）。
+        # 当前 Vector policy: @pl.vector_function + vf.*；仅 owner 明列的排序例外可用 tile compute。
         # ---- 循环结构 (来自 DESIGN.md §4) ----
         {TILE_LOOP_NESTING}
         # 例如:
@@ -103,14 +104,15 @@ def {op}_kernel(
 def {op}_wrapper(inp: torch.Tensor) -> torch.Tensor:
     """host 适配 + kernel launch，外部调用入口。
 
-    host 端仅做必要适配（输出分配 / num_cores 计算），核心计算全部在
-    kernel 内完成。wrapper 只调用一次 kernel（核心原则 #3）。
+    Host 校验参数、读取允许的元数据，用 torch.empty 或 torch.empty_like 分配输出/workspace 并启动原生入口。
+    本骨架展示单阶段；实际阶段与启动次数由任务和当前 delivery owner 决定。
+    其他 Host Torch 操作（含 view）或独立预处理须有逐任务、逐操作的显式批准，并计入完整调用。
     多输入算子按 DESIGN.md §0 I/O 规格扩展签名（如 layernorm 的 gamma/beta）。
     """
-    out = torch.zeros_like(inp)
+    out = torch.empty_like(inp)  # 仅示意同形输出；按 DESIGN 的真实 shape/dtype/device/stride 分配
     block_dim = {BLOCK_DIM}  # num_cores 计算式来自 DESIGN.md §5
     {op}_kernel[None, block_dim](inp, out)
-    torch.npu.synchronize()
+    # 同步/计时由测试或测量 runner 管理，不在公开 wrapper 内无条件插入。
     return out
 
 

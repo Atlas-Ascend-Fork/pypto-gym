@@ -4,10 +4,10 @@ title: "VF 尾块统一 mask"
 description: "让主体和尾块共用一份 VF 计算体，并在每拍从 total 与 offset 重新生成有效 mask。"
 status: "stable"
 tags: ["pypto-pro", "vec", "tail", "mask"]
-sources: [{"id": "kb-mask-load", "resource": "../../../../pypto-pro-op-kb/constraints/vec-alignment-and-rotation.md", "title": "完整寄存器容量与 full-mask 外提"}, {"id": "vf-load-align-api", "resource": "https://pypto.gitcode.com/pypto_pro/api/SIMD-API/operation/vf_computation/data_movement/load_align.html", "title": "vf.load_align 官方 API"}]
+sources: [{"id": "vf-mask-load", "resource": "../../../../pypto-pro-kernel/references/api/vf.md#repeated-runtime-masks-in-vf-loops", "title": "完整寄存器容量与 full-mask 外提"}, {"id": "vf-load-align-api", "resource": "https://pypto.gitcode.com/pypto_pro/api/SIMD-API/operation/vf_computation/data_movement/load_align.html", "title": "vf.load_align 官方 API"}]
 item_id: "vec-13"
 bound_hint: "VEC、SCALAR"
-applicability: "full 与 tail 代码体重复，逐拍 active 可由 total 减 offset 精确重算，offset 与 mask 使用同一元素粒度，且不违反已选 KB 中前提成立的 full-mask 外提义务"
+applicability: "full 与 tail 代码体重复，逐拍 active 可由 total 减 offset 精确重算，offset 与 mask 使用同一元素粒度，且可与 fixed full-mask 加独立 tail 的当前控制比较"
 target_api_gate: "仅限 Ascend 950PR 或 950DT；须核验 vf.update_mask 不回写 Python 标量，lane 常量按 dtype 与生成物确定"
 ---
 # 技术卡片 vec-13：VF 尾块统一 mask
@@ -25,7 +25,7 @@ target_api_gate: "仅限 Ascend 950PR 或 950DT；须核验 vf.update_mask 不�
 
 以下是不适用情形或需要权衡的风险；经验阈值仅作诊断参考：
 
-- 已选 KB 的 full-mask 外提义务前提已成立，却用本卡恢复逐拍 mask 计算。
+- 主体 mask 可复用而逐拍重新生成只增加成本；先保留 [当前 mask owner](../../../../pypto-pro-kernel/references/api/vf.md#repeated-runtime-masks-in-vf-loops) 的固定主体控制，按完整调用实测再决定。
 - 不能从绝对 offset 精确求出每拍有效元素，或输入/输出寻址需要独立 tail 分支。
 - 两 VL 的 part1/part2、逐行 total 或 offset 粒度无法成套重建，零长度 part 仍会访问数据。
 - 把 AscendC UpdateMask 的引用递减语义直译成 PyPTO-Pro，或跨 dtype/SoC 硬编码 64 lane。
@@ -58,7 +58,7 @@ def unified_tail_vf(src_tile, out_tile, total: pl.DT_INT64):
         vf.store_align(out_tile, y, preg, offset)
 ```
 
-本片段的 FP32 普通 NORM load 要求输入起始地址 32B 对齐，物理容量至少为 `ceil(total/64)*64` 个元素，末组 padding 可安全读取；mask 不裁剪完整 VL 的读取范围。[^vf-load-align-api][^kb-mask-load]
+本片段的 FP32 普通 NORM load 要求输入起始地址 32B 对齐，物理容量至少为 `ceil(total/64)*64` 个元素，末组 padding 可安全读取；mask 不裁剪完整 VL 的读取范围。[^vf-load-align-api][^vf-mask-load]
 
 一拍处理两个独立半区时，为每个半区分别计算 `active0 = pl.min(pl.max(total - offset, 0), LANES)`、`active1 = pl.min(pl.max(total - offset - LANES, 0), LANES)`，再分别调用 `vf.update_mask`；不要移植会原地递减的 C++ counter 模板，也不要把数学伪函数 `clamp` 当作 PyPTO-Pro API。
 
@@ -79,7 +79,7 @@ active_part2(i) = clamp(total - offset(i) - VL, 0, VL)
 
 ## 性能与验证指标
 
-比较 `Task Duration(us)`、代码体重复量与尾块 case。**待实测**：仅对不违反已选 KB 义务的方案，与 full-mask 外提＋独立 masked tail 作同口径 A/B，检查 mask/setup 增量是否抵消短向量/尾块的预期收益。[^kb-mask-load]
+比较 `Task Duration(us)`、代码体重复量与尾块 case。**待实测**：在任务与当前 API 合法的方案之间，与 full-mask 外提＋独立 masked tail 作同口径 A/B，检查 mask/setup 增量是否抵消短向量/尾块的预期收益。[^vf-mask-load]
 
 ## 技术限制与风险
 
@@ -95,5 +95,5 @@ active_part2(i) = clamp(total - offset(i) - VL, 0, VL)
 - 方法参照：RoPE arch35 `BatchInterleaveModeVF` 的两-VL `part1/part2` 预算与每行 `uint32_t` 重置；对照 `InterleaveModeVF` 的 `tailTwoVL/tailOneVL` 重复尾体。
 - 核查线索：目标版本的 `Vf.update_mask`、官方 CV fused/softmax 动态有效长度用例，以及 CCE 后端 `EmitVFUpdateMask` 的每次临时 `uint32_t + POST_UPDATE`；用生成物确认“不写回 Python 标量”。
 
-[^kb-mask-load]: [Vec 对齐、完整寄存器容量与 mask 外提规则](../../../../pypto-pro-op-kb/constraints/vec-alignment-and-rotation.md)。
+[^vf-mask-load]: [当前完整寄存器容量、mask 与外提比较](../../../../pypto-pro-kernel/references/api/vf.md#repeated-runtime-masks-in-vf-loops)。
 [^vf-load-align-api]: [vf.load_align 官方 API](https://pypto.gitcode.com/pypto_pro/api/SIMD-API/operation/vf_computation/data_movement/load_align.html)。

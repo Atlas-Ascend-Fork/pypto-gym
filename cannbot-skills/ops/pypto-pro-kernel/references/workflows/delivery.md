@@ -22,6 +22,12 @@ Deliver one module-level native `@pl.jit` entry. Use native tiling keys to selec
 
 The host wrapper in `<op_name>.py` owns the public signature, input validation, intermediate/output allocation and tiling metadata. All launches call the same kernel object; do not route between different Python kernel objects on the host. If a fallback requires several stages, it may launch that entry repeatedly with different keys. Document the supported parameter domain, key-to-algorithm mappings and stage sequences. Distinguish source entry count, compiled specialization count and native tasks per call. Do not make callers invoke a factory or understand temporary experiment names.
 
+### Host wrapper boundary
+
+The wrapper validates arguments, reads contract-permitted metadata (shape, strides, dtype and device), derives scalar launch parameters, allocates outputs and workspaces with `torch.empty` or `torch.empty_like`, and invokes the native entry. Tensor-content arithmetic and routing on tensor values belong in the native implementation. The task determines the launch count.
+
+Perform required tensor transformations in the native implementation. Host Torch operations beyond the metadata reads and allocations above, including storage-sharing views, casts, transposes and contiguous copies, require explicit task approval for the specific operation. The same requirement applies to a separate preprocessing step. Record the approved scope and include the step in full-call correctness and timing.
+
 ### Adapt a teaching factory
 
 Use [engram_gate/kernel.py](../../examples/algorithms/engram_gate/kernel.py) as an implementation-form anchor: `EngramKey`, `engram_gate_kernel`, `_launch` and `engram_gate_wrapper` show a module-level entry, internal routing and the public wrapper together. Its [test.py](../../examples/algorithms/engram_gate/test.py) exercises the public entry and changing runtime inputs. It remains a repository example; arrange its reference and test roles according to the five-file delivery layout when extracting a package.

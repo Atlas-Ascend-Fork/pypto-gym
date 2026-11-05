@@ -13,6 +13,12 @@ Use [check.py run](../tooling/checks.md#run-a-command-after-source-checks) in th
 
 Calibrate the test's failure path once with a deliberately corrupted result at the original tolerance: it must fail before any timing callback. Assert public output shape/dtype, finiteness where required, guards and the actual evaluator's numerical criterion. A reported error norm or `ok: false` followed by process exit 0 is an invalid acceptance harness. Use the reference's required precision and output dtype for each branch, including BF16; keep correctness and timing behind the same assertions.
 
+### Keep device ownership through remote-job completion
+
+Verify who holds the configured device lock, not merely that a lock wrapper is running. For an advisory file lock, check the actual file object and owning descriptor/process; on Linux, the device/inode and held record distinguish an owner from a queued waiter. Keep the holder and inherited descriptors alive through all child device work, synchronization and cleanup. Replacing the lock file or letting its holder exit while a background job continues can allow another process to acquire a different or released lock.
+
+A controller timeout or lost SSH/tool connection does not prove that a remote job stopped or released the device. Use the environment's supported managed-job or detached execution mechanism when needed, retain its job/process identity and logs, and query or reattach before submitting a replacement. Distinguish queued, running, completed and unknown states; a missing local waiter is not remote completion. Do not terminate another owner's job to obtain the lock. Machine-specific lock paths, process-control commands and recovery policies stay in the external execution configuration.
+
 ## Integrate a supplied evaluator
 
 Inspect how the evaluator discovers the public callable and loads the submission before invoking its build/install path. A source-directory option can build a wheel and install it into the current interpreter; it does not imply source-only loading. For a read-only shared installation, verify the evaluator's supported source-loading mode or use a trial-owned installation environment, preserving the pinned framework dependencies. Source loading still uses the original golden, checker and performance protocol.
@@ -54,12 +60,23 @@ Before interpreting a new probe's numbers, state which boundary it tests and how
 
 First run with one worker and the smallest legal complete slice, then extend the dimensions needed to test ownership or reuse. A partial match can locate a working region, but keep the boundary unresolved until all expected regions pass. If the probe violates these controls, repair it before changing the kernel or attributing the result to unsupported hardware behavior.
 
+The negative control must reach the condition it is meant to expose, and its expected result must be independent of the implementation switch. Assert the relevant geometry (such as an actual ring wrap or misaligned boundary), and confirm a source perturbation changed the intended bytes before interpreting the verdict. A no-op edit or a checker that changes its expectation with the same switch is not a failure-path test. Count the comparisons actually executed, not only test functions that returned successfully.
+
 ## Isolating device faults
 
 - Run traps, illegal hardware combinations and potentially hanging cases in separate processes with an external timeout. Afterwards, launch a trivial kernel in a fresh process to verify recovery.
 - Launch failures following the first AICore fault in one process are usually cascades, not dozens of independent defects. See [regression leads](../diagnostics/regressions.md) for selection and known observations.
 - Device printf output may not be flushed when synchronization finishes; use a controllable subprocess when capturing it.
 - Report invalid logs, timeouts and unexecuted cases explicitly; none counts as verified.
+
+### Localize a stall from the executed binary
+
+When a fault dump supplies stuck PCs, preserve it and the actual device binary before removing synchronization edges. A watchdog timeout alone does not distinguish an event wait, local pipe/buffer acquisition, an invalid access or another stalled instruction. A mapped PC narrows the investigation; an asynchronous fault's reported location need not be its root cause.
+
+1. Identify the loaded device image and its source, specialization and toolchain. Some builds embed it in a shared-library section such as `.aicore_binary`; inspect that build's section table before extracting it. [llvm-objcopy](https://llvm.org/docs/CommandGuide/llvm-objcopy.html) provides section extraction, but the container and section name are runtime-specific.
+2. Establish the dump's address convention and load base independently. For an absolute PC, derive the object address from the verified load base and check an independently reported entry address against its symbol offset. Do not subtract a base from an already-relative PC or apply another binary's entry offsets.
+3. With matching debug line information, [llvm-symbolizer](https://llvm.org/docs/CommandGuide/llvm-symbolizer.html) or `llvm-dwarfdump --lookup` can map an object address to generated-source lines even when an ISA disassembler is unavailable. If a rebuild adds debug information, require identical device text bytes, entry offsets and corresponding generated source before using it to map the failed executable. Otherwise the new line table describes a different program.
+4. Inspect the mapped operation and its producers, consumers and resource ownership, then choose a discriminating probe under the existing isolation rules. Do not infer that every hang is a flag mismatch, that a source-level buffer-acquisition call proves a unique hardware cause, or that a smaller shape produces the same binary without checking its identity. Missing dump/debug information leaves this localization unavailable; continue with generated-code and controlled dataflow checks.
 
 ## Numerics and races
 

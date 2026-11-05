@@ -1,150 +1,78 @@
-# Vector reduction authoring and performance
+# Vector reduction: current owners and legacy handoff checks
 
-## Contents
-
-- [Selection rule](#selection-rule)
-- [Correct `vf.load_align` and mask placement](#load-mask-placement)
-- [Reduction checklist](#reduction-checklist)
-- [Do not branch inside a vector function](#no-branch)
-- [Per-call overhead and loop form](#call-overhead)
-- [Load-issue cost model — a hypothesis to re-probe, not a fact](#load-cost-model)
-- [Reviewable examples](#reviewable-examples)
-- [Scratch barriers follow dependency edges, not function boundaries](#scratch-barrier)
-- [Primary source order](#primary-sources)
-
-
-Use this reference for row reductions and reduce-then-broadcast dataflows in a
-PyPTO-Pro vector section. Candidate selection is defined by `DESIGN.md`.
+This page preserves the existing Module workflow's review questions. The sole
+technical authority is [pypto-pro-kernel](../../pypto-pro-kernel/SKILL.md).
+Use its current owners and installed-source evidence instead of inheriting API
+or performance claims from a historical reduction implementation.
 
 ## <a id="selection-rule"></a>Selection rule
 
-Apply the workflow policy in this order:
+Implement the task-specific dataflow and numerical boundaries in `DESIGN.md`.
+The current authoring policy uses VF for Vector compute except its explicit
+sorting exceptions; an old tile-operation sample supplies no extra exception.
+Use [row reduction](../../pypto-pro-kernel/references/patterns/vf-row-reduce.md)
+for independent rows and [outer reduction](../../pypto-pro-kernel/references/patterns/vf-outer-reduce.md)
+when the reduced axis crosses rows. Confirm the input, accumulator and intermediate
+dtypes against [numerics](../../pypto-pro-kernel/references/api/numerics.md).
+A same-type reduction cannot recover an overflow that happened before widening.
 
-1. **Correctness and API support.** Confirm the operation, dtype, mask, layout,
-   and tail behavior in the API documentation installed for the target
-   PyPTO/CANN version. Settle the accumulator's dtype here, before comparing
-   candidates: the reduce primitives are same-type and cannot widen, so a
-   narrow-dtype chain whose intermediates exceed the format's range has to be
-   widened by the caller. See
-   [`pypto-pro-op-kb/constraints/precision.md`](../../pypto-pro-op-kb/constraints/precision.md).
-   A faster candidate that returns `inf` is not a candidate.
-2. **Follow `DESIGN.md §1`.** Implement its single frozen choice. Use tile
-   operations only when DESIGN cites an explicit selected-KB-template requirement.
+## <a id="load-mask-placement"></a>Load, mask and output maps
 
-Do not generalize a result from softmax, RMSNorm, L2Norm, LayerNorm, one shape,
-or one platform to all vector operators. The profiler result for the current
-kernel is authoritative.
-
-## <a id="load-mask-placement"></a>Correct `vf.load_align` and mask placement
-
-`vf.load_align` loads a register view and does not take a predicate register.
-Apply masks to computation and store operations whose installed API signature
-accepts them.
-
-```python
-loaded = vf.load_align(input_tile, offset)
-accumulator = vf.add(accumulator, loaded, predicate)
-result = vf.reduce_sum(accumulator, predicate)
-vf.store_align(output_tile + offset, result, predicate)
-```
-
-This form is invalid:
-
-```python
-loaded = vf.load_align(input_tile, offset, predicate)
-```
-
-Verify the exact argument order against the target version's API page before
-copying a call; names and signatures may differ across SDK versions.
+Read the [VF owner](../../pypto-pro-kernel/references/api/vf.md), including the
+installed signatures, physical register load extent, predicate width, narrow-source
+widening and store distribution. A computation mask does not shrink a complete
+register load. Derive actual input addresses, valid lanes and output writes before
+adapting an example; replacing an API prefix is not a conversion.
 
 ## <a id="reduction-checklist"></a>Reduction checklist
 
-- Keep reduction accumulators in the precision required by the numerical
-  contract; use FP32 unless a documented and validated narrower path is
-  acceptable.
-- Exclude padding lanes from every reduction and output store.
-- Treat register width, offset units, predicate construction, and reduction
-  result lanes as API-version-specific facts.
-- Budget the backing Vec tiles against the detected platform. VF registers do
-  not remove the need to fit input/output/workspace tiles in on-chip memory.
-- Re-run correctness after every unroll, accumulator, mask, buffering, or tile
-  size change.
-- Use profiler data to distinguish vector-compute, scalar/control, and
-  data-movement limits before selecting an optimization.
+- Record logical rows, physical pitch, all live local tiles and rotating slots.
+- Initialize each row/stream state independently; keep padding out of every stage.
+- Check required intermediate rounding, small magnitudes and cancellation.
+- Separate transfer chunk size, register width and horizontal-reduction frequency.
+- Recheck addresses, precision, tails and repeated calls after changing geometry.
+- Compare the complete call using the same source, inputs, workers and metric.
 
-## <a id="no-branch"></a>Do not branch inside a vector function
+## <a id="no-branch"></a>VF control flow
 
-This is a property of the vector unit, not of any DSL over it: the vector pipe
-has no branch, so an `if` inside a vector function
-lowers to predicated execution — both arms issue, every lane pays for both, and
-the loop around them pays the mask bookkeeping. A vector function that branches
-per iteration is far slower than one that does not.
+A branch is not universally illegal or necessarily emitted as both arms. Follow
+[current VF loop-form evidence](../../pypto-pro-kernel/references/api/vf.md#keep-runtime-dispatch-out-of-vf-loops):
+compare invariant dispatch outside VF with specialized bodies, then inspect the
+actual lowering. Register bindings and runtime branches have their own contracts.
+An empty route must genuinely issue no invalid access; a zero count or final mask
+alone is not that proof. Historical instruction-cost estimates are hypotheses,
+not current performance facts.
 
-Write the alternative out of the vector function instead:
+## <a id="reviewable-examples"></a>Current correctness anchors
 
-- **Choose the route in the kernel body.** A kernel-level conditional runs on
-  the scalar unit and is a real branch. Better still, select by *emptying a
-  loop*: give the route that does not apply an empty item range —
-  `end = begin + (end - begin) * on`, `on` in `{0, 1}` — so both bodies stay
-  straight-line and neither needs a condition. The empty range is genuinely
-  empty in pypto-pro: `pl.range(start, 0, step)` executing zero times is
-  measured directly in
-  [`pypto-pro-op-kb/patterns/vec-tensorlist-fixed-arity.md`](../../pypto-pro-op-kb/patterns/vec-tensorlist-fixed-arity.md).
-- **A zero-or-one-iteration loop replaces an `if`.** A loop bounded by
-  `min(n, 1)` runs its body only when `n > 0`, costs one loop set-up, and does
-  not predicate the lanes.
-- **A clamp replaces a conditional value.** A min/max composition is a
-  branchless 0/1 select, and a masked multiply by a 0/1 register zeroes a
-  contribution that should not count.
-- **A `select` replaces a conditional store.** A compare into a mask register
-  followed by `vf.select` is a data-path operation, not a branch — and masks
-  measured free (see the cost model below).
+- [Basic VF softmax](../../pypto-pro-kernel/examples/basic_api/vf/vf_softmax/).
+- [LayerNorm](../../pypto-pro-kernel/examples/algorithms/layernorm/).
+- [Streaming masked softmax](../../pypto-pro-kernel/examples/algorithms/streaming_masked_softmax/).
+- [Example catalog](../../pypto-pro-kernel/references/tooling/examples.md).
 
-## <a id="reviewable-examples"></a>Reviewable examples
+Read each kernel/test header and rerun its relevant unchanged scope on the target
+before adapting it. The old tile/VF softmax pair recorded different historical
+implementations and measurements; these current anchors do not reproduce that
+comparison or validate an unrun rewrite. A passing softmax does not establish that
+another reduction or dtype uses the same rounding, layout or fastest path.
 
-- Tile-operation softmax:
-  [`pypto-pro-op-kb/examples/samples/softmax/softmax_impl.py`](../../pypto-pro-op-kb/examples/samples/softmax/softmax_impl.py)
-- Vector-function softmax:
-  [`pypto-pro-op-kb/examples/samples/vf_vs_tileop/vf_softmax_impl.py`](../../pypto-pro-op-kb/examples/samples/vf_vs_tileop/vf_softmax_impl.py)
-- Other validated vector-function compositions:
-  [`pypto-pro-op-kb/examples/kernel-index.md`](../../pypto-pro-op-kb/examples/kernel-index.md)
+## <a id="scratch-barrier"></a>Scratch barriers protect dependency edges
 
-These examples establish API usage only for their recorded environment. They
-are not proof that the same implementation level is fastest for another
-operator or target.
+Use [same-VF ordering](../../pypto-pro-kernel/references/api/vf.md#212-multiple-memory-accesses-to-the-same-tile-inside-vf-have-no-ordering-guarantee)
+and [allocation/lifetimes](../../pypto-pro-kernel/references/api/memory-allocation.md)
+for actual guarantees. For each dependency record the producer/consumer,
+overlapping range or alias, RAW/WAR/WAW hazard, loop backedge and applicable barrier
+or tile-group handover. Place synchronization between matched accesses and include
+ring wrap and final consumption. A helper's lexical end is not a substitute for
+that analysis, nor does a local VF barrier establish every cross-pipe dependency.
+Inspect the installed lowering and profile the matched alternatives; do not append
+a blanket barrier or claim it is free.
 
-## <a id="scratch-barrier"></a>Scratch barriers follow dependency edges, not function boundaries
+## <a id="primary-sources"></a>Evidence for implementation and handoff
 
-`@pl.vector_function` expands at call sites, so a helper tail is not a
-synchronization boundary. Add `vf.mem_bar()` only for a concrete UB dependency
-on a reachable expanded path, including later VF calls, loop back-edges, and
-Tile operations after lowering. Record the ordered accesses, overlapping UB
-range/alias, hazard, and lowered operation classes.
-
-Every hazardous path not already ordered by a documented register/dataflow
-guarantee must cross a matching barrier, and every barrier must protect such a
-path; Python variable names do not prove physical same-register ordering.
-Choose the mode from the target API's src→dst classes for the actual RAW,
-WAR, or WAW hazard. Place it between matched accesses with the least
-serialization.
-
-A Tile operation counts only when its lowering supplies the matching access.
-A final VF store consumed only by `pl.store`/MTE3 needs documented cross-pipe
-ordering, such as TileGroup `auto_mutex=True` or explicit pipe synchronization,
-not a VF-local memory barrier. Barrier cost is paid on every dynamic execution; inspect
-generated code and profile it instead of treating the cost as negligible.
-
-## <a id="primary-sources"></a>Primary source order
-
-1. `$PYPTO_DEVKIT_DIR/docs/pypto_pro/api/` for the installed `pl` and `vf`
-   signatures and constraints. In the current documentation layout, verify
-   `SIMD-API/vf_computation/data_movement/load_align.md`,
-   `SIMD-API/vf_computation/data_movement/store_align.md`,
-   `SIMD-API/vf_computation/data_movement/mem_bar.md`, and
-   `SIMD-API/vf_computation/reduction/reduce_sum.md`.
-2. The official examples listed in
-   [`../../pypto-pro-material-explore/references/official_samples.md`](../../pypto-pro-material-explore/references/official_samples.md).
-3. A correctness run and profiler capture on the detected target.
-
-If these sources disagree, record the version and the observed result, then use
-the behavior of the actual target environment for that implementation.
+Use target-version official docs, installed source/signatures and controlled target
+probes as distinct evidence. See [evidence checks](../../pypto-pro-kernel/references/verification/evidence.md).
+Preserve source/toolchain identity and exact commands/results. L1 staged evidence
+covers only its implemented Modules; finalization must verify the actual final
+wrapper and every applicable DESIGN invariant. Conflicting observations require a
+scoped diagnosis, not a universal capability verdict.

@@ -2,8 +2,7 @@
 
 一次分阶段 Cube matmul 的 A/B 比较要成立，必须满足下列每一项。把它当判据清单读，
 不是当表格填——它约束的是"这次比较能不能作为证据"，不是记录格式。配套的精度与性能门在
-[分阶段 Cube matmul gates](../../../pypto-pro-op-kb/references/staged-cube-matmul-gates.md)，
-先读那一页。
+[当前数值合同](../../../pypto-pro-kernel/references/api/numerics.md)、[GEMM owner](../../../pypto-pro-kernel/references/api/gemm.md) 与 [source-bound comparison](../../../pypto-pro-kernel/references/diagnostics/performance.md#test-a-mechanism-with-source-bound-evidence)。本页保留既有工程的 A/B 记录方法，不另设技术规范；具体任务的累加/阶段边界以这些 owner 和实际执行参考为准。
 
 两条贯穿全篇的规则：
 

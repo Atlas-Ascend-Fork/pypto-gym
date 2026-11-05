@@ -1,4 +1,4 @@
-# Measured Support Findings
+# Supporting interfaces and version-scoped findings
 
 **All eight examples were run on board** (2026-09-28, Ascend950PR). The examples are in [`examples/basic_api/support/`](../../examples/basic_api/support/). **At the close of this chapter, all 40 examples in the example plan had been implemented.**
 
@@ -62,6 +62,8 @@ The final three rows are the discriminating cases; rows 4 and 5 use the same par
 If passing `saturate=ON` to `astype` has no effect, the first instinct is to think “the argument was passed incorrectly”; the setting that needs to change is CTRL[60].
 
 ## 5. `get_subblock_num` Depends on Whether the Kernel Has a Cube Section
+
+When porting a work partition, verify block and subblock indices on the target with the same kernel sections. A `pl.store` keyword or the presence of a Python API cannot establish the divisor for worker ownership.
 
 | Kernel | `subblock_num` | `subblock_idx` (4 blocks) |
 | --- | ---: | --- |
@@ -236,3 +238,14 @@ core_id = pl.get_block_idx() // pl.get_subblock_num()
 The official `cube_vector_fusion.md` example `matmul_softmax_kernel` contains this line, but no documentation states it as a rule. Diagnostic signature when division is omitted (highly useful for diagnosis): roughly 70% of elements are wrong, large parts of output retain their initial values (even threads write only the first half of each core's range, odd threads write only the second half), error magnitude looks random from tens to 1e33, and **every kernel variant fails in exactly the same way** (ruling out a synchronization bug unique to one variant). This is in the same family as §5 (`get_subblock_num` depends on whether there is a cube section) and §6 (the two index APIs).
 
 **Launch has different semantics; do not extrapolate from this rule:** for a mixed kernel, `X` in `kernel[None, X]` is the **number of execution groups** (one AIC + two AIVs per group; official `kernel_function.md` “Meaning of blockDim”, `LimitLaunchBlocks` in `pypto_launch.h` does not divide the request by 2; all three evidence sources agree, board-verified 2026-09-29). “Vector-side index is thread-based” ⇏ “launch count is thread-based”—passing `2×core_count` to match thread count really launches twice as many groups, with extra ghost groups whose `core_id ≥ core_count` writes past `out` into GM rows `[M, 2M)`. The first call may still return correct output (real groups filled `out`), while an adjacent tensor is silently changed or the device raises 507015 (the location drifts with `out` size). See [api/crosscore-sync.md](crosscore-sync.md) “Mix-kernel block_dim is a group count” for the full diagnosis and address accounting.
+
+## 16. Bounded tensor collections under a fixed-arity interface
+
+First check the target runtime's supported parameter kinds and list interface; a historical lack of TensorList support is not a current capability verdict. If only fixed parameters are available, a finite, contract-bounded list of contiguous rank-insensitive elementwise inputs can be considered for separate typed `Ptr` slots plus runtime lengths/metadata. This is an interface candidate requiring target parsing and end-to-end device validation, not a retained validated TensorList kernel.
+
+- Establish the maximum list length, relationships between multiple lists, each slot's dtype/device/layout and element-count/address-arithmetic bounds. A list is different from one tensor with a batch axis. Noncontiguous or rank-sensitive semantics need a separately specified shape/stride ABI; flattening them by element count loses meaning.
+- Validate real tensors in the public wrapper; do not assume pointer annotations provide Tensor rank/dtype checks. When supported, pass each original tensor through its declared pointer parameter and create the permitted logical view in the native kernel with `pl.make_tensor`. An integer table of host `data_ptr()` values does not establish that runtime scalars can become native pointers.
+- For padded slots, specify safe pointer arguments and zero work. Keep all loads, stores and nonempty view construction behind the actual work range; test guards proving padded outputs stay untouched. Define empty-list and all-empty behavior separately, since there may be no real slot to reuse. Do not infer a large pointer signature's ABI support from an older Tensor-parameter test.
+- Reuse a bounded local-buffer plan across sequential list items when lifetimes permit; do not multiply UB allocation by the maximum arity merely because slots are written out in source. Count work across the whole list using the [continuous ownership principle](gemm.md#distribute-tiles-across-runtime-groups), so every short item does not repeatedly select the same few workers.
+
+Compare a padded fixed-arity entry with permitted batching/launch alternatives using [complete-call timing](../verification/native-timing.md#choose-and-name-the-metric), including wrapper overhead and compilation variants. The task and [delivery contract](../workflows/delivery.md#kernel-definitions-and-dispatch) govern entry count and launch structure; this candidate adds no universal one-launch rule, source generator or kernel factory.

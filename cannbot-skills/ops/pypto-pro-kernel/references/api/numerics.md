@@ -5,11 +5,13 @@ Keep the task's supplied tolerances, rounding and exact-output clauses fixed. Er
 | Numerical question | Read next |
 | --- | --- |
 | Cancellation and error scales in chained contractions | [Term-sum scale and sensitivity](#1-cancellation-in-chained-matmul-golden-is-not-the-scale-for-rtol) |
+| Which stage introduces a multi-stage numerical failure | [Controlled stage substitution](#localize-errors-by-stage-substitution) |
 | A tiny statistic becomes a normalizing divisor | [Input/intermediate ranges and discriminating probes](#2-small-magnitudes-in-normalized-ratios) |
 | Centered statistics or long signed reductions | [Centering and accumulation hierarchy](#3-centering-and-accumulation-order) |
 | Exponential normalization has contractual score bounds | [Fixed-reference feasibility](#4-fixed-references-in-bounded-exponential-normalization) |
 | Copies, partial transforms or untouched output storage | [Bit patterns and reference complements](#5-representation-preserving-outputs) |
 | Reproducible sums with conflicting updates | [Fixed order or exact accumulation](#6-reproducible-reductions) |
+| NaN/Inf mismatches or guards around exceptional values | [Special values and branch semantics](#7-special-values-and-branch-semantics) |
 
 ## 1. Cancellation in Chained Matmul: `|golden|` Is Not the Scale for rtol
 
@@ -18,6 +20,8 @@ At output positions where a reduction cancels opposite-sign terms, `|golden|` ca
 When the task allows deriving an acceptance bound, an elementwise backward-error-style candidate is `|out - golden| <= RTOL * (Σ_j |a_ij|·|b_jk|) + ATOL`, using the sum of absolute terms (`reference.cancellation_scale`). Derive its coefficients from the permitted arithmetic and verify that incorrect indexing or omitted contributions fail it. When the task supplies ordinary atol/rtol, diagnose and fix the implementation within those criteria instead.
 
 **Discriminating experiment:** on the same CPU input, vary FP32→FP64 without changing summation order, then single-shot→blocked summation without changing precision. Deviations caused by those changes establish numerical sensitivity, not the absence of an implementation defect; retain localization checks on the device result. Reusable case: `swiglu_ffn/test.py::test_reduction_order_sensitivity_is_inherent`.
+
+For cancellation between a few products, such as a paired rotation, separate product rounding from summation error. When the contract permits more accurate arithmetic, a candidate is to form an independently rounded product `p = round(a*b)` and a residual `fma(a,b,-p)`, then combine product and residual terms with a justified summation scheme. This is not an unconditional error-free identity: establish operand/result ranges, residual representability, rounding and true FMA behavior, and inspect whether contraction/reassociation changed the intended operations. Summation compensation cannot recover a product residual that was never retained. Revalidate the complete expression at the original criterion and compare its actual cost; do not remove a contract-required intermediate rounding.
 
 Apply the chosen criterion consistently to all elements, and retain required reproducibility and localization tests. Nonnegative normalized weights do not prevent cancellation when payloads have mixed signs; inspect the absolute weighted terms and the final consumer rather than inferring stability from the weights alone.
 
@@ -29,7 +33,28 @@ When a matrix primitive requires lower-precision operands, compare a path that r
 
 Choose the number of components from the original error criterion and permitted ranges. With reconstruction residual `E = x - sum(c_i)`, its exact-arithmetic contribution satisfies `abs(E @ W) <= abs(E) @ abs(W)` elementwise; budget product, accumulation and downstream sensitivity separately. Check near-zero and cancellation criteria as well as mean relative error. Compare the producer's output and its reconstructed value separately: improving reconstruction cannot recover information already lost by the producer. For a long producer reduction, compare independent K partials plus an FP32 merge when that addresses the observed error, accounting for scratch, merge cost and the changed summation order.
 
+One concrete Cube candidate distributes successive K blocks among `P` independent accumulators: block `j` contributes to accumulator `j % P`, preserving increasing K order within each partial. Merge the completed FP32 partials with an explicit tree, such as `(p0 + p1) + (p2 + p3)` for `P=4`. Compare this cyclic assignment with contiguous K partitions and the original chain; neither a fixed accumulator count nor a statistical rounding estimate establishes accuracy. Choose `P` from the actual error and live-resource budget. If static unrolling simplifies the per-accumulator initialization, finalization or slot schedule, also handle a K-block count not divisible by `P` and fewer than `P` blocks: initialize every consumed partial or supply its neutral value without reading an unwritten GM record. Hardware `AccPhase`/`STPhase`, when used, must match each accumulator's actual last update and supported drain path; they do not choose which products are accumulated. Validate all dependent outputs at the original criterion and time the complete partial-store/merge path before retaining the candidate.
+
 Revalidate the complete chain at the unchanged criterion, then compare representation cost and native execution paths using [thin-row contractions](gemm.md#thin-row-contractions-compare-arithmetic-and-transport-paths). The [projection/normalization example](../../examples/algorithms/mla_prolog/) demonstrates these choices; its component count and tiling are scoped to its contract, not defaults for another kernel.
+
+Stop adding residual components when the reconstruction residual is exactly zero: further components cannot recover a producer error already present in `x`. To screen precision plans before device implementation, replay the complete expression on CPU with the proposed storage conversions, component construction and reduction order explicit. Grade every dependent output through the supplied comparator, including its native-reference input when required. A failing model rules out that modeled arithmetic, not every device implementation; a passing model prioritizes a candidate but does not validate the backend's reduction order, conversions, underflow or timing.
+
+### Localize errors by stage substitution
+
+First validate the [reference/evaluator path](../workflows/authoring.md#reference-and-evaluator) and the [diagnostic transport](../verification/board-runs.md#diagnostic-probes). Choose statistics over the actual failing region: relative errors in a normal region and absolute errors near zero or cancellation, as defined by the supplied checker. Retain elementwise signed errors before reporting percentiles or maxima; a bulk statistic that excludes the failing elements cannot identify their source.
+
+For `B -> C`, let `b_ref` be B's independent reference output, `b_dev` its observed device output, `C_ref` the reference consumer and `C_dev` the device consumer. Preserve all contract-required rounding at each boundary. With `truth = C_ref(b_ref)`, evaluate on the same inputs:
+
+```text
+e_inherited   = C_ref(b_dev) - truth
+e_own         = C_dev(b_ref) - truth
+e_total       = C_dev(b_dev) - truth
+e_interaction = e_total - e_inherited - e_own
+```
+
+These substitutions require C to accept the proposed boundary representation. If injecting `b_ref` needs a narrowing conversion, treat that conversion as a separate stage and measure its error; silently casting it cannot isolate C's own error. Check like-for-like axes, validity and pre/post-scale values, and keep the original complete-chain verdict as the acceptance result.
+
+The signed decomposition is an identity; root-sum-square attribution is not. `rms(e_total)^2` is approximately the sum of the inherited and own squared RMS values only when the interaction is negligible and `mean(e_inherited * e_own)` is negligible (for example, approximately zero-mean, uncorrelated errors). Maxima, percentiles and per-element absolute errors do not add in quadrature. Inspect the interaction or use additional substitutions when those assumptions fail. After repairing one stage, revisit candidates previously hidden by its error. Where an output branch does not depend on the changed stage, retain it as an internal unchanged-output control.
 
 ## 2. Small magnitudes in normalized ratios
 
@@ -84,3 +109,13 @@ Separate the required accuracy from the required reproducibility. Repeated float
 For bounded approximate sums, quantizing a computed term to a multiple of a power-of-two step `h` can permit exact integer accumulation. With nearest rounding and at most `L` terms, budget `L*h/2` for quantization, plus term evaluation and final conversion error. Prove that every partial sum fits the integer type using the sum of absolute integer contributions, not just the final signed result; cancellation does not prevent intermediate overflow. Verify the actual rounding mode and conversion range on the installed backend. Choose a feasible step from the entire contract, rather than observed input magnitudes. This changes the arithmetic and is unsuitable when prescribed intermediate rounding, exact values or a tighter error bound exclude it.
 
 Test coherent small terms near quantization boundaries, both signs, maximum same-sign sums and small residuals after cancellation. Check that a deliberately lossy alternative would exceed the supplied bound; random errors may cancel. Accuracy, reproducibility and speed need separate evidence: exact integer updates can still be costly or highly contended.
+
+## 7. Special values and branch semantics
+
+When the contract permits NaN or infinity, inspect their positions and required signs before finite-error summaries. Follow the supplied comparator's actual special-value rules; a zero reported norm can coexist with a NaN-position failure. First distinguish extra NaNs from missing NaNs. A missing NaN may have been replaced by a finite default, rather than produced by an invalid address. A poison/write-coverage test cannot expose that substitution: the output was written, with the wrong value.
+
+Build a branch truth table for positive, zero, negative and NaN inputs before changing a protective guard. For example, with ordered comparisons, `den > 0` is false for NaN as well as zero/negative values; selecting a zero output on that false branch can erase a NaN that the reference propagates. This is different from detecting an empty domain. Preserve the contract's empty-domain predicate and exceptional-value behavior separately, and test the safe-denominator selection and final output selection together. Do not universally replace one comparison by another: the negative-value convention and target comparison/select behavior still need verification.
+
+Likewise, `x == x` rejects NaN but admits both infinities. Applying a finite residual identity to an infinite value can then create `Inf - Inf = NaN`. Use a verified finite-value classification or a separately defined exceptional path before such arithmetic; do not assume a zero multiply or another algebraic test survives compiler transformations with the desired NaN behavior. Include all permitted exceptional sources, such as scales and coefficient tables, rather than testing only the main data tensor.
+
+Do not infer a device float-to-integer result for NaN/Inf from a Host cast. Check the chosen conversion's documented range, saturation and exceptional-value behavior, define the contractual handling before conversion, and test the actual path. For comparison probes, include known finite control rows, both infinity signs and NaNs with initialized transport under the [probe controls](../verification/board-runs.md#diagnostic-probes); plausible-looking unwritten output cannot establish comparison semantics.

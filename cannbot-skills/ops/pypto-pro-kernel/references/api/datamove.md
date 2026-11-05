@@ -197,6 +197,14 @@ Resolution: **exclude the nondeterministic overlap from the criterion**, asserti
 
 **This also identified the sole justified use of `bar_*` here.** Flags cannot help: `sync_src` / `sync_dst` require `set_pipe != wait_pipe`, so MTE3→MTE3 is rejected during parsing (a dedicated kernel in the example pins this). Thus, `bar_mte3()` is the only choice here, and the requirement is exactly “no parallelism within the pipe.” This agrees with §8: **`bar_*` drains one pipe; flags establish order between two pipes**. Recorded in [validation traps](../diagnostics/validation-traps.md) §9.
 
+### Additive overlap through a native tile store
+
+The native `pl.store` / `pl.store_tile` interface exposes `atomic=pl.AtomicType.AtomicAdd`. A Vec-source tile store uses MTE3; it is a different path from an Acc-source FIX store and from scalar SIMT atomics. Check the exact destination dtype, source path, alignment and option combination against the matching installation before relying on it; a signature or a passing FIX/SIMT example does not validate the Vec path. Compute Vector contributions in VF and preserve their tile lifetime until the store completes.
+
+Define each output's contributor set and its initial value. If accumulation starts at zero, one owner must initialize that region before **all** contributors; an atomic update does not order a concurrent zero fill. A repeated launch must either restore the prescribed initial value first or deliberately add to the previous result, as the contract requires. Keep initialization, accumulation and later reads behind a supported completion boundary.
+
+A useful integrated validation candidate receives a Cube result split across two AIVs, transforms each share in VF, writes their disjoint slabs to an ordinary output, and atomically combines them into a second output. Use distinct, nonzero shares: compare the combined output against their independently computed sum and check that it differs from either share alone. This distinguishes addition from an overwrite while the ordinary output checks both producers. Cover guards, repeated launches and every selected dtype on the target. Floating atomic updates need the original error criterion and [reproducibility contract](numerics.md#6-reproducible-reductions), since atomicity does not fix summation order. This preserves a study's dataflow and discriminating controls, not its old validation stamp; no new Vec-store kernel or current hardware pass is established here.
+
 ## 13. `tile_view`: three shape layers and a shared cursor
 
 | Example | Coverage |

@@ -5,10 +5,12 @@
 # fragments, not a standalone kernel.  Shapes, addresses, mutex ids, phases,
 # event ids, and API signatures still come from DESIGN.md and the installed SDK.
 #
-# Source: the fp32-precision entries of
-# ../../../pypto-pro-op-kb/references/pypto-pro-framework-findings.md.  Cite the
-# entry by title rather than by number -- that page is renumbered as entries are
-# added, so a number recorded here goes stale silently.
+# Historical fragments, not current API or target acceptance. Current owner:
+# ../../pypto-pro-kernel/references/api/numerics.md#preserve-intermediate-precision
+# and the current mla_prolog example. The old fixed partial/component counts and
+# CANN 9.1 conversion workaround below retain only that historical scope. Use
+# current GEMM/VF owners and revalidate any adapted path; this file adds no
+# tile-Vector-compute exception or new validated implementation.
 
 
 # A. Deep-K projection: partition K blocks into four independent FP32 L0C

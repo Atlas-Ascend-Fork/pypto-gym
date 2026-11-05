@@ -82,6 +82,12 @@ After fixing geometry, choose launch candidates around changes in `ceil(T/C)`, i
 
 Retune blocks after choosing ownership and apply this comparison separately to each product in a chain. Use thin-wide, tall-narrow and mixed-tail controls, timing all loads, computation and drains; a valid tile size or a fast square workload does not establish a good mapping for another aspect ratio.
 
+### Fold shared-RHS batch rows when their physical mapping permits it
+
+For `out[..., M, N] = A[..., M, K] @ B[K, N]` with the same B for every batch, compare folding the leading batch axes and M into one row stream: `[batch_product * M, K] @ [K, N]`. This lets an M tile cross batch boundaries and can reduce padding or underfilled tiles when each batch has few rows; merely flattening work-item IDs while retaining one small tile per batch does not test that candidate. Prove the physical row map first: contiguous batch/M rows permit the simple fold, while other layouts need an expressible explicit-stride map or a different path. Restore the original batch-axis order in the public output coordinates and preserve its shape, strides and dtype; folding does not authorize a hidden materializing Host reshape. Use the [GM axis and stride contracts](datamove.md#higher-rank-gm-to-a-two-dimensional-tile-map-axes-first).
+
+Do not use this shared-RHS collapse when B differs by batch. If another consumer uses batch/group-dependent coefficients or validity, recover that metadata from the original logical coordinates; shared B does not erase those boundaries. This is a dataflow candidate, not a newly validated kernel. Compare against explicit batched ownership including operand rereads, physical padding, tails, active owners, the busiest worker's work and all layout/launch costs; a valid algebraic collapse alone does not establish a complete-call gain.
+
 ## Thin-row contractions: compare arithmetic and transport paths
 
 A matrix-shaped expression does not settle which core should execute it. For a very small M and a wide retained N, compare a bounded VF dot-product path with the Cube control. Keep the activation in FP32 registers when the contract requires FP32 intermediates, widen BF16 weights, and accumulate along K with explicitly initialized FMA destinations. A Cube path representing one activation with several BF16 components performs several products against the same weight; those extra compute and L0 staging operations belong in the comparison even when GM weight traffic is unchanged. Revalidate reduction order and cancellation against the original evaluator.

@@ -38,7 +38,7 @@ target_api_gate: "仅限 Ascend 950PR 或 950DT；依赖 set_cross_core/wait_cro
 
 以下为结构示意，展示同步点改动；所用 `pl.*` 形态（`pl.system.sync_all(core_type=pl.SyncCoreType.MIX)`、
 `pl.system.set_cross_core/wait_cross_core(pipe=..., event_id=...)`、`pl.CrossCoreSyncMode.INTRA_BLOCK`、
-双槽 `beat % 2` 轮转）取自本仓已上板 kernel 与 KB 官方样例的已核验用法。片段是教学级最小示意：
+双槽 `beat % 2` 轮转）来自历史结构片段，不能继承为当前目标的完整验收。片段是教学级最小示意：
 例题设定 cube 每轮产出 `cv_ub` 双槽中的一槽、vec 同轮消费，反向以事件释放槽位；事件 ID、配对
 顺序、与全局屏障/自动流水占用 ID 的隔离须按目标版本核验。
 
@@ -80,7 +80,7 @@ with pl.section_vector():
 
 **关键陷阱**：事件 ID 是稀缺资源且按方向与拍次复用——相邻拍共用同一 ID 前必须确认上一过程的
 SET/WAIT 已全部配对完成，否则事件失效表现为静默错值或 aicore 超时；A5 上手写逐 tile 跨核握手有
-历史失败记录（见 KB constraints/sync-stitch），落地前须按当前官方样例的配对序列逐点对齐并上板验证。
+历史失败记录；落地前按 [当前 cross-core owner](../../../../pypto-pro-kernel/references/api/crosscore-sync.md) 的实际参与者、ready/release、初始空槽和最终消费完成规则构造完整序列并上板验证。本页简图省略的事件不能当成合法协议。
 
 ## 性能与验证指标
 
@@ -97,4 +97,4 @@ SET/WAIT 已全部配对完成，否则事件失效表现为静默错值或 aico
 
 - PyPTO-Pro：`docs/pypto_pro/api/SIMD-API/synchronization/set_cross_core.md`、`wait_cross_core.md`、
   `sync_all.md`。
-- PyPTO-Pro KB：`constraints/sync-stitch.md`。
+- [当前 cross-core owner](../../../../pypto-pro-kernel/references/api/crosscore-sync.md)：同步层级、参与者、事件与槽位生命周期；旧教学片段不构成当前可复用同步验收。

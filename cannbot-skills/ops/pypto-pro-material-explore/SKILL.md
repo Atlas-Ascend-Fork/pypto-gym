@@ -1,12 +1,12 @@
 ---
 name: pypto-pro-material-explore
-description: 基于已验证的 SPEC.md 探索当前 PyPTO-Pro 版本的 API、官方样例、教程与设计指南，生成可复用资料索引和带来源的可行性报告。用于 Stage 1 的 API 映射、版本约束和参考模式取证；不要修改需求语义、选择 KB、设计 Module/tile 或编写 kernel。
+description: 基于已验证的 SPEC.md 探索当前 PyPTO-Pro 版本的 API、官方样例、教程与设计指南，生成可复用资料索引和带来源的可行性报告。用于 Stage 1 的 API 映射、版本约束和参考模式取证；不要修改需求语义、设计 Module/tile 或编写 kernel。
 ---
 
 # PyPTO-Pro 资料探索
 
 只负责回答“当前目标版本能否实现、证据在哪里、有哪些约束”。需求语义以 SPEC 为准；
-KB 路由由 plan 负责，最终 Module/tile/同步方案由 Stage 3 决定。
+当前技术规范统一由 [pypto-pro-kernel](../pypto-pro-kernel/SKILL.md) 拥有；本 Skill 保留既有工程的资料索引与事实取证，最终 Module/tile/同步方案由 Stage 3 决定。
 
 ## 输入与输出
 
@@ -26,12 +26,12 @@ KB 路由由 plan 负责，最终 Module/tile/同步方案由 Stage 3 决定。
 1. 当前 `$PYPTO_DEVKIT_DIR` 中的目标版本 API 文档；
 2. `official_samples.md` 指定且缓存中存在的官方样例；
 3. 当前缓存中的 Pro 编程指南、快速入门与共享简介（见下方 §C 范围）；
-4. KB 中与当前 class 匹配、状态为 validated 的补充材料。
+4. 当前 kernel owner 与 [完整示例目录](../pypto-pro-kernel/references/tooling/examples.md) 中契约匹配的补充材料，保留 kernel/test 头部的最窄验证范围。
 
-API 签名、平台常量和能力边界以前三项为准。KB 或模型记忆不能覆盖目标版本事实。
+API 签名、平台常量和能力边界以前三项为准。历史材料或模型记忆不能覆盖目标版本事实。
 
 同步与 VF 的 API 说明见 `$CANNBOT_CONFIG_ROOT/references/performance-constraints.md`。
-最终实现选择由 [Design Skill](../pypto-pro-op-design/SKILL.md)的“两条实现约束”判定；
+实现 surface 由 [当前 authoring policy](../pypto-pro-kernel/SKILL.md#constraints-and-workspace-policy) 规定，具体任务设计由 [Design Skill](../pypto-pro-op-design/SKILL.md) 落实；
 本 skill 只为每个相关步骤记录目标版本证据，供 Stage 3 裁定。
 
 ## 工作流
@@ -69,8 +69,7 @@ python "<skill-dir>/scripts/build_material_index.py" \
 1. 从索引 §A 定位候选 API 并阅读全文；名称不足以定位时，只在 §A 已列文档中全文检索，
    结论写入 EXPLORE_REPORT，不手工修改索引。
 2. 记录准确签名、参数单位/语义、dtype、shape、layout、MemorySpace、tile 和版本约束。
-3. Vector 步骤先查目标版本是否有单一 VF API；没有时再记录有文档依据的 VF 组合；两者
-   都无法完整表达语义才标记 `unsupported`。不要在本阶段做 VF/tile-op 性能选择。
+3. Vector 步骤先查目标版本是否有单一 VF API，再查有文档依据的 VF 组合；同时按当前 authoring policy 核对相关 SIMT 路径或排序例外。仅 VF 不足不能判定整个步骤 `unsupported`；记录各路径的证据与未决条件，不在本阶段决定实现或性能优劣。
 4. Cube 步骤记录对应 `pl.*` API、累加语义及 layout 约束。
 5. 没有可行调用链时标记 `unsupported`，附查过的文档和失败原因；不得编造 API。
 
@@ -83,8 +82,7 @@ python "<skill-dir>/scripts/build_material_index.py" \
 与当前算子有关或跨算子通用的证据：API 调用、tile-group、循环、分核、同步、尾块和
 cross-core 边界。所有结论必须带样例路径。
 
-可按 `pypto-pro-op-kb/examples/kernel-index.md` 补充条目，但仅允许 `validated`、路径存在且
-topology/dtype/layout/platform 匹配的代码；`study` 不能作为正确性依据。
+补充示例按当前 kernel 的 [example selection](../pypto-pro-kernel/references/workflows/authoring.md#selecting-an-example) 查找，记录路径、数学/轴/精度/layout 差异及 kernel/test 的证据范围。源码存在不等于当前环境通过；未复跑的适配、概念候选和历史结果不得写成 validated。
 
 ### 5. 阅读指南与教程
 
@@ -103,7 +101,7 @@ topology/dtype/layout/platform 匹配的代码；`study` 不能作为正确性�
 - 按 API/样例/guide 分类的证据索引。
 
 本节是 Stage 3 的事实输入：报告可以提出 Stage 3 需解决的设计问题，但不得在这里冻结
-topology、Module、tile、同步事件或 KB_SELECTION。
+topology、Module、tile 或同步事件。§5/§6 按需记录当前 kernel owner 来源、任务的适用条件/invariant、设计作用和待验证问题，不产生额外选择协议。
 
 ## 完成条件
 

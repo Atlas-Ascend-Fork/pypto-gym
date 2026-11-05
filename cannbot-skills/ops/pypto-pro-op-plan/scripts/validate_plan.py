@@ -7,12 +7,13 @@
 # THIS SOFTWARE IS PROVIDED ON AN "AS IS" BASIS, WITHOUT WARRANTIES OF ANY KIND, EITHER EXPRESS OR IMPLIED,
 # INCLUDING BUT NOT LIMITED TO NON-INFRINGEMENT, MERCHANTABILITY, OR FITNESS FOR A PARTICULAR PURPOSE.
 # See LICENSE in the root of the software repository for the full text of the License.
-"""Validate PyPTO-Pro planning artifacts against the supplied devkit and KB."""
+"""Validate PyPTO-Pro specifications, material evidence and current kernel references."""
 
 from __future__ import annotations
 
 import argparse
 import hashlib
+import importlib
 import importlib.util
 import json
 import logging
@@ -20,10 +21,13 @@ import re
 import sys
 from pathlib import Path, PurePosixPath
 from typing import Any, Optional
+from urllib.parse import unquote
 
 
 OPS_ROOT = Path(__file__).resolve().parents[2]
 MATERIAL_ROOT = OPS_ROOT / "pypto-pro-material-explore"
+KERNEL_ROOT = OPS_ROOT / "pypto-pro-kernel"
+KERNEL_PREFIX = "pypto-pro-kernel/"
 PLACEHOLDER_RE = re.compile(r"\{[^{}\r\n]+\}")
 LOGGER = logging.getLogger(__name__)
 
@@ -44,23 +48,20 @@ def _read(path: Path, label: str) -> str:
     return text
 
 
-def _unique(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
-    result: dict[str, Any] = {}
-    for key, value in pairs:
-        if key in result:
-            raise ValueError(f"duplicate JSON key: {key}")
-        result[key] = value
-    return result
-
-
 def _module(name: str, path: Path):
     spec = importlib.util.spec_from_file_location(name, path) if path.is_file() else None
     if spec is None or spec.loader is None:
         raise PlanConfigurationError(f"missing checker dependency: {path}")
     module = importlib.util.module_from_spec(spec)
+    previous = sys.modules.get(name)
+    sys.modules[name] = module
     try:
         spec.loader.exec_module(module)
     except Exception as error:
+        if previous is None:
+            sys.modules.pop(name, None)
+        else:
+            sys.modules[name] = previous
         raise PlanConfigurationError(f"cannot load {path}: {error}") from error
     return module
 
@@ -171,6 +172,8 @@ def check_report(op_dir: Path, op_name: str, index: str) -> list[str]:
         errors.append(f"frontmatter op_name={actual_meta.get('op_name')!r}, expected {op_name!r}")
     if not actual_meta.get("feasibility") or "{" in actual_meta["feasibility"]:
         errors.append("frontmatter feasibility is missing")
+    elif actual_meta["feasibility"].strip().lower() in {"unsupported", "不可行", "不支持"}:
+        errors.append("frontmatter feasibility has an unresolved unsupported blocker")
     expected = [line for line in template.splitlines() if line.startswith("## ")]
     actual = [line for line in report.splitlines() if line.startswith("## ")]
     if actual != expected:
@@ -184,8 +187,8 @@ def check_report(op_dir: Path, op_name: str, index: str) -> list[str]:
     allowed = _file_paths(index)
     # Check devkit citations and required sample/guide coverage across the report.
     # Reading and applicability follow the Material Skill and semantic review.
-    # Directories and commands are not evidence; supplementary KB references
-    # are governed by the KB contract, not the devkit material index.
+    # Directories and commands are not evidence. Kernel guidance is checked
+    # separately against its own installed root, not the devkit material index.
     for label, prefix in categories:
         cited = set()
         for path in paths:
@@ -203,146 +206,89 @@ def check_report(op_dir: Path, op_name: str, index: str) -> list[str]:
     return errors
 
 
-def _mapping(kb_root: Path) -> dict[str, Any]:
+def _kernel_link_checker(kernel_root: Path):
+    """Reuse the current kernel's Markdown reader and anchor rules."""
+    package_root = kernel_root / "scripts/_checks"
+    name = "_plan_kernel_" + hashlib.sha256(str(kernel_root).encode()).hexdigest()[:16]
+    if name not in sys.modules:
+        _module(name, package_root / "__init__.py")
     try:
-        value = json.loads(
-            _read(kb_root / "topology-map.json", "topology-map.json"),
-            object_pairs_hook=_unique,
-        )
-        if not isinstance(value, dict) or not isinstance(value.get("contract"), dict):
-            raise ValueError("contract must be an object")
-        contract = value["contract"]
-        property_keys = contract.get("property_keys")
-        version = contract.get("contract_version")
-        if not isinstance(version, int) or isinstance(version, bool):
-            raise ValueError("contract_version must be an integer")
-        if not isinstance(property_keys, list) or not all(
-            isinstance(key, str) and key for key in property_keys
-        ):
-            raise ValueError("property_keys must be non-empty strings")
-        if len(property_keys) != len(set(property_keys)):
-            raise ValueError("property_keys must be unique")
-        if not isinstance(value.get("topologies"), dict):
-            raise ValueError("topologies must be an object")
-        return value
-    except (KeyError, TypeError, ValueError) as error:
-        raise PlanConfigurationError(f"invalid topology-map.json: {error}") from error
+        return importlib.import_module(name + ".links")
+    except Exception as error:
+        raise PlanConfigurationError(f"cannot load kernel link checker: {error}") from error
 
 
-def _refs(refs: Any, namespace: str, kb_root: Path) -> list[str]:
-    if not isinstance(refs, list):
-        return [f"{namespace} references must be a list"]
-    errors, seen = [], set()
-    namespace_root = (kb_root / namespace).resolve()
-    for index, ref in enumerate(refs):
-        label = f"{namespace}[{index}]"
-        if not isinstance(ref, dict):
-            errors.append(f"{label} must be an object")
-            continue
-        path, reason = ref.get("path"), ref.get("reason")
-        if not isinstance(reason, str) or not reason.strip():
-            errors.append(f"{label}.reason must be non-empty")
-        if not isinstance(path, str):
-            errors.append(f"{label}.path must be a string")
-            continue
-        pure = PurePosixPath(path)
-        if pure.is_absolute() or ".." in pure.parts or pure.parts[:1] != (namespace,):
-            errors.append(f"{label}.path escapes {namespace}/: {path}")
-            continue
-        if path in seen:
-            errors.append(f"duplicate reference path: {path}")
-        seen.add(path)
-        target = (kb_root / path).resolve()
-        try:
-            target.relative_to(namespace_root)
-        except ValueError:
-            errors.append(f"{label}.path resolves outside {namespace}/: {path}")
-            continue
-        if not target.is_file():
-            errors.append(f"referenced file does not exist: {path}")
-            continue
-        try:
-            digest = "sha256:" + hashlib.sha256(target.read_bytes()).hexdigest()
-        except OSError as error:
-            errors.append(f"cannot hash {path}: {error}")
-            continue
-        if ref.get("sha256") != digest:
-            errors.append(f"stale sha256: {path}")
-    return errors
-
-
-def _check_routing_fields(data: dict[str, Any], mapping: dict[str, Any], label: str) -> list[str]:
+def _collect_kernel_references(report: str, links: Any) -> tuple[set[str], list[str]]:
+    """Separate portable owner citations from shell excerpts and invalid prefixes."""
+    references = set()
     errors = []
-    topologies = data.get("topologies")
-    if not isinstance(topologies, list):
-        errors.append(f"{label} topologies must be a list")
-    else:
-        invalid = [x for x in topologies if not isinstance(x, str) or x not in mapping["topologies"]]
-        if invalid or len(topologies) != len(set(x for x in topologies if isinstance(x, str))):
-            errors.append(f"{label} has unknown, duplicate, or non-string topologies: {invalid!r}")
-    properties = data.get("properties")
-    if not isinstance(properties, dict):
-        errors.append(f"{label} properties must be an object")
-    else:
-        unknown = sorted(set(properties) - set(mapping["contract"]["property_keys"]))
-        if unknown:
-            errors.append(f"{label} has unknown properties: {unknown}")
+    for _, line in links.prose_lines(report):
+        candidates = {target: False for target in _file_paths(line)}
+        candidates.update((target, True) for target in links.inline_targets(line))
+        for target, explicit_link in candidates.items():
+            if KERNEL_PREFIX not in target or "://" in target:
+                continue
+            before = target.partition(KERNEL_PREFIX)[0]
+            # A shell excerpt is not a citation. Rooted or relative paths to
+            # the skill must use the portable named-root form documented here.
+            if before and not explicit_link and any(char.isspace() for char in before):
+                continue
+            if before:
+                errors.append(f"kernel reference must start with {KERNEL_PREFIX}: {target}")
+            else:
+                references.add(target)
+    return references, errors
+
+
+def _check_kernel_fragment(reference: str, target: Path, fragment: str, links: Any) -> list[str]:
+    if target.suffix.lower() != ".md":
+        return [f"kernel fragment requires a Markdown owner: {reference}"]
+    try:
+        if not fragment or fragment not in links.anchors(target.read_text(encoding="utf-8")):
+            return [f"kernel referenced anchor does not exist: {reference}"]
+    except (OSError, UnicodeError) as error:
+        return [f"cannot read kernel reference {reference}: {error}"]
+    return []
+
+
+def _check_kernel_reference(reference: str, kernel_root: Path, links: Any) -> list[str]:
+    """Validate one owner path and its optional Markdown fragment."""
+    relative, separator, fragment = reference[len(KERNEL_PREFIX):].partition("#")
+    relative, fragment = unquote(relative), unquote(fragment)
+    pure = PurePosixPath(relative)
+    unsafe_path = pure.is_absolute() or ".." in pure.parts or "\\" in relative
+    if not relative or unsafe_path:
+        return [f"kernel reference escapes its root: {reference}"]
+    try:
+        target = (kernel_root / relative).resolve()
+    except (OSError, ValueError) as error:
+        return [f"invalid kernel reference {reference}: {error}"]
+    if not target.is_relative_to(kernel_root.resolve()):
+        return [f"kernel reference resolves outside its root: {reference}"]
+    if not target.is_file():
+        return [f"kernel referenced file does not exist: {reference}"]
+    if separator:
+        return _check_kernel_fragment(reference, target, fragment, links)
+    return []
+
+
+def check_kernel_references(op_dir: Path, kernel_root: Path) -> list[str]:
+    """Check direct owner citations without maintaining a second knowledge manifest."""
+    try:
+        report = _read(op_dir / "EXPLORE_REPORT.md", "EXPLORE_REPORT.md")
+    except ValueError as error:
+        return [str(error)]
+    links = _kernel_link_checker(kernel_root)
+    references, errors = _collect_kernel_references(report, links)
+    if not references:
+        return errors + ["report must cite an applicable pypto-pro-kernel owner"]
+    for reference in sorted(references):
+        errors.extend(_check_kernel_reference(reference, kernel_root, links))
     return errors
 
 
-def check_kb(op_dir: Path, kb_root: Path, op_name: str) -> list[str]:
-    """Check selection layouts and contents against the supplied KB's current contract."""
-    mapping = _mapping(kb_root)
-    contract = mapping["contract"]
-    # bootstrap-restart preserves prior inputs here; they are not active classes.
-    history = op_dir / "reports" / "bootstrap-restarts"
-    paths = sorted(path for path in op_dir.rglob("KB_SELECTION.json")
-                   if not path.is_relative_to(history))
-    allowed = [path for path in paths if len(path.relative_to(op_dir).parts) in (1, 2)]
-    errors = [f"nested selection: {path}" for path in paths if path not in allowed]
-    flat = op_dir / "KB_SELECTION.json"
-    if flat in allowed and len(allowed) > 1:
-        errors.append("flat and split layouts cannot be mixed")
-    if not allowed:
-        errors.append("no KB_SELECTION.json found")
-    required = {
-        "schema_version", "op", "class_id", "topologies", "properties",
-        "optional_patterns", "required_constraints", "no_matching_pattern",
-    }
-    for path in allowed:
-        label = path.relative_to(op_dir).as_posix()
-        try:
-            data = json.loads(_read(path, label), object_pairs_hook=_unique)
-            if not isinstance(data, dict):
-                raise ValueError("root must be an object")
-        except ValueError as error:
-            errors.append(f"{label}: {error}")
-            continue
-        missing = sorted(required - set(data))
-        if missing:
-            errors.append(f"{label} missing fields: {', '.join(missing)}")
-        expected_class = "." if path == flat else path.parent.name
-        if data.get("op") != op_name or data.get("class_id") != expected_class:
-            errors.append(f"{label} op/class_id does not match location")
-        if data.get("schema_version") != contract["contract_version"]:
-            errors.append(f"{label} schema_version does not match topology-map")
-        if "topology" in data:
-            errors.append(f"{label} uses forbidden legacy topology")
-        errors.extend(_check_routing_fields(data, mapping, label))
-        patterns = data.get("optional_patterns")
-        errors.extend(f"{label}: {error}" for error in _refs(patterns, "patterns", kb_root))
-        errors.extend(
-            f"{label}: {error}"
-            for error in _refs(data.get("required_constraints"), "constraints", kb_root)
-        )
-        flag = data.get("no_matching_pattern")
-        if not isinstance(flag, bool) or isinstance(patterns, list) and flag is not (not patterns):
-            errors.append(f"{label} no_matching_pattern is invalid")
-    return errors
-
-
-def validate(op_dir: Path, devkit: Path, kb_root: Path):
-    for path, label in ((op_dir, "operator"), (devkit, "devkit"), (kb_root, "KB root")):
+def validate(op_dir: Path, devkit: Path, kernel_root: Path = KERNEL_ROOT):
+    for path, label in ((op_dir, "operator"), (devkit, "devkit"), (kernel_root, "kernel root")):
         if not path.is_dir():
             raise PlanConfigurationError(f"{label} directory does not exist: {path}")
     intent = _module(
@@ -357,7 +303,7 @@ def validate(op_dir: Path, devkit: Path, kb_root: Path):
         ("SPEC", spec_errors),
         ("INDEX", index_errors),
         ("REPORT", check_report(op_dir, op_name, index)),
-        ("KB", check_kb(op_dir, kb_root, op_name)),
+        ("REFERENCES", check_kernel_references(op_dir, kernel_root)),
     ]
 
 
@@ -366,11 +312,12 @@ def main(argv: Optional[list[str]] = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--op-dir", required=True)
     parser.add_argument("--devkit", required=True)
-    parser.add_argument("--kb-root", required=True)
+    parser.add_argument("--kernel-root", default=str(KERNEL_ROOT),
+                        help="current pypto-pro-kernel skill root (defaults to its sibling installation)")
     args = parser.parse_args(argv)
     try:
         results = validate(*(
-            Path(value).resolve() for value in (args.op_dir, args.devkit, args.kb_root)
+            Path(value).resolve() for value in (args.op_dir, args.devkit, args.kernel_root)
         ))
     except PlanConfigurationError as error:
         LOGGER.error("ERROR: %s", error)

@@ -15,9 +15,9 @@
 - 完整正确性标准、quick→formal 晋级规则、稳定性判据、聚合指标及并列处理规则；
 - baseline/final 的 formal 协议；quick 只用于候选筛选。
 
-“正确候选”必须通过完整正确性；“合规候选”还必须满足冻结 SPEC、全部 selected-KB 义务、
-Module/public wrapper 合同、[主 Skill](../SKILL.md)的实现约束和资源硬限制。输入实现存在已登记的 KB 缺口时仍可作为
-修复起点和性能 baseline，但补齐全部义务前不能进入最终候选排名。用户性能目标、Golden 理想参考
+“正确候选”必须通过完整正确性；“合规候选”还必须满足冻结 SPEC、适用的任务不变量、
+Module/public wrapper 合同、[主 Skill](../SKILL.md)的实现约束和资源硬限制。输入实现存在已登记的正确性/合同缺口时仍可作为
+修复起点和性能 baseline，但修复全部缺口前不能进入最终候选排名。用户性能目标、Golden 理想参考
 及 Roofline/Scalar/流水的理想状态用于发现候选和披露差距，不属于合规门禁。
 
 设备告警或复位、同卡竞争、超时、profiler 失败、目标归属不唯一、CSV 不完整或没有对应正确性
@@ -26,25 +26,21 @@ Module/public wrapper 合同、[主 Skill](../SKILL.md)的实现约束和资源�
 
 ## 2. 建立来源账本
 
-第一次改代码前，枚举五类预置来源：
+第一次改代码前，枚举四类预置来源：
 
-1. 项目 selected KB 中全部 `kind=obligation` 的原子要求；无已选 KB 时记录 0 项；
-2. [通用优化手段](general-optimization-methods.md)中的全部 active/eligible item；
-3. [知识卡片索引](knowledge-cards/index.md)的 Active 表中的全部 item；
-4. [模板优化项索引](../templates/INDEX.md)中的全部 active/eligible item；
-5. [结构性优化重审与可达目标取证](structural-optimization.md)的四类结构维度原子项；命中其 §1 触发
+1. [通用优化手段](general-optimization-methods.md)中的全部 active/eligible item；
+2. [知识卡片索引](knowledge-cards/index.md)的 Active 表中的全部 item；
+3. [模板优化项索引](../templates/INDEX.md)中的全部 active/eligible item；
+4. [结构性优化重审与可达目标取证](structural-optimization.md)的四类结构维度原子项；命中其 §1 触发
    条件时无条件纳入。
 
-有 selected KB 时先按 Design Skill 的 source-first 合同核对 `DESIGN_BINDINGS.json`，再以原子 requirement
-为账本项；其稳定身份使用完整原子键 `(class_id, selection_field, reference, req_id)`，不得只使用
-组内唯一的 `req_id`。precondition 和 validation scope 只作为适用性与验证依据。进入自主优化后，
-每个新假设在改代码前追加为第六类 `bottleneck_derived`。
+先按主 Skill §3.1 核对 DESIGN 中真实来源、条件、不变量及验证方法，修复正确性/合同缺口后再排名候选。这个检查不创建额外选择产物或优化项分母。进入自主优化后，每个新假设在改代码前追加为第五类 `bottleneck_derived`。
 
 每项至少记录：
 
 | 字段 | 含义 |
 |---|---|
-| `item_id` / `source_kind` | 稳定 ID，以及六类来源之一 |
+| `item_id` / `source_kind` | 稳定 ID，以及五类来源之一 |
 | `source_ref` | 权威文件、原子锚点和内容身份；自主项记录对应瓶颈证据 |
 | `case_scope` | 涉及的 P0 case |
 | `applicability` | 适用、不适用、未触发或待证及其依据 |
@@ -53,14 +49,13 @@ Module/public wrapper 合同、[主 Skill](../SKILL.md)的实现约束和资源�
 | `evidence` | 代码位置、正确性、quick/formal 数据、机制核对和恢复点 |
 | `relations` | overlap、require、enable、conflict、覆盖或重开关系 |
 
-非终态为 `pending`、`unknown`、`enabler`、`blocked`。selected-KB 终态为
-`already_implemented`、`not_triggered`、`implemented`；其余来源终态为 `accepted`、`rejected`、
+非终态为 `pending`、`unknown`、`enabler`、`blocked`。候选终态为 `accepted`、`rejected`、
 `not_applicable`、`unsupported`。`rejected` 必须记录具体原因，代码恢复或切换到第 6 节规则选出的
 当前最佳实现。
 
-同一改动可以为多个来源提供实验，但每个 source id 都要有独立结论。某非 KB 项被其它项完整
+同一改动可以为多个来源提供实验，但每个 source id 都要有独立结论。某候选被其它项完整
 覆盖时，保留该行并记录覆盖关系；只重合一部分时仍实验独特增量。实现或前提变化使旧证据失效时，
-重开原 ID。账本状态描述调优实验，不得直接复制成 `KB_USAGE.json` 状态。
+重开原 ID。账本状态描述调优实验，不能代替实际正确性或来源验证结果。
 
 ## 3. Baseline、瓶颈与排序
 
@@ -77,30 +72,24 @@ baseline。对每个 P0 记录绝对 Task Duration、AIC/AIV 时间、Vector/Cub
 
 按主 Skill 规定的来源顺序处理每个可能适用项：
 
-1. `kb_selected` 缺口从当前正确版本开始修复；其它项从当前最佳正确、合规版本建立可恢复起点；
+1. 从当前最佳正确、合规版本建立可恢复起点；正确性/合同缺口须先修复并记录原方法证据；
 2. 记录 item id、唯一主要假设、目标指标、风险和恢复点；
 3. 修改源码并运行完整正确性；失败立即恢复并记录；
 4. 正确后运行同条件 quick，保留原始样本；
-5. 正确落实的 `kb_selected` 缺口直接进入 formal 记录性能影响；其它候选按冻结晋级规则决定是否
+5. 候选按冻结晋级规则决定是否
    formal，未晋级则恢复当前最佳并以 `status=rejected, reason_code=quick_not_promoted` 关闭，
    有明确组合价值时暂记 `enabler`；
 6. 核对预期机制（可用 msopprof digest 字段，映射与证据等级见
    [证据协议](perf-analysis/evidence-protocol.md)的"msopprof 诊断产物"节；digest 只核对机制，
    不证明收益）；性能变化与假设不符时重新诊断，不倒填结论；
-7. `kb_selected` 验证通过后保留修复并记为 `implemented`；其它项依据第 6 节决定保留或恢复，
+7. 依据第 6 节决定保留或恢复，
    并关闭该 source item。
 
 入口实现已经包含某项时，先记录当前机制证据；在合法、可恢复时用去除或替代该动作的版本作
 control。两版按第 6 节比较：保留含动作版本则记 `accepted`；选择 control 则记 `rejected`，并按结果
-记录 `control_faster` 或 `no_stable_gain`。control 若违反 selected-KB 义务或已登记依赖关系则不适用。
+记录 `control_faster` 或 `no_stable_gain`。control 若违反任务不变量或已登记依赖关系则不适用。
 
-selected-KB 的真实缺口必须落实并通过该 requirement 的验证方法，不能因性能无收益而拒绝；若其与
-冻结合同或当前能力确实无法同时满足，报告 `tuning_contract_blocked`。card 与 template 只按各自
-index/INDEX 枚举：卡片取 Active 表，模板取 active/eligible 项；未登记文件不进入账本。知识卡片由
-技术 review 把关，采用时按本节完成实验。模板只是待适配骨架，不能替代 API、正确性或性能证明。
-
-全部 selected-KB 缺口闭合后，对当前完整修复版本重新执行 formal compare；其通过正确性与合规
-检查后，作为首个可排名版本进入第 6 节。此前的 KB 中间版本只记录修复影响，不参与最终排名。
+任务的真实正确性/合同缺口必须修复并通过原验证方法，不能因无性能收益而拒绝；若与冻结合同或当前能力无法同时满足，报告 `tuning_contract_blocked`。完整修复后的正确、合规版本重新执行 formal compare，才能参与第 6 节排名；修复中间版本只记录影响。card 与 template 按各自 index/INDEX 枚举；模板仍须适配和实测，不能替代当前 API、正确性或性能证明。
 
 只组合不存在未消解 `conflict`，并有明确 `requires`/`enables`、共享资源或机制互补依据的项。
 `enabler` 只是临时状态，指定组合接受或被证伪后必须关闭。一个 item 内可以有限搜索直接相关参数，
@@ -108,13 +97,13 @@ index/INDEX 枚举：卡片取 Active 表，模板取 active/eligible 项；未�
 
 ## 5. 自主瓶颈优化
 
-五类预置项全部达到终态、没有未决 enabler 后，保存当前最佳实现和一份新鲜的逐 P0 瓶颈分析，
+四类预置项全部达到终态、没有未决 enabler 后，保存当前最佳实现和一份新鲜的逐 P0 瓶颈分析，
 再进入 `bottleneck_derived`。预置项未闭合或当前证据不可评估时，只补齐前置工作，不能提前建自主项。
 
 每个自主项必须：
 
 - 来自当前接受实现尚未尝试的具体瓶颈，并绑定相应 case、源码/生成物/DAG 和 profiler 证据；
-- 与 selected KB、通用方法、active card、active template 和既有自主项去重；
+- 与当前已落实机制、通用方法、active card、active template 和既有自主项去重；
 - 写明可证伪机制、最小改动或有限参数域、预期指标、风险和停止条件；
 - 登记后再按第 4 节实验；接受改动后刷新瓶颈证据，再提出下一项。
 
@@ -153,7 +142,7 @@ Scalar 残留需要时间线时先补采。新证据使预置项结论失效时�
 
 调优完成必须同时满足：
 
-- 五类预置来源和全部已创建的自主项均已合法关闭，没有未决或需要重开的项；
+- 四类预置来源和全部已创建的自主项均已合法关闭，没有未决或需要重开的项；
 - final sweep 没有新的合法候选；
 - 最终代码是第 6 节规则选出的最佳正确、合规版本；
 - 用户目标或 Golden 理想参考状态及残留瓶颈均如实披露；

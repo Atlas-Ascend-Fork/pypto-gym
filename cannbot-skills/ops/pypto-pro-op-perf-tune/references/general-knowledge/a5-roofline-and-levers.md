@@ -255,11 +255,7 @@ and stop, rather than continuing to tune.
 
 ## Scope of retained examples
 
-The KB's
-[BF16 operand-reuse implementation](../../../pypto-pro-op-kb/examples/samples/bf16_matmul_operand_reuse/bf16_matmul_operand_reuse_impl.py)
-demonstrates one reuse topology and embeds a correctness test. It does not prove
-that an operator is cube-bound or that the topology is faster on another shape
-or target. Profile the current kernel.
+For a current implementation-form anchor, read [L0 operand reuse](../../../pypto-pro-kernel/examples/matmul/l0_operand_reuse/kernel.py) and its test header: its scope is FP16 `[128,128]` inputs, FP32 output and two M blocks sharing B. The historical BF16 sample had a different dtype and harness; neither its old results nor this FP16 control validate a new BF16 rewrite. Follow the [current GEMM policy](../../../pypto-pro-kernel/references/patterns/gemm-desugar.md) and profile the complete current kernel before claiming a bound or a speedup.
 
 ## When the local levers plateau: structural levers
 
