@@ -1,10 +1,8 @@
 # 完整调用测量与跨环境证据
 
-在诊断既有多 launch 算子、移动输入预处理、比较分位数或迁移环境时使用本页。
-它补充[证据协议](perf-analysis/evidence-protocol.md)，不改变单 JIT/单 launch 开发合同，也不覆盖项目已经冻结的
-seed、预热、测量次数、重复轮数和评分指标。分析既有多 launch 实现时，按该实现一次完整调用
-实际触发的 kernel/launch 集合进行归属和统计；正式 compare 仍按证据协议的单 target launch 执行。
-实现改动仍遵守项目的 launch 约束。
+在诊断既有多 launch 算子、移动输入预处理、比较分位数或迁移环境时使用本页。它补充[证据协议](perf-analysis/evidence-protocol.md)，执行边界遵循[核心交付规则](../../pypto-pro-kernel/references/workflows/delivery.md#kernel-definitions-and-dispatch)，计时归属遵循[完整调用计时规则](../../pypto-pro-kernel/references/verification/native-timing.md#measure-one-complete-call)，保留项目已经冻结的 seed、预热、测量次数、重复轮数和评分指标。
+
+按一次完整调用实际触发的 kernel/launch 集合归属和统计。证据协议中的单 target 采集器仅适用于单 target-task 调用；多阶段或获批预处理参与比较时，正式比较须覆盖完整调用，单阶段采集只作诊断。实现改动遵守项目的 launch 约束。
 
 ## 先冻结语义与执行范围
 

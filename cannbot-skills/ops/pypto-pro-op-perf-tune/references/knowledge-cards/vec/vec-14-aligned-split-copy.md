@@ -5,6 +5,21 @@ description: "把紧凑 GM 行的真实子段分别搬入独立对齐 Tile，使
 status: "stable"
 tags: ["pypto-pro", "vec", "alignment", "memory"]
 item_id: "vec-14"
+knowledge_links:
+  schema: "pypto-knowledge-links/1"
+  relations:
+    - kind: uses_contract
+      target:
+        skill: pypto-pro-kernel
+        id: "document:skill/api/datamove.md#6-row-major-tile-alignment"
+      scope: "分段后的物理 Tile 基址、行 pitch 与 VF load/store 地址分别满足当前路径的对齐要求。"
+      boundary: "GM 的紧凑段距与片上的对齐段距不同；性能取决于额外搬运和当前生成物，不能外推单拍保证。"
+    - kind: uses_contract
+      target:
+        skill: pypto-pro-kernel
+        id: "document:skill/api/datamove.md#fixed-and-dynamic-valid-regions"
+      scope: "每个独立段用物理 padding 加真实矩形 valid region 表示。"
+      boundary: "一个矩形 valid shape 不能表示中间 hole；所有槽位的 padding 均计入容量。"
 bound_hint: "MTE2、MTE3"
 applicability: "非 32B 段起点在生成物或 trace 中造成对齐退化，且独立 Tile 及 padding 可被 Vec 容量容纳"
 target_api_gate: "仅限 Ascend 950PR 或 950DT；须核验 pl.load/store 元素 offset、Tile physical/valid shape、TileGroup 地址与对齐合同"

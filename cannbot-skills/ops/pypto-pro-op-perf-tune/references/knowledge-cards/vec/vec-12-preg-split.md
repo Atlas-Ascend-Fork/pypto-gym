@@ -5,6 +5,15 @@ description: "在生成物出现 spill/reload 时，按可证明条件拆成活�
 status: "stable"
 tags: ["pypto-pro", "vec", "register-pressure", "specialization"]
 item_id: "vec-12"
+knowledge_links:
+  schema: "pypto-knowledge-links/1"
+  relations:
+    - kind: overlaps_with
+      target:
+        skill: pypto-pro-kernel
+        id: "contract:vf-loop-control"
+      scope: "在 VF 热循环外选择真正删除无关活跃值的专用路径，减少重复分派及寄存器存活范围。"
+      boundary: "循环分支外提不等价于已消除 spill；small/full VF 的逻辑、覆盖及压力变化仍需生成物与数值验证。"
 bound_hint: "VEC"
 applicability: "目标路径生成物或 trace 出现 spill/reload，分支条件可证明，且专用 VF 能真正删除整段逻辑和活跃值"
 target_api_gate: "仅限 Ascend 950PR 或 950DT；通过 TilingKey 或合法控制流分流，RegTraitNumTwo 仅作后端风险模型"

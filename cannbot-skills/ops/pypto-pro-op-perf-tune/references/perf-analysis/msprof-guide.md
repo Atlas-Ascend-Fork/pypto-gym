@@ -103,9 +103,7 @@ bash "$PERF_SKILL_ROOT/scripts/msprof_profile_run.sh" --batch --base-dir=./custo
 ## <a id="pypto-io"></a>PyPTO-Pro 输入与输出
 
 采集脚本执行算子目录中已有、已按算子合同通过全量正确性测试的 runner；优化前后必须保留
-wrapper 边界、Golden 语义与精度门槛。独立输入的要求见[主 Skill](../../SKILL.md)；若项目使用
-[Develop Skill](../../../pypto-pro-op-develop/SKILL.md)，也须保留其测试合同。逐 case
-输入、Golden 机器合同和输出证据以[证据协议](evidence-protocol.md)为准。不传 manifest 的兼容
+wrapper 边界、Golden 语义与精度门槛。独立输入的要求见[主 Skill](../../SKILL.md)，原生交付与给定评估入口按[核心 skill](../../../pypto-pro-kernel/references/workflows/delivery.md)执行，保持用户明确的项目约束。逐 case 输入、Golden 机器合同和输出证据以[证据协议](evidence-protocol.md)为准。不传 manifest 的兼容
 compare/quick 输出仍按上面的模式说明生成。
 
 ---

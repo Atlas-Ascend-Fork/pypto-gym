@@ -34,6 +34,7 @@ sources: [{"id": "okf-spec", "resource": "https://github.com/GoogleCloudPlatform
 | `bound_hint` | 预期主要影响的计算、访存、标量或调度瓶颈 |
 | `applicability` | 方法的使用场景和技术条件 |
 | `target_api_gate` | 方法依赖的设备、公开 API 能力及已知限制 |
+| `knowledge_links` | 可选的 `pypto-knowledge-links/1` 关联；连接已有契约或文档，保留重叠范围和边界 |
 
 参考资料按需附普通链接或代码路径。未实测、外部历史数据和不确定内容如实标注，
 不能写成当前算子的验证结论。
@@ -53,5 +54,11 @@ Agent 默认以 Active 提交卡片并同步索引，技术人员在合入前 re
 
 Active 仅表示调优候选，不代表当前算子一定适用、示例可直接运行或已有收益。
 实际应用时的适用性判断、实验和结果记录按[本 Skill](../../SKILL.md)执行。
+
+### 可选的 kernel skill 关联
+
+`knowledge_links` 只在卡片一侧维护。其字段、四种关系、目标 ID、读取与校验协议见 [Kernel 知识源接入](KERNEL_INTEGRATION.md)。没有该字段的 Active 卡片仍可查询；关联不改变卡片状态，不继承目标的适用条件或验证结论。`scope` 与 `boundary` 描述关联范围，不替代本卡的 `applicability`、`target_api_gate` 或正文。
+
+机制只有局部交集时使用 `overlaps_with`；仅需核对布局、同步或数值前提时使用 `uses_contract`。没有准确目标时省略关联，不填空列表或占位 ID。接入覆盖中的已关联数不代表检测规则数或技术能力支持数。
 
 [^okf-spec]: [Open Knowledge Format v0.2 specification](https://github.com/GoogleCloudPlatform/open-knowledge-format/blob/main/SPEC.md)。

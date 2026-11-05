@@ -6,9 +6,12 @@ Mat→Scaling and its quantized consumer use FIX. Establish the MTE2→FIX depen
 
 Defect and gap dispositions for fixpipe are in [`diagnostics/defects/fixpipe-overview.md`](../diagnostics/defects/fixpipe-overview.md) (status table, where each item is blocked, and why some are not fixed); this page records only “what measurement showed.” The contract table is in [`tooling/example-coverage.md`](../tooling/example-coverage.md).
 
+<!-- kernel-query: {"id":"acc-final-output","aliases":["acc-final-output","final output dtype","final FP16 output","store output conversion","最终输出转换"],"symbols":["pl.store","pl.move"],"when":"A GEMM accumulator dtype differs from final storage dtype; inspect Acc-to-GM conversion before adding a cast kernel.","missing_facts":["Verify the actual accumulator/output dtypes, rounding contract, path and matching installed capability; unrelated Vec stores need their own contract."],"term_groups":[["acc","accumulator","累加器","accumulation"],["fp16","bf16","output","输出","gm"]],"discovery_terms":[["acc","accumulator","accumulation","gemm","cube","final"],["output","storage","gm","destination"],["fp16","dtype","half","conversion","convert"]],"discovery_aliases":["FP32 to FP16","FP32 narrowing","dense FP16 store","move"],"facets":{"source_memory":["Acc"],"destination_memory":["GM"]}} -->
 ## Choose the final output path before adding a conversion kernel
 
 Separate accumulation dtype from storage dtype. When a completed GEMM result is in FP32 Acc and its only remaining operation is conversion to FP16 or BF16, declare the GM output in that final dtype and probe `pl.store(out, acc, offsets)` directly. The A5 Acc→GM path infers conversion from the destination dtype; it does not require an intermediate FP32 GM tensor, a VF cast, or a `scale=1.0` argument. The official store table (`pypto/docs/zh/api/pro_api/SIMD-API/memory_data_movement/store.md`) and installed `pypto_pro.ir.op.block_ops::_A5_STORE_COMBOS` own the accepted layout/dtype combinations. `scale=None` does not imply that source and destination must have the same dtype.
+
+`query acc-final-output` also returns `selected_frontend_store`: the Acc→GM rows read from the selected Python source's non-quantized table, with its source hash, declaration line and matching `row_lines`. The reference starts at the first matching row; use the corresponding row line when inspecting a particular layout/dtype combination. It checks the literal `store/a5` table binding without importing the framework. These are source declarations, not an installation or native-execution probe; an unfamiliar or unavailable declaration remains unverified.
 
 Choose the path from the last unfinished operation:
 
@@ -21,6 +24,12 @@ Choose the path from the last unfinished operation:
 Do not apply the Acc rule to Vec→GM: that transfer does not provide the same numerical conversions. Likewise, a dual-destination Acc→Vec handover has its own dtype restrictions; see §9. Finish all required accumulation before narrowing, and retain any higher-precision value still needed by another consumer. A direct store cannot perform a row-dependent normalization merely because it can convert dtype. Optional Fixpipe scaling has the precision boundary in §17; moving arbitrary arithmetic onto that path needs a separate error analysis.
 
 Validate the complete result at the original tolerance, including output rounding and tails. When replacing a standalone cast, compare against the existing path on the same inputs and inspect the native task sequence: eliminating that launch and its intermediate traffic is the hypothesis, while the measured complete-call difference determines its value. This output-path decision applies to every terminal contraction, independently of the surrounding algorithm.
+
+### Pair accumulator phases with the actual drain
+
+When enabling the hardware unit-flag protocol, match the last matrix write's `AccPhase.Final` to the last drain's `STPhase.Final`; earlier writes or drains use their documented partial phases. The selected official `AccPhase.md` and `STPhase.md` contracts under `pypto/docs/zh/api/pro_api/SIMD-API/basic_data_structures/` include `store`, `store_tile`, `move` and `insert` as possible drains. Confirm the exact source/destination, dtype, layout and phase combination on the target; an older deployment lacking `move(phase=...)` does not establish a permanent API restriction. The official `memory_data_movement/move.md` also warns about `DualModeSplitN` with phase and an N extent not aligned to 32.
+
+Do not enable the producer half while leaving the drain unspecified. When phase is unused, preserve the ordinary M→FIX dependency instead; increasing buffer depth does not repair an unbalanced flag protocol. Inspect generated code and existing fault evidence before attempting another device reproduction, following the [board discipline](../verification/board-runs.md).
 
 ## 1. Why It Has Its Own Chapter
 

@@ -4,9 +4,9 @@ Each example explains one mechanism, boundary or small integrated pattern. This 
 
 ## Selection principles
 
-Use `check.py surface` for `basic_api/` calls, then read the nearest kernel docstring and test header; use the tables below for matmul and complete algorithms. Examples establish only their verified scope, not the current task's shapes, precision or configuration. If none fits, consult upstream Pro STs (`pypto/python/tests/st/pypto_pro/frontend`), retain provenance and independently revalidate. Tensor API examples in `pypto/examples/` are not the Pro path.
+Use `check.py query pl.insert --kind example --limit 3 --format json` for API use or `query 'batched transposed GEMM with M tails' --kind example --format json` for a scenario across all three groups. Resolve the returned program for its independent reference/test entries, support modules, dependencies and original applicability statements; the [program query contract](checks.md#complete-example-programs) owns the shared CLI/MCP behavior. `check.py surface` remains the live `basic_api/` maintenance view; the tables below own matmul and algorithm selection. Examples establish only their verified scope, not the current task's shapes, precision or configuration. If none fits, consult upstream Pro STs (`pypto/python/tests/st/pypto_pro/frontend/` in the matching source checkout), retain provenance and independently revalidate. Tensor API examples in `pypto/examples/` are not the Pro path.
 
-Add examples for recurring mechanisms or verification gaps, not mechanically per API. An `algorithms/` example also needs a pattern or actual task consumer; that group is neither in the VF assignment table nor indexed by `surface`.
+Add examples for recurring mechanisms or verification gaps, not mechanically per API. An `algorithms/` example also needs a pattern or actual task consumer; that group is discovered by `query` and catalog selection, and is outside the VF assignment table and the `surface` maintenance view.
 
 ## Matmul directory
 
@@ -32,7 +32,9 @@ Enter Cube work through the [GEMM mapping](../patterns/gemm-desugar.md). Select 
 | [stable_filter](../../examples/algorithms/stable_filter/) | Predicate ranking, stable value/index compaction, counts and tail fill values |
 | [row_gather](../../examples/algorithms/row_gather/) | Indirect tile-to-register reads, negative-index normalization, physical padding and tail masks |
 | [indexed_batched_gemm](../../examples/algorithms/indexed_batched_gemm/) | Runtime-selected rows staged in GM and consumed by a separate Cube product; exact panel bytes, explicit placement, independent grids and short/partial M |
+| [indexed_batched_gemm_onchip](../../examples/algorithms/indexed_batched_gemm_onchip/) | SIMT word transport, bounded Vec conversion, on-chip Mat panels and a whole-group transpose view; serial/two-slot controls with explicit worker matching and repeated-gather tradeoffs |
 | [strided_transpose](../../examples/algorithms/strided_transpose/) | SIMT 1-D physical views with actual stride addressing and bit-preserving payloads |
+| [simt_tiled_transpose](../../examples/algorithms/simt_tiled_transpose/) | Cooperative SIMT tiles, contiguous GM reads/writes, unconditional block barriers and configurable UB row pitch |
 | [row_argmax](../../examples/algorithms/row_argmax/) | First-index extrema and dense FP32/INT32 output transport |
 | [row_top2](../../examples/algorithms/row_top2/) | Stable paired candidates, independent register state, exact indices and input bit patterns |
 | [row_topk](../../examples/algorithms/row_topk/) | Variable K, bounded candidates, ordered UB updates and dense outputs; merge scans complete candidate lists |
@@ -42,23 +44,28 @@ Enter Cube work through the [GEMM mapping](../patterns/gemm-desugar.md). Select 
 | [embedding_bag](../../examples/algorithms/embedding_bag/) | Runtime offsets/indices, empty segments and direct versus partial/merge reduction |
 | [simt_scatter_add](../../examples/algorithms/simt_scatter_add/) | Global ordering between native initialization and atomic accumulation on one Stream |
 | [byte_histogram](../../examples/algorithms/byte_histogram/) | UINT8 input, UINT16 local counts, INT32 partial/merge and overflow boundaries |
+| [simt_histogram](../../examples/algorithms/simt_histogram/) | Direct GM atomics, thread-local run combining and block-local UB counts, complete output initialization and changed-input repeated calls |
+| [simt_ticket_reservation](../../examples/algorithms/simt_ticket_reservation/) | Consumed atomic returns, per-thread range reservation, a second publication traversal and independent unordered ticket checks |
 | [grouped_int8](../../examples/algorithms/grouped_int8/) | FP32 multiplication, RNE, integer range and `PACK4_B32`, separating group buffers from logical GM addresses |
 | [sliding_max](../../examples/algorithms/sliding_max/) | Output versus clipped-load coordinates, read-only halos and transfer reuse across VF segments |
+| [grouped_conv1d](../../examples/algorithms/grouped_conv1d/) | Direct-GM SIMT ownership, grouped channel coordinates, zero-extended dilated taps and FP16 operands promoted before FP32 FMA |
 | [bilinear_sampling](../../examples/algorithms/bilinear_sampling/) | Record/channel groups, shared coordinates/weights, per-neighbor zero extension and direct integer-point movement |
 | [bilinear_sampling_backward](../../examples/algorithms/bilinear_sampling_backward/) | Conflicting dX scatter, owned dGrid partial/merge and selected-cell derivatives at integers; configuration trades off large and small shapes |
 | [rope_kv_scatter](../../examples/algorithms/rope_kv_scatter/) | Coupled adjacent-element units, record/lane groups, conditional unique-slot writes and unconditional Q output; bit-preserving identity regions and configuration-neighbor comparisons |
 
-### Elementwise state updates
+### State updates
 
 | Example | What it demonstrates |
 | --- | --- |
 | [fused_adamw](../../examples/algorithms/fused_adamw/) | In-place FP32 state updates from FP16 inputs, UNPK predicate reuse, independent buffer IDs and per-call FP64 references across changing gradients/scalars |
+| [gated_outer_state](../../examples/algorithms/gated_outer_state/) | A single native call with an on-chip recurrent matrix, dynamic sequence extents, disjoint row ownership and FP16 predicate reuse; final-state and input-preservation checks |
 
 ### Reductions and normalization
 
 | Example | What it demonstrates |
 | --- | --- |
 | [column_statistics](../../examples/algorithms/column_statistics/) | Noncontiguous-axis reduction, one retained column per lane and centered two-pass variance |
+| [pairwise_squared_distance](../../examples/algorithms/pairwise_squared_distance/) | Direct FP32 differences for near neighbors, batched invariant-input reuse, packed scalar outputs and a work-group-count configuration boundary |
 | [streaming_moments](../../examples/algorithms/streaming_moments/) | Bounded row chunks, lane/partial compensation, centered variance and independent long-row cancellation probes |
 | [csr_softmax_aggregate](../../examples/algorithms/csr_softmax_aggregate/) | Bounded exponential reference, shared weights, runtime compact segments and owned payload partials; empty rows and FP32 cancellation probes |
 | [layernorm](../../examples/algorithms/layernorm/) | VF dual reductions and tail handling after mean subtraction; one zero fill cannot protect all subsequent reductions |
@@ -96,7 +103,7 @@ Enter Cube work through the [GEMM mapping](../patterns/gemm-desugar.md). Select 
 | [quant_lightning_indexer](../../examples/algorithms/quant_lightning_indexer/) | MXFP4 QK, data/scale slot pairing, BF16 sequential head FMA, bounded Top-K selection and native alias/event ownership |
 | [quant_sparse_lightning_indexer](../../examples/algorithms/quant_sparse_lightning_indexer/) | Candidate-block gather, LI/LD metadata, retained Cube operands, explicit VF/Cube rings and exact BF16 Top-K checks |
 | [flash_attention](../../examples/algorithms/flash_attention/) | Fixed single-head online softmax, explicit placement and per-slot handovers, transposed scores, same-core alpha ring and an input-dependent precision budget |
-| [sparse_attention](../../examples/algorithms/sparse_attention/) | CANN FP16 sparse attention with V as a K prefix: dense-mask and selected-row paths, five native pipeline stages, static first/last VF dispatch, causal/empty rows and slot-reuse controls; original-evaluator contract tests additionally require `CANN_BENCH_ROOT` and importable `kernel_eval` |
+| [sparse_attention](../../examples/algorithms/sparse_attention/) | CANN FP16 sparse attention with V as a K prefix: dense-mask and selected-row paths, five native pipeline stages, static first/last VF dispatch, causal/empty rows and slot-reuse controls |
 | [flash_attention_mha](../../examples/algorithms/flash_attention_mha/) | Fixed BSND causal MHA, Host-known weighted partitioning, owner-cache/prefetch guards, explicit 512 KiB Mat plan and three handovers using 16 event IDs |
 | [causal_attention_backward](../../examples/algorithms/causal_attention_backward/) | Streamed FP32 VF gradients with explicit single-slot Vec placement, completed row statistics and independent query/key owners; K/V blocks and query reuse |
 | [decode_attention_gqa](../../examples/algorithms/decode_attention_gqa/) | Thin grouped contractions, explicit resources/events, physical/valid row separation, guarded prefetch and optional workspace/MIX merge; [short multi-position queries](../patterns/online-softmax.md#decode--very-thin-m-gqa) need their own coordinate/mask adaptation |
@@ -106,7 +113,7 @@ Use the shared [native-task timer](../verification/native-timing.md) for complet
 
 ### Run the grouped GEMM controls
 
-After selecting the device and taking its lock through the external environment, run from the skill root (`pypto-pro-kernel/`):
+After selecting the device and taking its lock through the external environment, run from this skill’s root:
 
 ```bash
 python scripts/check.py run --source examples/algorithms/grouped_gemm_swiglu_quant -- python -m pytest examples/algorithms/grouped_gemm_swiglu_quant/test.py -q
@@ -144,6 +151,7 @@ An external evaluator adapter must identify its dependency and preserve the orig
 - Derive the reference mathematically rather than duplicating tile/slot/blocked accumulation order. Consume actual quantized inputs; explicitly specified intermediate rounding is contractual too. Do not infer tolerances backwards from the candidate. See the [HF8 correct/incorrect-reference comparison](../../examples/matmul/fundamental_usage/hif8_fp32/test.py).
 - Kernels compile without agentkit and follow [VF/GEMM shipping policy](../../SKILL.md#constraints-and-workspace-policy), including teaching examples. The Vector tile-compute exception is limited to the sorting family; manual Cube examples state their allowed scope explicitly.
 - The kernel.py module docstring begins with `写法：原始。`, `写法：语法糖。` or `写法：混合。`. These are checker conventions, not compiler requirements.
+- Query derives program roles, calls and dependencies from source. Add an optional `example-query` declaration in that same module docstring only for non-derivable scenario aliases, facets or exclusions; follow the [program metadata contract](checks.md#complete-example-programs), exercise both matching and incompatible inputs, and do not add per-example inventories. Run the shared [knowledge admission gate](checks.md#knowledge-admission-and-refresh) with `query --validate --format json`; verify discovery plus the independent reference/test reads after a rename or dependency change.
 - Convert temporary top-level imports to package-relative imports and rerun `python -m pytest examples/<group>/<name>/test.py` on the device from the final library path. Temporary-directory success does not establish package collection. Toolchain identity, source hash and fixed criteria identify the evidence; identical historical source does not establish a current pass.
 - Library device/environment fixtures come from [conftest.py](../../examples/conftest.py). Standalone scripts must import/initialize torch_npu and provide a device fixture or select the logical device directly. Copying a test signature does not copy fixtures. `pytest.importorskip` can handle missing runtime dependencies, but skips on the target board do not count as acceptance.
 - Isolate teaching negative cases from correct calls and state the `反例：` marker, verification mode and no-board conditions explicitly. Potential hangs cannot enter default numerical tests. See [check waivers](checks.md#counterexample-declarations) and [device isolation](../verification/board-runs.md#isolating-device-faults).
@@ -159,4 +167,4 @@ Create an independent kernel for each preload instead of mutating `_pipeline` on
 
 ## Language and naming
 
-Agent-facing instructions in this skill are English. Bundled example explanations/docstrings use Chinese, with English identifiers, API names and machine-readable fields. Do not name ordinary intra-core double buffering `pipeline` / `pipelined`: `pl.jit(pipeline=)` denotes cross-core pipelining. Use an explicit name such as `double_buffer` for the intra-core mechanism.
+Agent-facing instructions in this skill are English. Example explanations/docstrings retain their existing Chinese convention, with English identifiers, API names and machine-readable fields; preserve literal diagnostics and machine-readable fields. Do not name ordinary intra-core double buffering `pipeline` / `pipelined`: `pl.jit(pipeline=)` denotes cross-core pipelining. Use an explicit name such as `double_buffer` for the intra-core mechanism.

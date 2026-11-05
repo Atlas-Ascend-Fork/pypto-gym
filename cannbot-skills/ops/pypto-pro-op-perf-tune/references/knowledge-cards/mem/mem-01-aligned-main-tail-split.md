@@ -5,6 +5,15 @@ description: "在 tiling 按物理连续性与对齐把主区切为静态 shape 
 status: "stable"
 tags: ["pypto-pro", "mem", "alignment", "tail"]
 item_id: "mem-01"
+knowledge_links:
+  schema: "pypto-knowledge-links/1"
+  relations:
+    - kind: uses_contract
+      target:
+        skill: pypto-pro-kernel
+        id: "document:skill/api/datamove.md#fixed-and-dynamic-valid-regions"
+      scope: "主区静态完整 Tile 与尾区动态 valid shape 分开声明，所有 load/store 使用实际有效范围。"
+      boundary: "valid shape 不保证物理连续或自动初始化 padding；尾区槽位、stride、format 与 dtype 对齐须单独核验。"
 bound_hint: "MTE2、MTE3"
 applicability: "同一算子同时覆盖对齐与非对齐规格，主循环每个 tile 都走动态 valid_shape/保守搬运路径，且主区可切出静态 shape 的对齐完整 Tile"
 target_api_gate: "仅限 Ascend 950PR 或 950DT；依赖 TileType 静态 shape、valid_shape=[-1,-1] 与 set_validshape"

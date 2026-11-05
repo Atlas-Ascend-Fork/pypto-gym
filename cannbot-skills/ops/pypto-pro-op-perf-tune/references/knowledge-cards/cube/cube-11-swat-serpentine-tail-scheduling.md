@@ -5,6 +5,15 @@ description: "面向 matmul 的 M×N 逻辑分块到有限 AIC 核的调度：�
 status: "stable"
 tags: ["pypto-pro", "cube", "matmul", "scheduling", "load-balance"]
 item_id: "cube-11"
+knowledge_links:
+  schema: "pypto-knowledge-links/1"
+  relations:
+    - kind: overlaps_with
+      target:
+        skill: pypto-pro-kernel
+        id: "document:skill/api/gemm.md#count-the-complete-output-grid-before-assigning-workers"
+      scope: "在完整输出 tile 网格上比较改变访问顺序、尾部工作分配与最忙 worker 路径。"
+      boundary: "通用网格契约不提供 SWAT 蛇形映射或变尺寸尾块实现；三机制分别核验，未验证的 B/C 不能随 A 一并启用。"
 bound_hint: "MAC、MTE2"
 applicability: "机制 A：右矩阵 B 是访存大头且其工作集相对可共享 L2 偏大、B 侧 DRAM 流量高，固定列的 B tile 被多个 M 行重复读且复用距离超 L2；机制 B：M/N 尾薄片拖慢所在行窗口；机制 C：tile 数不整除核数致末轮空闲核。需先由 tiling 建模确认是调度/负载而非纯计算 bound"
 target_api_gate: "仅限 Ascend 950PR 或 950DT；机制 A 仅用 pl.get_block_idx/get_block_num 与整数映射即可表达；机制 B/C 需要在 tiling 侧产出变尺寸 tile 或二维子块，DSL 是否支持同一 kernel 内混合 tile 尺寸须按目标版本复核，未验证前只用机制 A"

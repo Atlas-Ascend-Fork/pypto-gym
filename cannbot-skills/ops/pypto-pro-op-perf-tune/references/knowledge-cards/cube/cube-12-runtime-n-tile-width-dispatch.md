@@ -5,6 +5,21 @@ description: "MTE2 字节受限的 matmul 前端，按运行时的 M-tile 数把
 status: "stable"
 tags: ["pypto-pro", "cube", "matmul", "mte2", "a-reuse", "runtime-dispatch"]
 item_id: "cube-12"
+knowledge_links:
+  schema: "pypto-knowledge-links/1"
+  relations:
+    - kind: overlaps_with
+      target:
+        skill: pypto-pro-kernel
+        id: "document:skill/api/gemm.md#from-capacity-planning-to-performance-candidates"
+      scope: "联合比较 N 宽度、A 复用、L0/Acc 占用与逻辑工作项数，避免只减少读字节却损失并行。"
+      boundary: "N256/N384 与阈值属于本卡具体实现；目标不提供跨形状通用分界，也不保证运行期分支共享编译期地址。"
+    - kind: uses_contract
+      target:
+        skill: pypto-pro-kernel
+        id: "contract:performance-configuration"
+      scope: "验证按运行时 M tile 数和实际 worker 数选择的配置，并在额外形状检查 selector。"
+      boundary: "配置必须按真实 tile/launch 组合比较；单个宽档获胜不证明整个运行期分派正确或更快。"
 bound_hint: "MTE2"
 applicability: "matmul 为 MTE2 字节受限、A（激活）按 N-tile 数被反复重读；同一 kernel 要覆盖一批不同 batch（M 维 pad 后 tile 数变化）的形状；占核数（block_num）运行时可查。"
 target_api_gate: "仅限 Ascend 950PR 或 950DT；用 pl.get_block_num/pl.get_block_idx 的扁平二维网格与 pl.range 运行时边界即可，无需 const_expr 编译分档；分支内各自使用独立的 tile group，两条分支的 L1/L0 地址需按编译期不重叠规划。"

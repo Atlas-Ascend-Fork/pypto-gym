@@ -3,7 +3,7 @@
 本目录是性能调优的独立预置优化项来源。`INDEX.md` 是模板项生命周期和枚举的唯一入口；文件
 存在本身不使模板生效。调优时只登记下表中 `lifecycle=active && optimization_eligible=yes` 的原子项，
 使用 `source_kind=template` 和表内稳定 `item_id`，并记录 INDEX 行与模板文件的运行时内容哈希。
-`active` 表示本地候选须评估并关闭，不表示必须采用。当前 kernel owner 是技术依据，不因其页面名含 pattern/template 就增加本目录的预置项。
+`active` 表示必须在本专项调优中评估并关闭，不表示必须采用。当前 kernel owner 的规则和机制参考不因此变成模板优化项；用户明确指定的项目约束按主 Skill §3.1 核对。
 
 **当前计数：active/eligible item 为 6。**
 
@@ -20,7 +20,7 @@
 
 同一改动可以共享实验，但每个 template item 必须单独关闭并记录 overlap/require/conflict。模板只是
 待适配骨架，不保证可独立编译；采用前必须核对当前 API、dtype/layout、容量、tail、同步、wrapper
-合同与 DESIGN 的任务不变量；模板中的普通 Python helper 占位必须按当前 frontend 要求内联或改写。最终
+合同与用户明确的项目约束；模板中的普通 Python helper 占位必须按当前 frontend 要求内联或改写。最终
 必须通过完整正确性、机制核对及当前设备同协议实测。
 
 实现与验证时可按对应 item 读取以下辅助资料；它们不产生新的 source item：

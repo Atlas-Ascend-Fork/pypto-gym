@@ -5,6 +5,15 @@ description: "同一份数据如果既要按原布局使用，又要按转置布
 status: "stable"
 tags: ["pypto-pro", "cube", "memory", "layout"]
 item_id: "cube-08"
+knowledge_links:
+  schema: "pypto-knowledge-links/1"
+  relations:
+    - kind: uses_contract
+      target:
+        skill: pypto-pro-kernel
+        id: "document:skill/api/memory-allocation.md#aliasing-and-mutual-exclusion"
+      scope: "同一 L1 分配的 NZ/ZN 双视角必须保持一致的地址、容量和同步所有权。"
+      boundary: "别名合法不代表任意矩形 shape 可以转置搬运；两个消费视角、单写者和 L0 输入形状须逐条证明。"
 bound_hint: "MTE1"
 applicability: "同一份数据要同时作为 Cube 两条输入路径的操作数，一条使用 NZ 视角，另一条使用 ZN 视角，并且两边都能使用同形搬运。"
 target_api_gate: "需要当前版本支持同地址 TileGroup、NZ/ZN 视角和对应的 L0 搬运；共享地址下的 mutex 和写入顺序必须在目标版本上复核。"

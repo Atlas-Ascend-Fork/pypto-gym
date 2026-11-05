@@ -20,7 +20,11 @@ Keep metadata attached to its logical owner. Rows may reuse one loaded selector 
 
 Choose row batch size separately from column/register width and count the busiest worker's actual row batches: a larger batch can increase the last worker's work or leave workers idle. The [local buffering contract](../api/memory-allocation.md#independent-buffers-and-slot-depth) owns slot-depth comparisons, capacity accounting and ring-wrap validation; include every row-batched input, output and metadata tile in that plan.
 
+Use the [configuration comparison procedure](../workflows/optimization.md#choose-configuration-comparisons) to test batch size together with launch count and validate a metadata selector on additional shapes. Work-item coverage is one screening quantity; retain legal batching candidates on both sides of the estimated concurrency/reuse tradeoff.
+
 Batching can add metadata DMA and statistic reloads even while removing many row-sized calls. Keep a row-at-a-time control when those added costs are not amortized, and compare complete calls at matched workers before selecting a shape regime. The [grouped GEMM quantization example](../../examples/algorithms/grouped_gemm_swiglu_quant/) exposes row and batch controls, guards each worker's actual consumers, and uses a block-wide phase boundary. Its batch path normalizes by a bounded row maximum before the integer-range factor; the [normalized-ratio contract](../api/numerics.md#2-small-magnitudes-in-normalized-ratios) still requires independent numerical tests when that arithmetic order changes.
+
+The [pairwise squared-distance example](../../examples/algorithms/pairwise_squared_distance/) compares one-row and batched transfers for independent reductions sharing an input. It packs scalar outputs before GM stores and checks available work groups before choosing the larger batch.
 
 ### Reconstruct very short rows in registers
 
@@ -31,6 +35,8 @@ For `D=2`, compare a supported load-port/deinterleave arrangement; for `D=3..8`,
 For multiple source registers, derive both the source-register number and its lane from `r*D+d`: register-gather wrapping cannot select another register. Check rows crossing register boundaries, partial row groups, all feature masks and final output guards with coordinate-distinct inputs. Keep invalid lanes out of every row's arithmetic, and make all issued addresses legal before masking results. Compare complete calls with the padded-row control, including reconstruction, padding, register pressure, local slot depth and worker utilization; a smaller DMA count alone does not select the winner.
 
 ### Choose where dependent phases share state
+
+The [gated outer-state example](../../examples/algorithms/gated_outer_state/) keeps a recurrent matrix in UB across a complete sequence, with only per-step outputs and the final state stored to GM. Its source declares the live storage, reset boundary and numerical scope; it is a correctness anchor without a speed claim.
 
 A mathematical phase is not a native-kernel boundary. First identify the owner of each row and budget the peak simultaneously live tiles, including padding and slots. If that owner can perform all dependent phases within the capacity limit, compare a resident-row native kernel before choosing separate global stages. Values can stay in registers within one VF procedure, or in explicit UB tiles between VF procedures called by the same JIT kernel; [VF scope](../api/constraints.md#simd-vf-functions-communicate-through-tile-parameters) does not require GM intermediates.
 

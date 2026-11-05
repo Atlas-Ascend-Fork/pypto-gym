@@ -1,24 +1,21 @@
 # AttnEpilogue 设计说明
 
-单文件 kernel（`op_kernel/attn_epilogue.py`）每次调用只启动 **一个** `@pl.jit` kernel，核心计算全部在
-kernel 内；wrapper 只做参数校验、只读元数据读取、纯 Python 整数推导与 scratch 分配。
+单文件 kernel（`op_kernel/attn_epilogue.py`）每次调用只启动 **一个** `@pl.jit` kernel，核心计算全部在 kernel 内；wrapper 只做参数校验、只读元数据读取、纯 Python 整数推导与 scratch 分配。
 
 ## 计算阶段划分
 
 | 阶段 | 执行域 | 内容 | 数据交接 |
 |---|---|---|---|
-| **M1** | Vector（64） | inverse RoPE（按 512 维 head 切片）+ 回归组为 8 group + MXFP8 量化 | 写出 GM 载荷 `aq`（FP8E4M3）与 `asc`（E8M0） |
-| **M2** | Cube（32） | GEMM1：`y[t, g*1024+n] = Σ_k aq[t,g,k]·woa[g,n,k]`，K=4096，FP8×FP8→FP32 | 累加器经 C→V 通道交给 Vector |
-| **M3** | Vector（64） | 对 `y` 再做 MXFP8 量化 | 写出 GM 载荷 `yq`（FP8E4M3）与 `ys`（E8M0） |
-| **M4** | Cube（32） | GEMM2：`out[t,m] = Σ_k yq[t,k]·wob[m,k]`，K=8192，bf16 写回 | 直接写 `out` |
+| **M1** | Vector（56/64） | inverse RoPE（按 512 维 head 切片）+ 回归组为 8 group + MXFP8 量化 | 写出 GM 载荷 `aq`（FP8E4M3）与 `asc`（E8M0） |
+| **M2** | Cube（28/32） | GEMM1：`y[t, g*1024+n] = Σ_k aq[t,g,k]·woa[g,n,k]`，K=4096，FP8×FP8→FP32 | 累加器经 C→V 通道交给 Vector |
+| **M3** | Vector（56/64） | 对 `y` 再做 MXFP8 量化 | 写出 GM 载荷 `yq`（FP8E4M3）与 `ys`（E8M0） |
+| **M4** | Cube（28/32） | GEMM2：`out[t,m] = Σ_k yq[t,k]·wob[m,k]`，K=8192，bf16 写回 | 直接写 `out` |
 
-四个阶段同属一个 native task，阶段之间用 core-grid barrier 分隔；跨阶段数据只经 GM 载荷
-（`aq/asc/yq/ys`）传递，因此 barrier 后无需保留片上中间态。RoPE 与两级量化都落在 Vector 上，
-两级 GEMM 落在 Cube 上，两个执行域在 M1/M2 与 M3/M4 之间按分段发布重叠（见"流水设计"）。
+四个阶段同属一个 native task。M1 的 `aq/asc` 与 M3 的 `yq/ys` 经 GM 传递，M2 的累加器经 C→V 共享环交给 M3；第二级首块权重在 L1 中跨阶段保留。分段发布、共享环事件及阶段交接分别保护这些数据路径，不能仅凭一个全局 barrier 推断全部片上状态的生命周期。
 
 ## 核间切分策略
 
-- **核配额**：32 Cube + 64 Vector，每个 Cube 固定配 2 个 Vector subblock。
+- **核配额**：按实际硬件选择 28 Cube + 56 Vector 或 32 Cube + 64 Vector，每个 Cube 固定配 2 个 Vector subblock。
 - **第一级工作空间**：按 **M → group → N** 排列，任务数 `8 × nm × ⌈1024/BN1⌉`（`nm = ⌈padded/BM⌉`）。
   按 M 优先可让同一 group 的 N 分块落在相邻核上，长输入时每个 Cube 拿到互不重叠的输出 tile。
 - **第二级工作空间**：任务数 `nm × ⌈5120/BN⌉`，每个 Cube 负责不重叠的输出 tile。
@@ -41,23 +38,18 @@ kernel 内；wrapper 只做参数校验、只读元数据读取、纯 Python 整
 | 128 | 256 | 2 | 128 | 256 | 160 | `64 < T ≤ 128` |
 | 256 | 256 | 1 | 128 | 256 | 160 | `T > 128` |
 
-基本块由四类容量硬约束反推（平台值取自 `Ascend950PR_9589.ini`）：
+基本块同时受 L0C、L0B、L1 和 UB 约束。容量与布局由所选工具链的原生声明检查，采用核心 skill 的[容量契约](../../../../cannbot-skills/ops/pypto-pro-kernel/references/api/memory-limits.md)，不以单个 SDK 配置文件替代当前设备校验。
 
-- **L0C（262144 B）**：累加器 `BM × BN1 × 4` 字节，槽数 `acc_slots = min(2, 65536 // (BM×BN1))`，
-  即 `BM=256` 时 1 槽、`BM≤128` 时 2 槽；
-- **L0B（65536 B）**：B 操作数 `K0 × BN1` 字节，`K0=128/BN1=256` 与 `K0=256/BN1=256` 都恰好占满；
-- **L1（524288 B）**：`2×BM×BK`（A 双缓冲）+ `2×BN×BK`（B 双缓冲）+ scale 平面；
-- **UB（253952 B）**：C→V 共享环 `2×BM×BN1×VSlots` 加量化 scratch。`BN1=256` 在 `BM=256` 下能成立，
-  依靠的是**把量化按行分块**：inverse RoPE 以 `R_ROWS=8` 行为一个 slab、`y` 量化以 `Q_ROWS=64` 行为一个
-  chunk 处理，使 UB 峰值随行块而非整块增长。
+- **L0C**：每槽预留 `4 * BM * max(BN1, BN)` 字节，深度 `min(2, 65536 // (BM * max(BN1, BN)))`；六档配置中，`BM=256` 使用一槽，其他档使用两槽。
+- **L0B**：每槽按 `K0 * max(BN1, BN)` 字节分隔，槽数为 `256 // K0`，并为对应 scale 平面保留配对地址。
+- **L1**：A/B 双缓冲按 `2 * (BM + max(BN1, BN)) * BK` 字节预留；随后 A-scale 区预留 `BM * 256` 字节，B-scale 区容纳两阶段中较大的声明。
+- **UB**：C→V 共享环占 `2 * BM * BN1 * VSlots` 字节，另计量化 scratch 与偏移。inverse RoPE 以 `R_ROWS=8` 行处理，32 核布局的 `y` 量化以 `Q_ROWS=64` 行处理，使工作区峰值受行块控制。
 
 ### 核内 Buffer 划分
 
-- **L1**：所有 tile 都由 `TileType + make_tile_group` 声明显式地址与 mutex ID；A 操作数与 B 操作数各自
-  双缓冲（K 条带交替），A-scale 用 `ZZ` 布局、B-scale 用 `NN` 布局；scale 平面保持
-  `addr(scale) == addr(data) >> 4` 的对应关系。B 的 L1 条带用片上转置视图（`ZN`）供 MX matmul 直接消费。
-- **L0**：L0A/L0B 环各 `NS = 256 // K0` 槽（`K0=128` 时 2 槽，提供深度 2 的 L0 环且总占用与 `K0` 无关）。
-- **L0C**：累加器组按 `acc_slots` 切槽，供 MMA 与 drain 重叠。
+- **L1**：A/B 条带各双缓冲，两个投影共享每个物理槽的 mutex ID。B 槽按 `max(BN1, BN) * BK` 预留间距；A/B scale 起点也在两阶段保持一致，A-scale 区按第二级 `K=8192` 的 256 个 scale 列预留。各阶段保留自己的有效形状和布局，B 条带经 `ZN` 转置视图供 MX matmul 消费。
+- **L0**：L0A/L0B 环各 `256 // K0` 槽。L0B 的槽距为 `max(BN1, BN) * K0`，对应 ScaleLeft/ScaleRight 地址等于数据槽地址 `>> 4`。两个阶段的对应槽保留相同 mutex ID。
+- **L0C**：两阶段使用相同槽距 `4 * BM * max(BN1, BN)`，深度为 `min(2, 65536 // (BM * max(BN1, BN)))`。Acc 的 `phase=`/`unit_flag` 依赖仍需在阶段切换时排空；统一 mutex ID 不替代该完成协议。
 - **UB**：C→V 共享环（`VSlots` 槽，每槽 `[BM/2, BN1]` fp32）供 `y` 交接；量化 scratch 依次为
   bf16 中间、量化载荷、E8M0 序列、倒数表、偶/奇列展开缓冲与 scale 打包缓冲，全部落在同一个
   静态 UB 布局内。
@@ -87,12 +79,10 @@ kernel 内；wrapper 只做参数校验、只读元数据读取、纯 Python 整
   （0/1）实现生产者/消费者推进，`VSlots=2` 允许 drain 与下一次 MMA 重叠。
 - **Vector↔Cube 重叠**：量化按 2048 列分段发布，全 Vector 写入完成用事件 5/6 通知，
   Vector→Cube 用事件 3/4；由此 M1 的量化与 M2 的 GEMM1 在时间上重叠，而不是串行。
-- **跨投影预取的一致性**：GEMM2 的首块权重复用 GEMM1 的 L1 地址，预取时必须按 **GEMM2 的物理 NZ 行距**
-  构造视图（`reinterpret(bg, shape=[BN, BK])`）。两阶段共享同一段 L1 区，因此第一级的 N 宽度与第二级
-  的 `BN` 必须一致；这条不变量是分档合法性的前提（`BN1=256` 与 `BN=160` 能共存，正是因为预取视图按
-  `BN` 的行距重解释）。
-- **阶段 barrier**：M1→M2、M2→M3、M3→M4 之间用 core-grid barrier 保证跨域载荷可见；
-  首块权重预取后同样以 barrier 收口，使两侧执行域从一致的 L1 状态开始。
+- **跨投影预取的一致性**：GEMM2 的首块权重在 GEMM1 最后一次读取后写入 L1 的 B 槽 0，使用 `reinterpret(bg, shape=[BN, BK])` 保持 GEMM2 的物理 NZ 行距，并继承槽 0 的 ID。容量按 `max(BN1, BN)` 预留，两个有效 N 宽度无需相等。
+- **阶段交接**：Cube 在两级投影之间执行 `bar_all`，排空预取、操作数消费和 MMA/FIX；Vector 端须完成 `yq/ys` 的发布。28 核布局通过 MIX collective 交接，32 核布局通过 Vector 的 MTE3 全局事件 8 和向 Cube MTE2 的事件 7 交接。测试把 Cube 存储域的 `MutexMismatch` 视为错误，同时保留逐字节中间量、输出守卫及交替输入的 graph replay 验证。
+
+32 核布局的 RoPE 临时区与 C→V 共享区存在串行复用，原生声明检查可能报告 `Vec` 重叠；该提示保持可见。最后一个 slab 的 MTE3 全局事件 6 完成后，事件 4 才允许 Cube 加载后半 K；GEMM1 消费全部 K 后才能写共享 UB。这个跨核完成链保护复用，不能用同一个 per-core mutex ID 替代。声明告警、编译成功和实际数值回归分别判断。
 
 ## 命名与符号约定
 

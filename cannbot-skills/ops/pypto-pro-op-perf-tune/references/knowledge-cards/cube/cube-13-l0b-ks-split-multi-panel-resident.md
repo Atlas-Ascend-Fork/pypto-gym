@@ -5,6 +5,15 @@ description: "一次 K 迭代要对同一个左矩阵分块做 3 个输出 N-til
 status: "stable"
 tags: ["pypto-pro", "cube", "matmul", "l0b", "k-split", "pipelining"]
 item_id: "cube-13"
+knowledge_links:
+  schema: "pypto-knowledge-links/1"
+  relations:
+    - kind: overlaps_with
+      target:
+        skill: pypto-pro-kernel
+        id: "document:skill/api/gemm.md#from-capacity-planning-to-performance-candidates"
+      scope: "缩短 L0 K 子块以容纳多个独立 Right tile，联合核算 Left、Right、Acc 的字节与累加步数。"
+      boundary: "本卡 3 个 B panel 的尺寸和平台容量不是全局常量；首块初始化、尾 K、所有路径地址及额外循环成本仍须验证。"
 bound_hint: "MAC、MTE1"
 applicability: "单个左矩阵分块要喂多个（≥3）输出 N-tile，即每个 K 迭代需 3 个 [128,128] B 操作数；而 L0B 容量只够 2 个 [128,128]（64KB ÷ 32KB），复用 Buffer 会让多出的 matmul 与前一个串行。"
 target_api_gate: "仅限 Ascend 950PR 或 950DT；依赖已核验的 pl.TileType(Mat, NZ, [K,N]=[64,128] / [M,K]=[128,64])、pl.matmul/matmul_acc 的 K 维分块累加（首块 matmul、后续 matmul_acc）、pl.move 的 L1→L0 搬运。"

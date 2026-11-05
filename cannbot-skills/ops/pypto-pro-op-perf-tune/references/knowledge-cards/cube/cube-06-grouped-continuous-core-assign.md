@@ -5,6 +5,15 @@ description: "多组 matmul 合并为单次 launch，把所有组的输出 tile 
 status: "stable"
 tags: ["pypto-pro", "cube", "grouped-matmul", "scheduling", "multi-core"]
 item_id: "cube-06"
+knowledge_links:
+  schema: "pypto-knowledge-links/1"
+  relations:
+    - kind: same_mechanism
+      target:
+        skill: pypto-pro-kernel
+        id: "contract:grouped-ownership"
+      scope: "将多组独立 GEMM 的输出 tile 连续编号，避免每组重启 worker 分配造成余数工作反复落在低编号 worker 上。"
+      boundary: "本卡示例使用固定 tiles_per_group；目标契约还讨论运行时组长、动态前缀和空组。关联不扩大本卡覆盖范围，也不证明当前负载失衡或存在性能收益。"
 bound_hint: "MAC"
 applicability: "单 kernel 承载多组 matmul（MoE 分组、batch matmul 等），各组 tile 数不被核数整除，组数较多"
 target_api_gate: "仅限 Ascend 950PR 或 950DT；依赖 pl.get_block_idx/pl.get_block_num、三维 GM 张量的组维寻址与单次 launch"

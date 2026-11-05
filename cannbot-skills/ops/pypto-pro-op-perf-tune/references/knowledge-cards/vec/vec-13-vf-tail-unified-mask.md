@@ -6,6 +6,15 @@ status: "stable"
 tags: ["pypto-pro", "vec", "tail", "mask"]
 sources: [{"id": "vf-mask-load", "resource": "../../../../pypto-pro-kernel/references/api/vf.md#repeated-runtime-masks-in-vf-loops", "title": "完整寄存器容量与 full-mask 外提"}, {"id": "vf-load-align-api", "resource": "https://pypto.gitcode.com/pypto_pro/api/SIMD-API/operation/vf_computation/data_movement/load_align.html", "title": "vf.load_align 官方 API"}]
 item_id: "vec-13"
+knowledge_links:
+  schema: "pypto-knowledge-links/1"
+  relations:
+    - kind: uses_contract
+      target:
+        skill: pypto-pro-kernel
+        id: "contract:vf-prefix-mask"
+      scope: "逐拍按 total-offset 重建当前 dtype 的有效前缀，并让 offset 与 mask 使用相同元素粒度。"
+      boundary: "update_mask 不回写 Python 计数器；统一尾路径不能覆盖已满足前提的 full-mask 外提义务或更早的越界访问。"
 bound_hint: "VEC、SCALAR"
 applicability: "full 与 tail 代码体重复，逐拍 active 可由 total 减 offset 精确重算，offset 与 mask 使用同一元素粒度，且可与 fixed full-mask 加独立 tail 的当前控制比较"
 target_api_gate: "仅限 Ascend 950PR 或 950DT；须核验 vf.update_mask 不回写 Python 标量，lane 常量按 dtype 与生成物确定"

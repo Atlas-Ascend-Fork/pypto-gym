@@ -1,6 +1,6 @@
 # PyPTO-Pro Cube fragment: reuse one fixed left tile across a small output
 # wave without changing partition ownership or the FP32 reduction tree.
-# Replace constants/types/groups from DESIGN.md; this is not standalone code.
+# Derive constants/types/groups from the verified resource plan; this is not standalone code.
 
 OUTPUT_GROUP = 4
 output_waves = (output_tiles + OUTPUT_GROUP - 1) // OUTPUT_GROUP

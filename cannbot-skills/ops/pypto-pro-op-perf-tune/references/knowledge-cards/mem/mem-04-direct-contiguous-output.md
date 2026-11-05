@@ -5,6 +5,15 @@ description: "输出区间已连续且本轮结果完整时，用一次整块 pl
 status: "stable"
 tags: ["pypto-pro", "mem", "store", "contiguous"]
 item_id: "mem-04"
+knowledge_links:
+  schema: "pypto-knowledge-links/1"
+  relations:
+    - kind: uses_contract
+      target:
+        skill: pypto-pro-kernel
+        id: "document:skill/api/datamove.md#12-overlapping-writes-program-order-is-not-guaranteed-even-within-one-pipe"
+      scope: "把分段搬出改为连续整块 store 前，证明最终地址连续、结果完整且没有未完成或别名写入。"
+      boundary: "同 pipe 程序序不能证明写入安全；跨核重叠、原子语义、尾部和 pad 责任不能因合并 store 消失。"
 bound_hint: "MTE3"
 applicability: "结果在 UB 中已按输出地址连续排布却仍按行/段逐个搬出，且后续无中间变换、结果只需写入最终 GM 区间"
 target_api_gate: "仅限 Ascend 950PR 或 950DT；依赖 pl.store 整块搬运与 pl.move 的 UB→UB offset 读"

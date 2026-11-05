@@ -76,6 +76,7 @@ package-lock.json
 
 /.claude/
 /CLAUDE.md
+/AGENTS.md
 
 # PyPTO-Pro devkit cache. Bare pattern, not `.devkit/`: a trailing slash matches
 # directories only, and init.sh installs symlinks, which the bare form also covers.

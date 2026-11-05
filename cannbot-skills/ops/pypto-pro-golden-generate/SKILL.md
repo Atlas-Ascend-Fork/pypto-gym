@@ -5,18 +5,20 @@ description: 为 PyPTO-Pro 算子生成、规范化和验证 golden 参考实现
 
 # PyPTO-Pro Golden 参考实现
 
-负责 Stage 2 的数学参考实现，不决定 Module 划分、kernel 写法或优化策略。
+负责数学参考实现，不决定 kernel 写法或优化策略。
 
 ## 输入、路径与交付
 
 支持两种入口：
 
 - 编排模式：接收已经通过 canonical validator 的 `custom/<op>/SPEC.md`，交付目录固定为 `custom/<op>/`。
-- 单独使用：可接收已校验 SPEC、自然语言需求或既有 PyTorch/NumPy 参考。没有已校验 SPEC 时，先加载 `pypto-pro-intent-understand` 创建并校验 SPEC；信息不足时由该 skill 澄清或返回 `blocked`，本 skill 不猜测合同。
+- 单独使用：可接收已校验 SPEC、自然语言需求或既有 PyTorch/NumPy 参考。按核心的[需求指引](../pypto-pro-kernel/references/workflows/requirements.md)明确数学合同；使用本 skill 的 SPEC 生成工具链时，将已确定的事实写入其可选模板并校验。本 skill 不猜测合同，也不改变已有参考或验收标准。
+
+SPEC 模板和校验器由同级 `pypto-pro-kernel` 提供；独立安装本工具链时一并提供该核心 skill。普通 kernel 任务沿用核心流程，按实际需要选择是否使用 SPEC。
 
 下文以 `<spec-path>` 表示已校验 SPEC，以 `<op-dir>` 表示交付目录。编排模式下二者分别为 `custom/<op>/SPEC.md` 和 `custom/<op>/`；单独使用时 `<op-dir>` 可由用户指定，否则取 `<spec-path>` 的父目录，不存在时先创建该目录。
 
-SPEC 中唯一的 JSON machine-contract 是 Stage 2 的机器事实源。至少确认：
+使用 SPEC 生成工具链时，SPEC 中唯一的 JSON machine-contract 是机器事实源。至少确认：
 
 - 算子名称和数学公式；
 - 全部输入、输出、参数及默认值；
@@ -25,11 +27,9 @@ SPEC 中唯一的 JSON machine-contract 是 Stage 2 的机器事实源。至少�
 
 machine-contract 缺字段、类型错误或 P0 不完整时停止并退回修正 SPEC；不要从正文、动态范围或经验补造数学语义、参数、shape 或 P0。
 
-编排模式直接复用已通过的 Stage 1 产物，不重复检索 devkit。仅当生成 Golden 所需的明确
-数学事实缺失时，才按 [reference-normalization.md](references/reference-normalization.md) §1
-检索仓内 PyTorch/NumPy 参考；仍不足则返回 `stage1_material_gap`，列明缺口和已核对证据。
+直接复用已经确认的需求和数学参考。仅当生成 Golden 所需的明确数学事实缺失时，才按 [reference-normalization.md](references/reference-normalization.md) §1 检索仓内 PyTorch/NumPy 参考；仍不足则列明缺口和已核对证据，返回调用方补齐。
 
-Stage 2 必须交付并验证：
+调用本工具链时交付并验证：
 
 | 文件 | 职责 |
 |---|---|
@@ -54,7 +54,7 @@ python <skill-dir>/scripts/gen_golden_scaffold.py \
   --out <op-dir>/<op>_golden.py
 ```
 
-脚手架通过 Intent Understand 的 `load_spec_contract()` 读取并验证该合同，将校验后的 `formula` 内容写入生成源码的 `_SPEC_FORMULA`，并按合同顺序生成全部 `p0_cases` 的签名、shape、参数和 case 名。合同无效或字段缺失时会非零退出；先修正 SPEC，再继续。
+脚手架通过核心 `scripts/validate_spec.py` 的 `load_spec_contract()` 读取并验证该合同，将校验后的 `formula` 内容写入生成源码的 `_SPEC_FORMULA`，并按合同顺序生成全部 `p0_cases` 的签名、shape、参数和 case 名。合同无效或字段缺失时会非零退出；先修正 SPEC，再继续。
 
 参考源与交付目标同名时，按 [reference-normalization.md](references/reference-normalization.md) 的候选流程处理。其他已存在的交付文件须先取得用户覆盖确认再写入；未确认则保留原文件并返回 `blocked`。
 
@@ -114,7 +114,7 @@ return [
 5. 公式可推导的值域、边界/特殊点和数学属性；
 6. 存在独立 PyTorch 等价 API 或既有参考时的数值对比。
 
-P1 或可选分支缺少可执行的已确认值时，先退回 `pypto-pro-intent-understand` 补全 SPEC，不自行填值。容差必须与 dtype 和算子数值特性一致。验证失败时定位数学、输入或合同根因并修复；不要用放宽容差、吞掉异常或加入未定义 epsilon 掩盖失败。同一根因连续 3 次失败且没有新证据时停止重试，报告失败命令、原始错误和已尝试修复。
+P1 或可选分支缺少可执行的已确认值时，按核心的[需求指引](../pypto-pro-kernel/references/workflows/requirements.md)补齐相关事实并更新 SPEC，不自行填值。容差必须与 dtype 和算子数值特性一致。验证失败时定位数学、输入或合同根因并修复；不要用放宽容差、吞掉异常或加入未定义 epsilon 掩盖失败。同一根因连续 3 次失败且没有新证据时停止重试，报告失败命令、原始错误和已尝试修复。
 
 复杂公式没有独立 PyTorch API 或既有参考作为 oracle 时，在交付结果中标记 `semantic_review_required` 并说明缺少何种对照；该标记不替代自验证，也不使用星级置信度。
 
@@ -142,6 +142,8 @@ CPU 自验证至少覆盖 FP32/低精度浮点输入可运行、输出为 FP32�
 TILE_FWK_DEVICE_ID=<id> python <skill-dir>/scripts/validate_golden_once.py --op-dir <op-dir> --spec <spec-path>
 ```
 
+runner 执行前静态核对必需函数，并拒绝直接或字面量动态导入 `pypto` / `pypto_pro` 的参考文件。该检查不追踪任意间接依赖，仍须确认数学参考独立于待测实现；自验证也不能替代数学语义核对。
+
 未指定卡号时省略环境变量；`--spec` 缺省时读取 `<op-dir>/SPEC.md`。相同 SPEC 与文件哈希下，
 成功项只复用回执，不再次执行；失败项修正文件后自动重试，仅环境问题且文件未变时显式传
 `--retry-failed cpu|npu|all`。两份 golden 的 exit code 均为 0 且源码在执行期间未变，
@@ -149,13 +151,13 @@ TILE_FWK_DEVICE_ID=<id> python <skill-dir>/scripts/validate_golden_once.py --op-
 
 ### 7. 按开关处理 profiling
 
-- `collect_golden_perf=false` 或缺失：跳过，继续完成 Stage 2。
+- `collect_golden_perf=false` 或缺失：跳过，继续完成参考实现的交付。
 - `collect_golden_perf=true`：先保证 NPU golden 自验证通过，再阅读并执行 [references/profiling.md](references/profiling.md)。单独使用时沿用本 skill 的显式开关定义，并把 reference 命令中的 `custom/<op>/` 换成实际 `<op-dir>/`；采集流程和判定不变。多个 P0 必须逐 case 采集。
 - `profile-only=true`：仅在 `collect_golden_perf=true` 且
   `python <skill-dir>/scripts/validate_golden_once.py --op-dir <op-dir> --spec <spec-path> --check` 通过时执行
   profiling；不得重写或重新验证 golden。
 
-Profiling 是 Stage 2 对 NPU golden 的独立可选能力；采集逻辑只存在于 `scripts/profile_golden.py`，不得写入 golden 文件，也不绑定任何下游阶段的协议。
+Profiling 是 NPU golden 的独立可选能力；采集逻辑只存在于 `scripts/profile_golden.py`，不得写入 golden 文件，也不绑定任何下游阶段的协议。
 
 ## 完成条件
 

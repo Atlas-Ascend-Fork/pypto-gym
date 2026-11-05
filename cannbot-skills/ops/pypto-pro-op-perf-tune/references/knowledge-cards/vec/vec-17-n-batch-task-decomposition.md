@@ -5,6 +5,15 @@ description: "当归约/窗口维不超过 tile 行容量且 batch 维很大时�
 status: "stable"
 tags: ["pypto-pro", "vec", "scheduling", "task-decomposition"]
 item_id: "vec-17"
+knowledge_links:
+  schema: "pypto-knowledge-links/1"
+  relations:
+    - kind: overlaps_with
+      target:
+        skill: pypto-pro-kernel
+        id: "document:skill/patterns/vf-neighborhood.md#blocking-and-work-distribution"
+      scope: "合并独立 work item 的连续行块以摊薄 transfer、Tile 与任务算术开销，同时保持每个邻域的数学边界。"
+      boundary: "本卡无额外 halo 的结论依赖窗口裁剪在各 item 内；NB、容量与尾 item 数必须同源，不推广到跨 item 邻域。"
 bound_hint: "MTE2、MTE3、SCALAR"
 applicability: "归约/窗口维 ≤ tile 行容量且 batch 维大，单 task 有效工作量极小而每 task 固定开销（MTE descriptor、Tile 轮转、validshape、同步、任务算术）主导，work item 间独立且在合并视图中相邻行块 GM 连续"
 target_api_gate: "仅限 Ascend 950PR 或 950DT；TilingKeyField 编译期模式分派、TilingData 运行时标量字段、pl.load 连续行块 2D 装载与嵌套 pl.range 均已在 950PR 交付算子核验；批大小 NB 与尾块钳位须 host/kernel 同源"

@@ -8,6 +8,8 @@
 
 """写法：语法糖。Stage an indexed matrix operand, then consume it with Cube.
 
+example-query: {"aliases": ["row selector matrix product", "行选择矩阵乘积"], "facets": {"source_dtype": ["FP16", "BF16"], "destination_dtype": ["FP32"]}}
+
 C[b, m, j] = dot(X[b, m, :], table[b, indices[b, j], :]).
 X[B,M,K] and table[B,R,K] are contiguous FP16/BF16; indices[B,N] is INT32
 with values in [0,R), including repeats. C[B,M,N] is FP32. M is positive,

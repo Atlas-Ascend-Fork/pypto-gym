@@ -5,6 +5,21 @@ description: "关键路径上的门控加权收缩，经参考点差分分解把
 status: "stable"
 tags: ["pypto-pro", "algorithm-reformulation", "gated-contraction", "gemm", "resident-state"]
 item_id: "algo-01"
+knowledge_links:
+  schema: "pypto-knowledge-links/1"
+  relations:
+    - kind: overlaps_with
+      target:
+        skill: pypto-pro-kernel
+        id: "document:skill/api/gemm.md#thin-row-contractions-compare-arithmetic-and-transport-paths"
+      scope: "在保持数学与数值合同的前提下，把可分离的加权收缩作为 VF 与 Cube 路径比较对象。"
+      boundary: "目标只提供核心与运输路线的比较原则，不证明本卡权重可分离；指数范围、阶段重排与工作量变化须独立推导。"
+    - kind: uses_contract
+      target:
+        skill: pypto-pro-kernel
+        id: "document:skill/api/numerics.md#4-fixed-references-in-bounded-exponential-normalization"
+      scope: "选择指数参考点前推导全输入域的中间量范围、下溢、上溢及最终误差。"
+      boundary: "归一化中的公共平移抵消不自动适用于本卡未归一化乘积；两侧指数、乘积、低精度操作数及累加误差均须另证。"
 bound_hint: "VEC、MAC、MTE2"
 applicability: "关键路径存在门控或超越函数加权的 (查询 × 键) 型收缩，当前以 Vector 逐元素 exp 与乘累加实现，呈 VEC bound 或逐元素依赖链；且逐元素权重可按差值分解为行项与列项之积，并存在参考点使分解后的指数中间量落在可表示范围内"
 target_api_gate: "依赖已核验的 exp、逐元素乘、转置与 cube matmul（含批量）及其 dtype 组合；分解后的数值范围与操作数 dtype 须在目标版本核验，其它 SoC 或版本须重新核验"

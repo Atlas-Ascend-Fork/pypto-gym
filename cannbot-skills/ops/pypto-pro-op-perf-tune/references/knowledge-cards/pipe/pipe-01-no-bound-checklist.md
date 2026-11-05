@@ -5,6 +5,15 @@ description: "各硬件单元利用率均不高、无单一瓶颈但吞吐未达
 status: "stable"
 tags: ["pypto-pro", "pipeline", "checklist"]
 item_id: "pipe-01"
+knowledge_links:
+  schema: "pypto-knowledge-links/1"
+  relations:
+    - kind: uses_contract
+      target:
+        skill: pypto-pro-kernel
+        id: "contract:performance-counters"
+      scope: "无单一高利用单元时，用实际 trace 和各 pipe、工作量、等待区间诊断重叠与固定开销。"
+      boundary: "低利用率不自动证明流水编排有错；归约依赖、启动、标量发射和传输粒度须分别建立证据。"
 bound_hint: "PIPELINE"
 applicability: "各硬件单元利用率均不高、无明显单一瓶颈，trace 有流水气泡与等待区间、搬移-计算 overlap 不足"
 target_api_gate: "仅限 Ascend 950PR 或 950DT；各手段分别依赖 make_tile_group 深度轮转、auto_mutex、整块搬运与 VF 融合等已核验能力"

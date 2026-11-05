@@ -5,6 +5,15 @@ description: "双缓冲已开却仍不并行时，把消费异步计算结果的
 status: "stable"
 tags: ["pypto-pro", "pipeline", "scheduling"]
 item_id: "pipe-02"
+knowledge_links:
+  schema: "pypto-knowledge-links/1"
+  relations:
+    - kind: uses_contract
+      target:
+        skill: pypto-pro-kernel
+        id: "document:skill/api/memory-allocation.md#independent-buffers-and-slot-depth"
+      scope: "重排计算、预取与延迟写出时，输入输出均要有足够独立槽位，并等最终 store 完成后才能复用。"
+      boundary: "增加深度不证明当前程序序已重叠；本卡首轮、末轮补写、索引窗口和发射阻塞须在实际 trace 上核验。"
 bound_hint: "PIPELINE"
 applicability: "TileGroup 双缓冲已开但 trace 显示搬入-计算-写出仍串行（写回等待刚发出的计算、搬运发射反压计算发射），且每核 tile 数足够形成流水"
 target_api_gate: "仅限 Ascend 950PR 或 950DT；依赖 make_tile_group 的 group[i] 运行时索引与 auto_mutex 依赖"

@@ -5,6 +5,15 @@ description: "每轮跨核依赖用全局屏障同步、导致固定开销高或
 status: "stable"
 tags: ["pypto-pro", "sync", "pipeline"]
 item_id: "sync-01"
+knowledge_links:
+  schema: "pypto-knowledge-links/1"
+  relations:
+    - kind: uses_contract
+      target:
+        skill: pypto-pro-kernel
+        id: "document:skill/api/crosscore-sync.md#how-to-choose"
+      scope: "按实际 producer/consumer 的核关系、介质、复用和阶段边界选择自动 stage 或手工事件。"
+      boundary: "局部事件不能替代全设备阶段屏障；forward/reverse 配对、ID 预算和跨 block 模式须完整核验，不从历史成本直接替换。"
 bound_hint: "PIPELINE、SCALAR"
 applicability: "循环体内每轮存在跨核生产/消费依赖，当前使用全局屏障，且屏障总成本或全局锁步等待在总耗时中占比高"
 target_api_gate: "仅限 Ascend 950PR 或 950DT；依赖 set_cross_core/wait_cross_core 与 CrossCoreSyncMode.INTRA_BLOCK，须核验事件 ID 与屏障占用 ID 不冲突"

@@ -5,6 +5,15 @@ description: "相邻行在 GM 上规则排布且同生命周期时，把逐行 [
 status: "stable"
 tags: ["pypto-pro", "mem", "batch", "copy"]
 item_id: "mem-02"
+knowledge_links:
+  schema: "pypto-knowledge-links/1"
+  relations:
+    - kind: overlaps_with
+      target:
+        skill: pypto-pro-kernel
+        id: "document:skill/patterns/vf-row-reduce.md#batch-independent-rows-even-when-each-row-fits"
+      scope: "相邻独立行用一次二维 UB 搬运与 VF 行循环摊薄 descriptor 和同步成本。"
+      boundary: "批大小由全部 live tiles 与槽位预算决定；行物理连续、相同生命周期和尾批有效行数不能只由逻辑 shape 推断。"
 bound_hint: "MTE2、MTE3"
 applicability: "循环中反复按单行或单个小张量搬入/写出，相邻行在 GM 连续排布且下游同阶段消费，UB 预算可容纳多行 Tile"
 target_api_gate: "仅限 Ascend 950PR 或 950DT；依赖 pl.load/pl.store 的二维 Tile 整块搬运与 make_tile_group 轮转"

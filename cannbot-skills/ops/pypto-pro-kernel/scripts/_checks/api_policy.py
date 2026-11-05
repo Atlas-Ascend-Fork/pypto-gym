@@ -132,7 +132,13 @@ def surface(pypto_root: Path) -> Surface:
     )
 
 
-def inspect(path: Path, *, pypto_root: Path = PYPTO_ROOT):
+def inspect(
+    path: Path,
+    *,
+    pypto_root: Path = PYPTO_ROOT,
+    observed_calls=None,
+    resolved_calls=None,
+):
     source = read(path)
     catalog = surface(Path(pypto_root))
     findings = []
@@ -212,6 +218,15 @@ def inspect(path: Path, *, pypto_root: Path = PYPTO_ROOT):
 
         def visit_Call(self, node):
             name = resolve(node.func)
+            if resolved_calls is not None and name and name.startswith(PL_MODULE + "."):
+                resolved_calls.append((node, name))
+            if observed_calls is not None and name and name.startswith(PL_MODULE + "."):
+                symbol = (
+                    "vf." + name[len(VF_PREFIX) :]
+                    if name.startswith(VF_PREFIX)
+                    else "pl." + name[len(PL_MODULE) + 1 :]
+                )
+                observed_calls.append({"symbol": symbol, "line": node.lineno})
             if (
                 name
                 and name.startswith(VF_PREFIX)

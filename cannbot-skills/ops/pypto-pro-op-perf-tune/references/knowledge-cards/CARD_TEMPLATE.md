@@ -75,3 +75,19 @@ target_api_gate: "<所需设备、公开 API 及已知限制>"
 附有帮助的 API 文档、代码路径或实验资料。
 没有资料时删除本节；需要逐项归因时按 PROFILE 的 sources 与脚注写法填写。
 ```
+
+## 可选的 kernel 知识关联
+
+与 kernel skill 的现有契约或文档有关联时，按 [接入协议](KERNEL_INTEGRATION.md)向卡片 frontmatter 添加 `knowledge_links`。先核对真实目标，再选择关系；不相关的卡片省略整个字段。下例表达技术契约引用，实际 `scope`、`boundary` 必须按本卡填写。
+
+```yaml
+knowledge_links:
+  schema: "pypto-knowledge-links/1"
+  relations:
+    - kind: uses_contract
+      target:
+        skill: pypto-pro-kernel
+        id: "contract:ub-l1"
+      scope: "本卡改法需要核对的 UB→L1 物理表示、有效范围和消费同步。"
+      boundary: "关联不证明本卡的实际布局和工具链已经验证，也不把整个目标章节视为同一优化。"
+```

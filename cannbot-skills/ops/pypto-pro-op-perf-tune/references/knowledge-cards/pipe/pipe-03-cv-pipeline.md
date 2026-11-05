@@ -5,6 +5,15 @@ description: "把 Cube 和 Vector 中彼此独立的工作错开执行，让下�
 status: "stable"
 tags: ["pypto-pro", "pipe", "mixed", "preload", "synchronization"]
 item_id: "pipe-03"
+knowledge_links:
+  schema: "pypto-knowledge-links/1"
+  relations:
+    - kind: overlaps_with
+      target:
+        skill: pypto-pro-kernel
+        id: "document:skill/api/crosscore-sync.md#preload-scheduling-and-slot-lifetime"
+      scope: "C/V 交错需要独立工作、跨阶段 slot 生命周期和完整的填充/稳态/排空。"
+      boundary: "手工事件序列不等同于自动 stage transform；必须按选定层次验证前向/反向事件、物理槽位与所有边界迭代。"
 bound_hint: "PIPELINE"
 applicability: "同一个 kernel 同时有 Cube 和 Vector 工作，流水图显示两者整段串行，并且相邻轮次之间存在可证明的独立工作。"
 target_api_gate: "需要当前版本支持 Cube/Vector 分区、TileGroup 的 next()、独立 buffer 和跨核事件；具体 API、地址、mutex 和事件语义必须在目标版本复核。"

@@ -128,7 +128,13 @@ custom/softmax/
 
 当前入口使用 [pypto-pro-kernel](../../ops/pypto-pro-kernel/SKILL.md) 完成原生实现、验证、调试、计时、优化和交付。协作角色与派工方式见[协作说明](references/multi-agent-workflow.md)。
 
+可从 skill 根目录运行 `python scripts/check.py query 'UB to L1'` 定向查阅契约、官方资料和样例；`query --validate` 检查知识准入。CLI 和可选的 [MCP stdio 接口](../../ops/pypto-pro-kernel/references/tooling/mcp.md)共享查询、检查与执行反馈。MCP 需按说明单独配置，插件安装器只复制资源，不安装 SDK 或修改运行环境。
+
+### 参考资料与可选工具
+
 可按当前问题查阅[性能原则](references/kernel-core-principles.md)、[A5 实践](references/kernel-perf-pypto-pro-a5.md)和[实现约束](references/performance-constraints.md)。
+
+源码检查与原生验证从核心 skill 的[检查工具](../../ops/pypto-pro-kernel/references/tooling/checks.md)进入；按当前问题选择检查，验收沿用任务给定的接口、数值判据和执行入口。
 
 ## 四、常见问题
 
@@ -146,6 +152,8 @@ bash init.sh --help
 ### Q: 如何更新？
 
 更新仓库后，从插件目录按原参数重跑初始化，仍指定同一项目目录。需要替换的受管文件会备份到配置目录的 `.pypto-pro-op-orchestrator-backups/`。用户文件和其他插件保留；受管文件被修改或同名文件冲突时，先报错，不覆盖。
+
+旧模式工作目录需另建目录初始化，不自动迁移旧配置。
 
 ### Q: PyPTO 和 PyPTO-Pro 如何选择？
 

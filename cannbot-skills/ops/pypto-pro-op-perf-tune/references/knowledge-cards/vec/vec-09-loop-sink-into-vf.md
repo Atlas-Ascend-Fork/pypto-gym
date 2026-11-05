@@ -5,6 +5,15 @@ description: "把 kernel 中逐行调用 VF 的循环下沉到单个 vector_func
 status: "stable"
 tags: ["pypto-pro", "vec", "scalar", "loop"]
 item_id: "vec-09"
+knowledge_links:
+  schema: "pypto-knowledge-links/1"
+  relations:
+    - kind: overlaps_with
+      target:
+        skill: pypto-pro-kernel
+        id: "document:skill/patterns/vf-row-reduce.md#batch-independent-rows-even-when-each-row-fits"
+      scope: "将逐行调用 VF 的组织改为一次 VF 调用内处理多行，摊薄调用及跨行不变的 setup 开销。"
+      boundary: "本卡聚焦循环下沉与 setup 复用；目标章节还包含 DMA 行批量、metadata 和 worker 分配。仅下沉循环不等于完成整个批处理方案，逐行状态及 mask 仍需正确维护。"
 bound_hint: "VEC、SCALAR"
 applicability: "kernel 按行重复调用同一 VF，行间无依赖，setup 跨行不变且合并后的寄存器与 Tile 生命周期可容纳"
 target_api_gate: "仅限 Ascend 950PR 或 950DT；确认 vector_function 内动态 pl.range、offset 与逐行 mask 语义后采用"

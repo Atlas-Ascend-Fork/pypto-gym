@@ -79,10 +79,7 @@ Report only when all of these hold:
 layer into a helper in the same file (such as `def _tile(shape, addr)`).
 4. The function body **does not** contain `pl.system.bar_all()`.
 
-Item 3 separates this rule from `auto-mutex-needs-tile-group`: that rule detects “`auto_mutex` is declared but a bare
-tile is used”; this one detects “`init_output` is used without a UB-side token.” **The same kernel can trigger both**,
-because they describe different conditions and have different fixes (the former needs mutex IDs; this one needs a drain
-or group).
+Item 3 separates this rule from `auto-mutex-needs-tile-group`: that rule requires a source-proved cross-pipe handover on a bare Tile, while this one detects `init_output` without a UB-side token. Their conditions and fixes are distinct; a bare declaration alone does not establish the former defect.
 
 ## Scope Limits
 

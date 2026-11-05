@@ -5,6 +5,21 @@ description: "把逐 K 块交替累加两个 N 子块的写法改成 N 外 / K �
 status: "stable"
 tags: ["pypto-pro", "cube", "matmul", "loop-restructure", "n-split", "l1-resident", "phase"]
 item_id: "cube-10"
+knowledge_links:
+  schema: "pypto-knowledge-links/1"
+  relations:
+    - kind: overlaps_with
+      target:
+        skill: pypto-pro-kernel
+        id: "document:skill/api/gemm.md#from-capacity-planning-to-performance-candidates"
+      scope: "比较 N 外/K 内与交替 N 子块的重复搬运、发射开销和 L1 小侧驻留。"
+      boundary: "本卡只保留已核验的循环结构机制，不把早搬出的历史设想当成当前重叠收益；MTE2-bound 场景需保留原对照。"
+    - kind: uses_contract
+      target:
+        skill: pypto-pro-kernel
+        id: "document:skill/patterns/gemm-desugar.md#the-only-stated-reasons-to-hand-write-closed-list-source-verified"
+      scope: "手写 K 累加和直接排水重排后，仍须核验 phase 与 Acc 生命周期。"
+      boundary: "两组 Acc 的地址与初始化独立；该引用不把 unit_flag 或早搬出收益自动传播到重构后的路径。"
 bound_hint: "MAC、SCALAR、MTE1"
 applicability: "cube-only matmul，K 循环逐块交替累加两个 N 子块（每轮 2 个 MMAD、写两个不同 L0C 地址的 Acc）；profiler 显示 cube-bound（MAC 占用高、MTE2 占用低）；小侧操作数（如权重 B）可常驻 L1 复用（cube-04 Fullload 形态）"
 target_api_gate: "仅限 Ascend 950PR 或 950DT；依赖 phase= 直排 store 与 pl.move 的 offset 切片（cube-04）；MTE2-bound / 操作数流式载入时该重构为负收益"

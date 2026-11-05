@@ -5,6 +5,15 @@ description: "确认某块数据后续不会被当前核或后续 wave 再读时
 status: "stable"
 tags: ["pypto-pro", "mem", "cache", "capability-gated"]
 item_id: "mem-03"
+knowledge_links:
+  schema: "pypto-knowledge-links/1"
+  relations:
+    - kind: uses_contract
+      target:
+        skill: pypto-pro-kernel
+        id: "document:skill/api/datamove.md#7-move_sync--mutex_dcci-two-synchronization-mechanisms"
+      scope: "讨论一次性读取的 cache 策略前先区分 system.dcci 缓存维护与同步接口。"
+      boundary: "此引用不提供 L2 hint/bypass 能力；目标版本没有公开 bypass API 时仅保留能力缺口，不生成替代 kernel 改法。"
 bound_hint: "MTE2、L2Cache"
 applicability: "大权重/scale/输入块只被完整消费一次且可由 shape/schedule 谓词证明无后续复用，热数据 L2 命中被流式读挤压"
 target_api_gate: "能力门控：PyPTO-Pro 当前版本无 L2 cache hint/bypass 公开 API；`pl.system.dcci` 仅做缓存清理失效，不构成 bypass"

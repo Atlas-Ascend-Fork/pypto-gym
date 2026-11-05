@@ -5,6 +5,21 @@ description: "把逐行取标量、计算和写回改为寄存器广播与批量
 status: "stable"
 tags: ["pypto-pro", "vec", "scalar", "broadcast"]
 item_id: "vec-04"
+knowledge_links:
+  schema: "pypto-knowledge-links/1"
+  relations:
+    - kind: uses_contract
+      target:
+        skill: pypto-pro-kernel
+        id: "contract:vf-reduction-result"
+      scope: "同 VF 中用归约 lane0 的寄存器广播替代 getval/setval 标量往返。"
+      boundary: "单值结果、逐 lane 广播和跨阶段持久化是不同路径；本关联不证明八值 BLK 广播或 packed 多行布局。"
+    - kind: overlaps_with
+      target:
+        skill: pypto-pro-kernel
+        id: "document:skill/patterns/vf-outer-reduce.md#metadata-and-invariant-inputs"
+      scope: "跨阶段需保留的逐行统计量可按批量 UB metadata 与 BRC_B32 消费。"
+      boundary: "BRC_B32 只广播一个 B32 元素，不是八值 BLK；物理对齐、真实尾行和原统计量合同仍由调用方保证。"
 bound_hint: "VEC、SCALAR"
 applicability: "每行归约后存在标量往返或不必要的 Tile store→load；消费者可用同 VF full、跨阶段单 B32 广播，或已通过八哨兵 value ST 的 BLK 路径"
 target_api_gate: "仅限 Ascend 950PR 或 950DT；Vf.full 与 BRC_B32 可作保守路径，BLK 和 stride-zero 多行布局须另证"

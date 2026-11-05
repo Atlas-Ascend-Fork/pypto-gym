@@ -5,6 +5,21 @@ description: "当量化/归约类中间结果的内部计算布局（如按有�
 status: "stable"
 tags: ["pypto-pro", "vec", "layout", "quantization", "memory"]
 item_id: "vec-16"
+knowledge_links:
+  schema: "pypto-knowledge-links/1"
+  relations:
+    - kind: uses_contract
+      target:
+        skill: pypto-pro-kernel
+        id: "contract:gm-plane-offsets"
+      scope: "让 epilogue 按消费者最终 GM 轴映射写出前，明确 Tensor 轴、Tile 轴和 store order。"
+      boundary: "轴映射契约不保证任意 pad/gap 布局都能一步表达；本卡 N1 对齐限制、补零与写入完整性仍须保持。"
+    - kind: uses_contract
+      target:
+        skill: pypto-pro-kernel
+        id: "document:skill/api/datamove.md#fixed-and-dynamic-valid-regions"
+      scope: "删除独立 repack pass 时逐项恢复其原有 valid region、padding 与输出边界责任。"
+      boundary: "物理容量不能冒充有效元素；目标布局中有 gap 时，直接写出不自动初始化未写区域。"
 bound_hint: "MTE3"
 applicability: "存在一个量化/归约类中间结果（如逐块 scale/统计量），其计算天然产出的内部紧凑布局与下游 GM 契约要求的 pad/分组布局不同，且当前实现为此专设了一个逐行或逐元素的二次重排步骤（把内部布局搬到中转缓冲、再搬到目标布局）；该重排步骤的输出布局若可以直接由上一步计算按目标 stride/order 产出，则该整段重排可省略"
 target_api_gate: "Ascend 950PR 实测；依赖已核验的 `pl.store`/`pl.load` 的 `order` 参数（完成逻辑轴到物理布局的跨轴映射，含 pad/跳步）；能否把某个具体计算的输出直接摆到目标 stride 由该计算本身的向量化实现决定，不是通用保证，需逐个验证"

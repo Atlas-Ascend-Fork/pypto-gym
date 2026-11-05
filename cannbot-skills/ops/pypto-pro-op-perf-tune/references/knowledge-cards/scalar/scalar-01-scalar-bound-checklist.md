@@ -5,6 +5,15 @@ description: "标量准备挡住计算时，按清单减冗余标量、展开小
 status: "stable"
 tags: ["pypto-pro", "scalar", "checklist"]
 item_id: "scalar-01"
+knowledge_links:
+  schema: "pypto-knowledge-links/1"
+  relations:
+    - kind: overlaps_with
+      target:
+        skill: pypto-pro-kernel
+        id: "document:skill/patterns/vf-outer-reduce.md#metadata-and-invariant-inputs"
+      scope: "从热循环中提取真正不变的 metadata、输入与地址准备，减少标量前缀。"
+      boundary: "改写坐标循环、展开或分核不是同一个优化；不变性、覆盖、host/kernel 同源及负载变化分别验证。"
 bound_hint: "SCALAR"
 applicability: "scalar 泳道忙而 VECTOR 空闲、总计算量极小或 shape 很小，循环内存在可外提的冗余标量计算（div/mod、重复 offset 推导）"
 target_api_gate: "仅限 Ascend 950PR 或 950DT；依赖 pl.range 循环标量表达式与 tile 基础算术"

@@ -5,6 +5,15 @@ description: "把 VF 输入布局翻转为列=query 后，沿 key 轴的归约�
 status: "stable"
 tags: ["pypto-pro", "vec", "layout", "reduction", "softmax"]
 item_id: "vec-15"
+knowledge_links:
+  schema: "pypto-knowledge-links/1"
+  relations:
+    - kind: overlaps_with
+      target:
+        skill: pypto-pro-kernel
+        id: "document:skill/patterns/vf-outer-reduce.md#output-ownership-before-blocking"
+      scope: "改变生产布局后，让每条 lane 保留一个输出并沿外轴累加，减少横向归约与标量 pack。"
+      boundary: "通用外轴所有权不证明 QK/PV 翻布局、DualModeSplitN 或多输出游标正确；这些变换需完整端到端验证。"
 bound_hint: "VEC"
 applicability: "VF 热点沿某一轴做归约（在线 softmax 的行 max / 行和、注意力分数统计等），分数矩阵布局可翻转为列=query（cube 侧把 Q·Kᵀ 改写为 K·Q̃ 类形式，acc 搬运按 N 维拆分），使每条 64-lane load 恰好覆盖一个归约行 × 64 个查询；归约结果无跨行交叉消费，翻布局后的寄存器与 Tile live set 可被容量容纳"
 target_api_gate: "仅限 Ascend 950PR 或 950DT；依赖已核验的 vf.load_align/vf.store_align、vf.max/muls/add 树、vf.reduce_max/reduce_sum 与 pl.AccToVecMode.DualModeSplitN；旧写法所用 vf.store_unalign/unalign_reg_for_store tracker 语义须按当前版本复核"

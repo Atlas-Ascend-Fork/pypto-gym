@@ -5,6 +5,15 @@ description: "当 per-iteration 计算的取数范围或表达式可证明对所
 status: "stable"
 tags: ["pypto-pro", "vec", "reduction", "cse"]
 item_id: "vec-18"
+knowledge_links:
+  schema: "pypto-knowledge-links/1"
+  relations:
+    - kind: overlaps_with
+      target:
+        skill: pypto-pro-kernel
+        id: "document:skill/patterns/vf-outer-reduce.md#metadata-and-invariant-inputs"
+      scope: "先证明复用范围内的输入与表达式不变，再选择共享计算或共享加载，避免逐迭代重复工作。"
+      boundary: "参考主要讨论不变输入复用，本卡进一步共享恒等计算结果；范围恒等判据、相同累加顺序与互斥分派须另证，不能混报收益。"
 bound_hint: "VEC"
 applicability: "per-iteration（逐行/逐项）循环重算某个归约/累计值，且其取数范围或表达式可证明对所有迭代恒等（范围端点按索引计算、经钳位后与索引无关，或表达式经代数化简后不含迭代变量）；共享累加寄存器可跨求和/输出两段循环存活而不引发 spill"
 target_api_gate: "仅限 Ascend 950PR 或 950DT；嵌套 pl.range（组→求和 / 组→输出）与累加寄存器跨循环存活已在 950PR 交付算子的裁剪窗口归约实例核验；恒等判据须 host 侧证明并经 TilingKey 分派保证"

@@ -15,6 +15,7 @@ Run: ``python test_engram_gate.py``
 
 import logging
 import os
+from pathlib import Path
 import sys
 
 import pytest
@@ -24,13 +25,14 @@ import torch
 _THIS_DIR = os.path.dirname(os.path.abspath(__file__))
 _OP_DIR = os.path.dirname(_THIS_DIR)
 for _path in (_THIS_DIR, os.path.join(_THIS_DIR, "assets"),
-              os.path.join(_OP_DIR, "op_kernel")):
+              os.path.join(_OP_DIR, "op_kernel"),
+              str(Path(__file__).resolve().parents[5] / "tests/common")):
     if _path not in sys.path:
         sys.path.insert(0, _path)
 
 import engram_gate_golden_cpu  # noqa: E402
-from engram_gate import engram_gate_wrapper  # noqa: E402
 from engram_gate_precision import check_precision  # noqa: E402
+from op_caller import get_op_caller  # noqa: E402
 
 logging.basicConfig(level=logging.INFO, format="%(message)s")
 _LOG = logging.getLogger(__name__)
@@ -48,17 +50,32 @@ _CASES = {
 
 def _run_case(name):
     """Run one case on the NPU through the public wrapper and check its precision."""
+    import torch_npu  # noqa: F401
+
+    engram_gate_wrapper = get_op_caller("engram_gate", jit_attr="engram_gate_wrapper")
     t, hc, dim, seed, mask_kind = _CASES[name]
-    torch.npu.set_device(int(os.environ.get("TILE_FWK_DEVICE_ID", 0)))
+    torch_npu.npu.set_device(int(os.environ.get("TILE_FWK_DEVICE_ID", 0)))
     cpu_inputs = engram_gate_golden_cpu.make_inputs(
         {"t": t, "hc": hc, "dim": dim, "seed": seed, "mask_kind": mask_kind})
     expected = engram_gate_golden_cpu.reference(cpu_inputs)
     actual = engram_gate_wrapper(*[item.to("npu") for item in cpu_inputs])
     torch.npu.synchronize()
-    passed, summary = check_precision(actual.cpu(), expected)
+    actual = actual.cpu()
+    assert actual.shape == expected.shape and actual.dtype == expected.dtype
+    assert torch.isfinite(actual).all()
+    assert torch.equal(actual[cpu_inputs[-1]].view(torch.int16),
+                       cpu_inputs[0][cpu_inputs[-1]].view(torch.int16))
+    passed, summary = check_precision(actual, expected)
     _LOG.info("[%s] status=%s :: %s", name, "PASS" if passed else "FAIL", summary)
     if not passed:
         raise AssertionError(f"{name} precision failed: {summary}")
+
+
+@pytest.mark.soc("950")
+def test_comparator_rejects_corruption():
+    expected = torch.ones((2, 4, 64), dtype=torch.bfloat16)
+    assert check_precision(expected, expected)[0]
+    assert not check_precision(expected + 1, expected)[0]
 
 
 @pytest.mark.soc("950")
@@ -87,6 +104,7 @@ def test_compile_default_shape():
 
 
 def main():
+    test_comparator_rejects_corruption()
     test_partial_image_mask()
     test_model_token_count_nomask()
     test_chunked_one_chunk_tail_one()

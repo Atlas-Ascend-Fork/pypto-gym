@@ -5,6 +5,15 @@ description: "超越函数主导时先删除重复调用或使用公开融合接
 status: "stable"
 tags: ["pypto-pro", "vec", "transcendental", "capability-gate"]
 item_id: "vec-11"
+knowledge_links:
+  schema: "pypto-knowledge-links/1"
+  relations:
+    - kind: uses_contract
+      target:
+        skill: pypto-pro-kernel
+        id: "document:skill/api/vf.md#23-precision-reaches-ir-but-results-are-bitwise-identical"
+      scope: "选择超越函数近似或 precision 候选前，核对参数是否改变当前后端的实际行为。"
+      boundary: "IR 中存在 precision 不等于性能或数值发生变化；本关联不宣称存在 LUT、expandLevel 或未公开的 Python 参数。"
 bound_hint: "VEC"
 applicability: "超越函数主导热点，且存在以下机会之一：重复调用复用、公开融合接口或有当前 API、编译产物和精度证据的 LUT/近似方案"
 target_api_gate: "仅限 Ascend 950PR 或 950DT；采用目标版本支持的公开超越函数或融合接口，所需 precision/LUT 能力未明确支持时记录 capability gap"

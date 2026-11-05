@@ -9,7 +9,7 @@
 
 ## 📢 项目概述
 
-**CANNBot Skills — PyPTO-Gym** 是面向 PyPTO 与 PyPTO-Pro Tile 算子开发、大模型适配和模型治理的 CANNBot Agent Skills 模块，提供 37 个领域技能、1 个公共技能与 4 个开发路径插件。
+**CANNBot Skills — PyPTO-Gym** 是面向 PyPTO 与 PyPTO-Pro Tile 算子开发、大模型适配和模型治理的 CANNBot Agent Skills 模块，提供 32 个领域技能、1 个公共技能与 4 个开发路径插件。
 
 **面向用户**：基于 PyPTO 编程框架的昇腾 NPU 算子开发者、模型适配工程师。
 
@@ -43,9 +43,9 @@ cd /path/to/pypto-gym-toolkit/cannbot-skills/ops/pypto-pro-kernel
 python scripts/check.py
 ```
 
-需要核对 PyPTO API 时，用 `PYPTO_SRC` 或 `--pypto-root` 指定匹配目标安装版本的外部源码树。上板样例需要对应的 PyPTO、PyTorch、torch_npu 和 Ascend NPU 环境；该 skill 不包含仿真器。
+完整知识准入和 API 核对需要用 `PYPTO_SRC` 或 `--pypto-root` 指定匹配目标安装版本的外部源码树；缺少该来源时保留 `unverified`，不将 API 缺失当作事实。`rules`、`coverage`、`catalog` 和 `links` 可独立使用，源码相关检查仍会说明未核对的范围。上板样例需要对应的 PyPTO、PyTorch、torch_npu 和 Ascend NPU 环境；该 skill 不包含仿真器。
 
-`scripts/check.py links` 检查内置 Markdown 链接与标题引用，`explain` 分析候选源码的契约和工作量变化。可选的词法名称检查依赖 `scripts/requirements-checks.txt` 中固定版本的 Pyflakes。样例统一以 `kernel.py`、`reference.py`、`test.py` 为公开入口；Sparse Attention 的原始评估器对照额外需要 `CANN_BENCH_ROOT` 和可导入的 `kernel_eval`。
+`scripts/check.py query` 统一检索契约、API、原始文档和完整样例，`query --validate` 检查知识准入，`links` 检查内置 Markdown 链接与标题引用。`native` 通过匹配安装版本的 PyPTO 进行元数据预检，`run` 执行调用方指定的验证命令，`suggest` 与 `experiment` 辅助优化候选和当前实验状态；这些结果不替代数值或性能验收。CLI 无需 MCP SDK；可选的 [MCP stdio 接口](ops/pypto-pro-kernel/references/tooling/mcp.md)复用同一实现。词法名称检查依赖 `scripts/requirements-checks.txt` 中固定版本的 Pyflakes。样例统一以 `kernel.py`、`reference.py`、`test.py` 为公开入口；Sparse Attention 的原始评估器对照额外需要 `CANN_BENCH_ROOT` 和可导入的 `kernel_eval`。
 
 ### 安装后使用
 
@@ -67,7 +67,7 @@ python scripts/check.py
 
 ### 技能清单
 
-**算子开发**（ops/，共 34 个顶层技能）
+**算子开发**（ops/，共 29 个顶层技能）
 
 | 类别 | 技能 | 说明 |
 |------|------|------|
@@ -83,8 +83,8 @@ python scripts/check.py
 | 监控与调试 | `pypto-op-monitor`、`pypto-general-debug` | 任务进度监控与通用问题诊断 |
 | 断裂点分析 | `pypto-benchmark-fracture-aggregator`、`pypto-fracture-point-detector` | Session 断裂点批量聚合、检测、复现取证与 Issue 文档产出 |
 | 报告与可视化 | `pypto-session-dfx-report` | Session DFX 报告（端到端耗时、token 消耗、执行轨迹） |
-| **Pro 专属** | `pypto-pro-intent-understand`、`pypto-pro-material-explore`、`pypto-pro-op-plan`、`pypto-pro-op-design`、`pypto-pro-op-develop`、`pypto-pro-op-perf-tune`、`pypto-pro-golden-generate`、`pypto-pro-environment-check`、`pypto-pro-precision-debug`、`pypto-pro-cann-delivery`、`pypto-pro-docs-search` | PyPTO-Pro 开发、精度诊断、CANN 交付与文档检索 |
-| **Pro 独立技能（实验）** | [pypto-pro-kernel](ops/pypto-pro-kernel/SKILL.md) | 原生 kernel 开发、验证、调试与优化，内含参考资料、检查工具和样例 |
+| **Pro 专属** | `pypto-pro-op-perf-tune`、`pypto-pro-golden-generate`、`pypto-pro-environment-check`、`pypto-pro-precision-debug`、`pypto-pro-cann-delivery`、`pypto-pro-docs-search` | PyPTO-Pro 开发、精度诊断、CANN 交付与文档检索 |
+| **Pro 核心技能** | [pypto-pro-kernel](ops/pypto-pro-kernel/SKILL.md) | 原生 kernel 开发、验证、调试与优化，内含参考资料、检查工具和样例 |
 
 **模型适配**（model/，共 3 个）
 

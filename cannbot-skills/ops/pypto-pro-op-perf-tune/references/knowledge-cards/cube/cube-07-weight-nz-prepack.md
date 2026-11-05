@@ -5,6 +5,15 @@ description: "权重固定的推理场景下，把权重在离线阶段打包为
 status: "stable"
 tags: ["pypto-pro", "cube", "matmul", "nz", "layout", "mte2"]
 item_id: "cube-07"
+knowledge_links:
+  schema: "pypto-knowledge-links/1"
+  relations:
+    - kind: uses_contract
+      target:
+        skill: pypto-pro-kernel
+        id: "document:skill/api/datamove.md#13-tile_view-three-shape-layers-and-a-shared-cursor"
+      scope: "离线 NZ 打包后分别核对逻辑形状、物理容量和布局视图，GM 声明仅解释已存在的物理数据。"
+      boundary: "视图契约不完成 ND→NZ 打包，不证明 NZ 转置可用，也不替代调用方接口变更、padding 清零和打包 value test。"
 bound_hint: "MTE2"
 applicability: "推理场景权重固定、可离线预处理；matmul 为 MTE2 bound 且权重搬运占比高；原始内轴不对齐时随路转换代价更高、收益更明显"
 target_api_gate: "仅限 Ascend 950PR 或 950DT；GM Tensor 仅支持 ND/NZ 两种声明，NZ 要求调用方已按 NZ 物理排布 packing 且按对齐后容量分配；NZ 搬运不支持降序 order 转置"

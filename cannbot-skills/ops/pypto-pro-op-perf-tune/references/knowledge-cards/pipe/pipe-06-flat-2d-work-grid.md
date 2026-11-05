@@ -5,6 +5,15 @@ description: "存在大量独立工作项但当前仅按串行维度映射、只
 status: "stable"
 tags: ["pypto-pro", "pipeline", "scheduling"]
 item_id: "pipe-06"
+knowledge_links:
+  schema: "pypto-knowledge-links/1"
+  relations:
+    - kind: overlaps_with
+      target:
+        skill: pypto-pro-kernel
+        id: "document:skill/api/gemm.md#count-the-complete-output-grid-before-assigning-workers"
+      scope: "把所有独立输出轴展成完整线性任务网格，按实际 block 数分配并恢复坐标。"
+      boundary: "递推或有依赖轴必须留在 owner 内；任务尾守卫、改变的访问局部性与最忙 worker 路径须另证。"
 bound_hint: "PIPELINE、SCALAR"
 applicability: "算子由大量相互独立的工作项构成，当前映射只占用部分 AI Core，逐核泳道存在大段空窗"
 target_api_gate: "仅限 Ascend 950PR 或 950DT；依赖 pl.get_block_idx/pl.get_block_num 与多维 GM 张量的组维寻址"

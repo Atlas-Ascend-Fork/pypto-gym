@@ -20,6 +20,8 @@ test.py 另外覆盖端点、常数分数和接近抵消的载荷。
 程数来自完整调用测量，其他输入分布或硬件需重新测量。
 验证环境：PyPTO 导出行为基线872df763f，CANN 9.2.0、BiSheng 15.0.5、Ascend950PR，torch/torch_npu 2.10.0；当前验收仍需绑定源码哈希和实际工具链。test.py 的
 FP64 数学参考不采用实现的固定参考或分块归约顺序。
+
+example-query: {"aliases":["CSR sparse softmax aggregation","CSR稀疏softmax加权聚合"],"term_groups":[["csr","压缩稀疏行"],["softmax"],["aggregate","aggregation","weighted sum","加权聚合","聚合"]],"facets":{"source_dtype":["FP32"],"destination_dtype":["FP32"]},"exclude":[{"term_groups":[["backward","gradient","反向","梯度"]],"reason":"This program implements forward segmented softmax-weighted aggregation only."}]}
 """
 
 from functools import lru_cache

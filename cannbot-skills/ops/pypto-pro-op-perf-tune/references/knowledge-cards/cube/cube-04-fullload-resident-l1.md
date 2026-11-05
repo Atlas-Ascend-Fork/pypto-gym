@@ -5,6 +5,15 @@ description: "一侧矩阵小且对侧循环次数 ≥2 时，把小侧（含随
 status: "stable"
 tags: ["pypto-pro", "cube", "matmul", "fullload", "l1-resident"]
 item_id: "cube-04"
+knowledge_links:
+  schema: "pypto-knowledge-links/1"
+  relations:
+    - kind: overlaps_with
+      target:
+        skill: pypto-pro-kernel
+        id: "document:skill/api/gemm.md#from-capacity-planning-to-performance-candidates"
+      scope: "把小侧跨循环不变操作数常驻 L1，减少重复 GM 读，并联合选择对侧轮转与 L0 分块。"
+      boundary: "容量可容纳不等于当前瓶颈受益；驻留区、scale 偏移、L2 命中及对侧槽位须分别核算。"
 bound_hint: "MTE2"
 applicability: "matmul 一侧矩阵字节数 ≤ 可用 L1 预算（预留对侧流式与轮转空间），对侧循环次数 ≥2，且当前为 MTE2 bound"
 target_api_gate: "仅限 Ascend 950PR 或 950DT；依赖 pl.load 单次大搬运与 pl.move 的 offset 切片语义（源 tile 大于目的 tile 时按元素偏移读）"

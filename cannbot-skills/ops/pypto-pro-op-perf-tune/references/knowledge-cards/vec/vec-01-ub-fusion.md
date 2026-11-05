@@ -5,6 +5,15 @@ description: "相邻 Vector 操作在同一 Vec Tile 与同一 VF 中接力，�
 status: "stable"
 tags: ["pypto-pro", "vec", "memory", "fusion"]
 item_id: "vec-01"
+knowledge_links:
+  schema: "pypto-knowledge-links/1"
+  relations:
+    - kind: overlaps_with
+      target:
+        skill: pypto-pro-kernel
+        id: "document:skill/patterns/vf-row-reduce.md#choose-where-dependent-phases-share-state"
+      scope: "相邻 Vector 阶段在同一 JIT kernel 内共享寄存器或 UB 状态，比较删除中间 GM 往返与额外 launch。"
+      boundary: "仅覆盖同一 owner 可容纳全部 live set 的融合；外部消费者、跨 worker 依赖和收益仍须分别核验。"
 bound_hint: "VEC、MTE2、MTE3"
 applicability: "相邻 Vector 链的中间结果无外部消费者，生成物仍有中间 GM 回写再读入，且 Vec 容量可容纳融合 live set"
 target_api_gate: "仅限已核验 VF、TileGroup 与 auto_mutex 的 Ascend 950PR 或 950DT 工具链；其它 SoC 重新查表并验证"

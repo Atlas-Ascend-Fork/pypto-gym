@@ -5,6 +5,21 @@ description: "循环或递推的状态与跨迭代中间量按迭代写回 GM �
 status: "stable"
 tags: ["pypto-pro", "memory", "resident"]
 item_id: "mem-06"
+knowledge_links:
+  schema: "pypto-knowledge-links/1"
+  relations:
+    - kind: overlaps_with
+      target:
+        skill: pypto-pro-kernel
+        id: "document:skill/patterns/vf-row-reduce.md#choose-where-dependent-phases-share-state"
+      scope: "同 owner 的循环/递推状态按完整序列常驻 UB，避免逐迭代 GM 写回再读取。"
+      boundary: "状态跨 VF 调用须显式 Tile 保存；gated outer-state 只是所声明范围内的正确性锚点，不继承当前性能结论。"
+    - kind: uses_contract
+      target:
+        skill: pypto-pro-kernel
+        id: "document:skill/api/memory-allocation.md#aliasing-and-mutual-exclusion"
+      scope: "常驻状态与轮转输入的物理地址、生命周期及同步所有权分离。"
+      boundary: "跨核生产消费不能单方面取消 GM 依赖；容量、reset 边界与所有消费者结束时间仍须核验。"
 bound_hint: "MTE2、MTE3"
 applicability: "循环/递推的状态或跨迭代中间量按每次迭代写回 GM 再读入；片上容量可容纳常驻 live set 与其邻居的轮转 buffer"
 target_api_gate: "仅限 Ascend 950PR 或 950DT；依赖 make_tile/TileGroup 的常驻地址、auto_mutex 生命周期与跨核同步合同"

@@ -34,7 +34,7 @@ Keep the first failing interface as the active problem: feed it known values and
 
 ## Preflight decisions
 
-Task-supplied contract fields and verified anchor mechanics are already answered. Read an owner only to resolve a named uncertainty. Establish the supported domain and specialization boundaries using [generalization and specialization](#generalization-and-specialization).
+Task-supplied contract fields and verified anchor mechanics are already answered. For unresolved semantics or a requested specification, use [requirements and optional SPEC tools](requirements.md). Read an owner only to resolve a named uncertainty. Establish the supported domain and specialization boundaries using [generalization and specialization](#generalization-and-specialization).
 
 | Decision | What to establish | Owner |
 | --- | --- | --- |
@@ -97,12 +97,14 @@ Build this matrix before profiling, in the existing test rather than a separate 
 
 ## Feature triggers
 
-Read only matching rows. Start with the specific computation; use the general VF or SIMT entry for unresolved launch/API mechanics.
+Read only the category and rows matching the task. These routes select an owner; they are not a mandatory reading sequence. For measured bottlenecks use the [optimization comparisons](optimization.md#choose-the-implementation-experiment), including VF loop form, thin-row arithmetic, indexed transport and bandwidth claims.
+
+### Computation and ownership
 
 | Task feature | First reference | Decision it owns |
 | --- | --- | --- |
-| Cube matmul, including runtime groups or ragged M | [GEMM mapping](../patterns/gemm-desugar.md), then [API contract](../api/gemm.md) as needed | Sugar first, group ownership, supported split/transpose/tail combinations, fusion and justified manual forms |
-| A derived floating operand feeds a lower-precision matrix primitive | [Intermediate precision](../api/numerics.md#preserve-intermediate-precision) | Required rounding boundaries, residual representations, producer error and consumer error budget |
+| Cube matmul, including runtime groups or ragged M | [GEMM mapping](../patterns/gemm-desugar.md), [group ownership](../api/gemm.md#distribute-tiles-across-runtime-groups) and [empty consumers](../diagnostics/validation-traps.md#empty-consumer-loops-need-their-own-reuse-check) | Sugar first; actual work per worker across groups, tails and reuse |
+| A derived floating operand feeds a lower-precision matrix primitive | [Intermediate precision](../api/numerics.md#preserve-intermediate-precision) | Required rounding boundaries, residual representations and consumer error budget |
 | MX / sub-byte matrix formats | [GEMM MX](../api/gemm-mx.md) | Scale-plane shapes, layouts, narrowing and K constraints |
 | Fixpipe riders or on-path quantization | [Fixpipe](../api/fixpipe.md); [known defects](../diagnostics/defects/fixpipe-overview.md) for failures | Dtype/layout combinations and scale/offset representation |
 | Integer contraction followed by a floating epilogue | [Quantized contracts](../api/quantization.md#integer-contraction-followed-by-a-floating-epilogue) | Integer accumulation, bias/scale order, broadcast axes and conversion boundaries |
@@ -111,21 +113,32 @@ Read only matching rows. Start with the specific computation; use the general VF
 | Paired rotations reuse a position-indexed coefficient table | [Paired rotation](../patterns/paired-rotation.md) | Pairing, position/batch maps and contiguous versus repeated-table access |
 | A runtime-sized collection contains separate tensors | [Bounded fixed-arity interface candidate](../api/support.md#16-bounded-tensor-collections-under-a-fixed-arity-interface) | Target ABI, finite slot bounds, safe empty work and whole-list ownership |
 | Local windows or neighborhoods | [Neighborhood coordinates](../patterns/vf-neighborhood.md) | Output/load origins, halo traffic, predicates and block ownership |
-| Backward/indexed operations with different output reductions, or scatter plus a statistic | [Multiple-output ownership](../patterns/multi-output-reductions.md); also [record/lane mapping](../patterns/simt-payload.md) for contiguous payloads | Writers versus reduction participants, conflicts, partials and derivative boundary rules |
-| Conflicting indexed updates with required reproducibility | [Reproducible indexed reductions](../patterns/multi-output-reductions.md#reproducible-indexed-reductions) | Fixed order or exact accumulation, output-owner controls, index construction and contention |
+| Backward/indexed operations with different output reductions, or scatter plus a statistic | [Multiple-output ownership](../patterns/multi-output-reductions.md); [record/lane mapping](../patterns/simt-payload.md) for contiguous payloads | Writers versus reduction participants, conflicts, partials and derivative boundaries |
+| Conflicting indexed updates with required reproducibility | [Reproducible indexed reductions](../patterns/multi-output-reductions.md#reproducible-indexed-reductions) | Fixed order or exact accumulation, output-owner controls and contention |
 | Row reduction or normalization | [VF row reduction](../patterns/vf-row-reduce.md) | Reduction masks, row organization and dependent broadcasts |
 | Outer-axis reduction or streaming statistics/histograms | [VF outer reduction](../patterns/vf-outer-reduce.md) | DMA versus register blocks, safe accumulation extent and state lifetime |
-| Attention, normalized weighted aggregation or normalization consumed by a contraction, including backward | [Normalized contractions](../patterns/normalized-contractions.md); [reverse passes](../patterns/normalized-contractions.md#stream-reverse-contractions-with-bounded-state); [online softmax](../patterns/online-softmax.md) for streamed state | Shared row state, independent gradient owners, bounded tile residency, phase interfaces, precision and validity |
-| Lane exchanges, scans or tagged reductions | [Coupled state](../api/vf.md#grouped-state-and-boundaries-in-lane-exchange) | One participation rule for values and tags; register wrap versus logical validity |
+| Attention, normalized weighted aggregation or normalization consumed by a contraction | [Normalized contractions](../patterns/normalized-contractions.md#select-a-correctness-anchor); [native paradigm per phase](../patterns/normalized-contractions.md#choose-a-native-paradigm-per-phase); [bounded reverse passes](../patterns/normalized-contractions.md#stream-reverse-contractions-with-bounded-state) | A compatible anchor, regular VF/Cube work before scalar tuning, precision, validity and streaming |
+| A computed statistic becomes a normalizing divisor | [Range propagation](../api/numerics.md#2-small-magnitudes-in-normalized-ratios) | Consumer range and discriminating inputs beyond zero/uniform controls |
 | Stable extrema, Top-K or merging ranked lists | [Ordered selection](../patterns/ordered-selection.md) | Total order, candidate pruning, cursor lifetime and exact payloads |
-| Packed filtering with several output fields | [Shared AR state](../api/vf.md#multiple-compacted-output-streams-share-ar) | Initialization, continuation, tail storage and final flush for each stream |
 | Stable grouping/scatter across workers | [Stable placement](../patterns/stable-placement.md) | Counts and local ranks independent of scheduling |
-| SIMT with shared per-record metadata | [SIMT payload](../patterns/simt-payload.md) | Record/lane ownership, metadata reuse, coalescing and T/G experiments |
+| SIMT with shared per-record metadata | [SIMT payload](../patterns/simt-payload.md) | Record/lane ownership, metadata reuse, coalescing and flat/grouped comparisons |
 | Runtime segments or ragged/indexed reductions | [Segment work distribution](../patterns/multi-output-reductions.md#partition-unequal-runtime-reductions) | Busiest-worker work, direct versus partial/merge and empty partials |
-| Cross-core / CV pipeline | [Cross-core sync](../api/crosscore-sync.md) | Driver loop even for one handover, effective-shape split ownership, transfer medium and slots |
-| Views, strides or tails | [Data movement](../api/datamove.md) | Physical views, offsets, valid shapes and padding |
+
+### Representation, state and transport
+
+| Task feature | First reference | Decision it owns |
+| --- | --- | --- |
+| Cross-core / CV pipeline or auto_mutex refactoring | [Cross-core sync](../api/crosscore-sync.md) | Driver loop, cross-core edges and slot lifetimes; preserve geometry/arithmetic before changing overlap |
+| Adapting a padded Cube kernel to fewer logical rows, heads or channels | [Transfer capacity](../api/crosscore-sync.md#logical-validity-is-not-transfer-capacity) | Useful rows, producer extent and receiving capacity are distinct |
+| VF produces a Cube operand, including UB→L1 | [Handover recipe](../api/datamove.md#ub-to-l1-handover), then [format/residency/repeated work](../api/gemm.md#transformed-operands-format-residency-and-repeated-work) for fusion | Complete producer/transfer/consumer path; direct NZ and aligned conversion have different pitch conditions |
+| Views, strides or tails; a reinterpreted tile feeds VF | [Data movement](../api/datamove.md), especially the [physical address map](../api/datamove.md#verify-a-vf-consumers-address-map-after-reinterpretation) | Offsets, valid shapes, padding and coordinate-distinct checks |
+| Element-width changes or quantization in VF | [Physical conversion chains](../api/vf.md#map-physical-containers-before-composing-conversions), [FP16 widening](../api/vf.md#213-the-fp32-path-for-fp16-source-data-order-preserving-widening-with-unpk-required-reading) and [packed stores](../api/vf.md#distinguish-numerical-conversion-from-port-bit-packing-first) | Dtype edges, container bits, logical order and partial masks |
+| VF register state, scalar broadcasts or fused updates | [Broadcast types](../api/vf.md#scalar-broadcasts-and-operand-dtypes), [bindings/copies](../api/vf.md#vf-register-aliasing-and-copying) and [seeded destinations](../api/vf.md#destination-registers-used-as-inputs) | Register identity, explicit scalar dtype and initialized implicit inputs |
+| Independent load→VF→store chunks reuse buffers | [Row batching](../patterns/vf-row-reduce.md#batch-independent-rows-even-when-each-row-fits) and [slot depth](../api/memory-allocation.md#independent-buffers-and-slot-depth) | Separate batching and overlap decisions; account for all live operands and slots |
+| Lane exchanges, scans or tagged reductions | [Coupled state](../api/vf.md#grouped-state-and-boundaries-in-lane-exchange) | Shared participation for values/tags; register wrap versus logical validity |
+| Packed filtering with several output fields | [Shared AR state](../api/vf.md#multiple-compacted-output-streams-share-ar) | Initialization, continuation, tail storage and final flush per stream |
 | Compact per-row outputs | [VF small results](../patterns/vf-small-results.md) | Legal dense transport, physical rank/alignment and unique writes |
-| Element-width changes or quantization in VF | [Physical conversion chains](../api/vf.md#map-physical-containers-before-composing-conversions), then [numeric versus packed stores](../api/vf.md#distinguish-numerical-conversion-from-port-bit-packing-first) | Dtype edges, container bits, logical order and partial masks |
+| Accumulator/output dtype mismatch, Fixpipe riders or on-path quantization | [Final output path](../api/fixpipe.md#choose-the-final-output-path-before-adding-a-conversion-kernel); [known defects](../diagnostics/defects/fixpipe-overview.md) for failures | Conversion before adding intermediates, dtype/layout support and scale/offset representation |
 | Other VF / SIMT APIs or device probes | [VF](../api/vf.md), [SIMT entry](../patterns/simt-first.md), [debug probes](../api/support.md) | Only the unresolved operation family or probe placement |
 
 ## Selecting an example

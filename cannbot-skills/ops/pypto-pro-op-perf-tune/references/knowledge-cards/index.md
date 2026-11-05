@@ -112,6 +112,7 @@ okf_version: "0.2"
 ## Bundle resources
 
 * [OKF 格式约定](PROFILE.md) - 卡片字段、可选参考资料和状态的简明说明。
+* [Kernel 知识源接入](KERNEL_INTEGRATION.md) - 可选关联字段、目标解析、候选归组与开发者验证入口。
 * [贡献指南](CONTRIBUTING.md) - 准备事实包、驱动 Agent 生成卡片和提交人工评审的入口。
 * [卡片模板](CARD_TEMPLATE.md) - 新建知识卡时使用的结构与默认字段。
 * [带注释示例](examples/annotated-card.md) - 展示事实不足时如何保留语义和待确认项。

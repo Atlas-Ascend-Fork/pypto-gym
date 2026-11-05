@@ -18,6 +18,8 @@
 
 验证边界：行为版本 872df763f，CANN 9.2.0，Ascend950PR。
 容差与边界由 test.py 固定，不代表性能已优化。
+
+example-query: {"aliases":["runtime prefix softmax","运行期前缀softmax"],"term_groups":[["softmax"],["runtime prefix","prefix length","runtime length","有效前缀","有效长度"]],"facets":{"source_dtype":["FP32"],"destination_dtype":["FP32"]}}
 """
 
 import pypto_pro.language as pl

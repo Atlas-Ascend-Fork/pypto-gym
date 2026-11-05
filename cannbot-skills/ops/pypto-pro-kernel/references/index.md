@@ -11,12 +11,13 @@ Choose the current workflow from [SKILL.md](../SKILL.md), then consult the match
 | `api/` | How does this interface or mechanism work? | DSL constraints, resource/synchronization contracts and API-family behavior boundaries |
 | `diagnostics/` | Why did it fail, and what can checks detect? | Error interpretation, blind spots, validation traps, regression leads and specific defects |
 | `verification/` | How can results be trusted? | Device runs, native-task timing, evidence assessment and working methods |
-| `tooling/` | Which tools and examples should be used? | Check commands, example index and coverage contracts |
+| `tooling/` | Which tools and examples should be used? | Check commands, execution feedback, example index and coverage contracts |
 
 ## Workflows
 
 | Current task | Entry |
 | --- | --- |
+| Clarify mathematical requirements or write a requested specification | [Requirements, evidence and optional SPEC tools](workflows/requirements.md) |
 | First use of the native Pro DSL | [Getting started and basic forms](workflows/getting-started.md) |
 | Implement a kernel | [Contract, resources, implementation and verification](workflows/authoring.md) |
 | Compilation failure, incorrect results or a hang | [Symptom-driven debugging](workflows/debugging.md) |
@@ -82,14 +83,19 @@ Choose the current workflow from [SKILL.md](../SKILL.md), then consult the match
 | Native-task sums, pipe counters, paired synchronized wall time and stateful callbacks | [native-timing.md](verification/native-timing.md) |
 | Assessing API capabilities and evidence without false attribution | [evidence.md](verification/evidence.md) |
 | Choosing verification actions, editing and shell operations | [methods.md](verification/methods.md) |
+| Measuring whether a skill/tool change helps an agent | [Matched agent evaluation](verification/agent-evaluation.md): isolated bundles, independent grading, budgets and missing telemetry |
 
 ## Tools and examples
 
 | Need | Reference |
 | --- | --- |
-| Static checks, API signatures, Markdown links and source-reference checks | [Script entry](../scripts/check.py); [usage and limits](tooling/checks.md) |
-| Selecting runnable examples, writing independent references and admitting examples | [Example catalog and conventions](tooling/examples.md) |
+| Static checks, knowledge/API/document lookup, Markdown links and source-reference checks | [Script entry](../scripts/check.py); [usage and limits](tooling/checks.md), [original documents and docstrings](tooling/checks.md#official-documents-guides-and-docstrings), [knowledge admission and refresh](tooling/checks.md#knowledge-admission-and-refresh) |
+| The same CLI tools through an agent host | [CLI/MCP modes and fallback](tooling/checks.md#cli-and-mcp-modes); [MCP setup](tooling/mcp.md), output budgets and execution lifecycle |
+| Source-pattern candidates, measured-cost ranking and recoverable best/current state | [Optimization tools](tooling/optimization.md); verifier inputs, evidence gates and bounded scratch state |
+| Discovering complete programs, reading independent references/tests, and admitting examples | [Shared program query](tooling/checks.md#complete-example-programs); [example catalog and conventions](tooling/examples.md) |
 | Maintaining example coverage and VF assignments | [Coverage contract](tooling/example-coverage.md), consumed by `check.py coverage` |
+
+This skill bundles its knowledge, tools and examples. Framework source and the installed runtime remain external; no simulator is included.
 
 ## Admission rules
 
@@ -100,8 +106,8 @@ Choose the current workflow from [SKILL.md](../SKILL.md), then consult the match
 - Summarize knowledge that transfers across examples. Keep individual details in native `kernel.py` / `test.py` files. Link to executable code, official framework material, machine configuration at their owners instead of copying them.
 - Do not maintain historical pass counts, experiment ledgers or superseded reasoning narratives. Retain current conclusions, necessary counterexamples and applicability conditions; a historical pass is not current acceptance.
 - Prefer source symbols over line numbers. Bind necessary line references to a version. Link checks do not establish agent effectiveness or hardware performance.
-- When changing paths or headings, update incoming links, relative paths, anchors and tool consumers together. Run `check.py links` in the complete workspace, `check.py coverage`, `check.py srcrefs` and relevant regressions. `srcrefs` is heuristic: assess items individually rather than renumbering in bulk.
+- When changing knowledge metadata, sources, paths or headings, update incoming links, relative paths, anchors and tool consumers together. Run the shared [knowledge admission gate](tooling/checks.md#knowledge-admission-and-refresh) with `check.py query --validate --format json`; check representative discovery, resolution and repaired/invalid inputs through the affected interfaces. Use explicit `check.py links` inputs for repository documents outside the selected references and run `check.py srcrefs` when source references are affected. `srcrefs` is heuristic: assess items individually rather than renumbering in bulk.
 
 Shared facts have specific owners: authoring owns anchor adaptation, incremental construction, the reference/evaluator contract and boundary matrix; board-runs owns execution, probe validity and fault isolation; numerics owns arithmetic/representation criteria; examples owns test/example admission; native-timing owns executable identity, measurement protocols and counter interfaces; optimization owns diagnostic timing, experiment progression and stopping conditions; performance owns model/board interpretation. Patterns retain mechanisms and implementation comparisons without copying those procedures. Constraint entries identify a diagnostic and route to the API owner rather than maintaining a second copy of its mechanism or version limits. Keep cross-paradigm ownership and partitioning decisions in patterns.
 
-Keep task entry and essential constraints in SKILL.md; maintain editorial guidance here. Getting-started is an intentional cache of foundational facts: keep its version digest consistent with its owners and recheck it when the framework baseline changes. Section references and historical measurements retain their individual version scopes; an old common date cannot validate the whole library. Keep new routes consistent with the [skill entry](../SKILL.md).
+Keep task entry and essential constraints in SKILL.md; maintain editorial guidance here. Getting-started is an intentional cache of foundational facts: keep its version digest consistent with its owners and recheck it when the framework baseline changes. Section references and historical measurements retain their individual version scopes; an old common date cannot validate the whole library. New routes remain discoverable from this skill’s entry or reference index.

@@ -32,7 +32,7 @@ tags: ["pypto-pro", "performance", "structural", "redesign", "prior-art"]
 
 1. 检索工作区、算子所在仓与其测试套件中的同算子/同拓扑实现、指南与样例；
 2. 检索已装配的 Pro 官方样例缓存（`pro_ops/`、
-   [样例索引](../../pypto-pro-material-explore/references/official_samples.md)）与
+   [样例索引](../../pypto-pro-docs-search/references/official_samples.md)）与
    [知识卡片库](knowledge-cards/index.md)的既有实现线索；
 3. 记录候选实现的结构要点（操作数数值类型、片上驻留、工作分解、同步模型、计算图等价改写、阶段划分）与实测性能，
    注明来源与测量条件；
@@ -91,5 +91,4 @@ T_lb ≈ 总计算量 / (AI Core 数 × 单核峰值 × 目标效率)
 
 - 来源 id：`structural`，位于主 Skill §3.5，先于 `bottleneck_derived` 闭合；
 - §2 的最佳已知结构实现与 §3 的每个维度各形成一个原子项，按受控闭环执行；
-- 维度候选涉及精度或契约时，按 [Design Skill](../../pypto-pro-op-design/SKILL.md) 与
-  [当前优化纪律](../../pypto-pro-kernel/references/workflows/optimization.md#change-discipline) 同步 DESIGN 中真实来源、适用条件、不变量与最终验证证据。
+- 维度候选涉及精度或契约时，遵循核心的[参考与评估规则](../../pypto-pro-kernel/references/workflows/authoring.md#reference-and-evaluator)，保持用户明确的项目约束；仅在用户要求时同步相关项目文档。

@@ -5,6 +5,15 @@ description: "把 A/B 的 L1 缓冲声明为两组独立 tile group（ping/pong 
 status: "stable"
 tags: ["pypto-pro", "cube", "matmul", "mte2", "preload", "pipeline"]
 item_id: "cube-05"
+knowledge_links:
+  schema: "pypto-knowledge-links/1"
+  relations:
+    - kind: overlaps_with
+      target:
+        skill: pypto-pro-kernel
+        id: "document:skill/api/memory-allocation.md#independent-buffers-and-slot-depth"
+      scope: "用独立 buffer 地址与 mutex 允许 load 和当前计算交错，消费结束后再回填并测试 ring wrap。"
+      boundary: "目标为局部槽位与生命周期原则，不是本卡奇偶 ping/pong 序列的正确性证明；首尾守卫与实际预取收益仍须验证。"
 bound_hint: "MTE2"
 applicability: "K 循环 matmul 已有双缓冲语义但流水仍见 MTE2 空泡（搬运发射滞后于数据依赖解除），且 k_blocks ≥ 2"
 target_api_gate: "仅限 Ascend 950PR 或 950DT；依赖独立 tile group + auto_mutex 的同组内 pipe 排序；动态奇偶分支选择句柄已在当前 parser 验证可用"

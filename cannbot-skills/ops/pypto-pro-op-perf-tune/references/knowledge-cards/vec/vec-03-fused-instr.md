@@ -5,6 +5,21 @@ description: "在语义、dtype 和 mask 兼容时，用 vf.mul_dst_add 替换�
 status: "stable"
 tags: ["pypto-pro", "vec", "fma", "instruction-fusion"]
 item_id: "vec-03"
+knowledge_links:
+  schema: "pypto-knowledge-links/1"
+  relations:
+    - kind: uses_contract
+      target:
+        skill: pypto-pro-kernel
+        id: "contract:vf-destination-state"
+      scope: "mul_dst_add 读取赋值目标的旧值，融合前必须初始化目标并核对乘数、加数与 mask。"
+      boundary: "mul_dst_add 与 mul_add_dst 的隐式 dst 位置不同；有其它消费者的乘积不能直接消除。"
+    - kind: uses_contract
+      target:
+        skill: pypto-pro-kernel
+        id: "document:skill/api/vf.md#215-extreme-value-exp-semantics-and-mul_dst_add-as-true-fma-hardware-evidence-2026-09-30"
+      scope: "核对 mul_dst_add 的单次舍入 FMA 语义后再替换分离的 mul 与 add。"
+      boundary: "FMA 与两次舍入可能产生不同结果；关联不放宽数值验收，也不说明编译器尚未自动融合。"
 bound_hint: "VEC"
 applicability: "存在 x 乘 weight 加 bias，编译结果未自动融合，中间乘积无其他消费者且 dtype 与 mask 兼容"
 target_api_gate: "仅在当前 Ascend 950PR 或 950DT PyPTO-Pro 公开 Vf.mul_dst_add 语义和生成 vmadd 均已复核时采用"

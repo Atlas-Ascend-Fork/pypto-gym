@@ -5,6 +5,15 @@ description: "在精度合同允许时，把 cube 串行链的 L1/L0 操作数 t
 status: "stable"
 tags: ["pypto-pro", "cube", "matmul", "dtype", "precision"]
 item_id: "cube-09"
+knowledge_links:
+  schema: "pypto-knowledge-links/1"
+  relations:
+    - kind: uses_contract
+      target:
+        skill: pypto-pro-kernel
+        id: "document:skill/api/numerics.md#preserve-intermediate-precision"
+      scope: "分别追踪 L1/L0 操作数 dtype、FP32 Acc 和每轮写回的 BF16 舍入位置。"
+      boundary: "FP32 累加不能消除低精度操作数及循环写回误差；本卡只在原合同允许且全量数值回归通过时适用。"
 bound_hint: "MAC|MTE1|MTE2|FIXPIPE"
 applicability: "kernel 由多次 pl.matmul 串行链主导（迭代求逆、级数展开、多步矩阵乘链），操作数当前为 fp32，当前设备同规模对比测试显示 bf16 单次调用成本显著更低，且精度合同允许操作数按低精度写回、golden 容差门内可复验"
 target_api_gate: "Ascend 950PR（A5，DAV_3510）实测；依赖已核验的 pl.TileType(MemorySpace.Mat/Left/Right, layout=NZ)、pl.cast(pl.RoundMode)、pl.move、pl.insert 与 fp32 acc（L0C）语义；其它 SoC/工具链版本必须重新做同规模对比测试，不得沿用本卡数字"

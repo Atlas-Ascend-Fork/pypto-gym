@@ -5,6 +5,21 @@ description: "MN 方向 tile 数填不满核时，把 K 维切成多段分给多
 status: "stable"
 tags: ["pypto-pro", "cube", "matmul", "streamk", "split-k", "atomic"]
 item_id: "cube-03"
+knowledge_links:
+  schema: "pypto-knowledge-links/1"
+  relations:
+    - kind: uses_contract
+      target:
+        skill: pypto-pro-kernel
+        id: "document:skill/api/constraints.md#atomicatomicadd-supports-only-six-destination-dtypes"
+      scope: "K 维多核部分和写回前，核对目的 dtype 是否支持 AtomicAdd。"
+      boundary: "dtype 支持不证明输出初始化、并发写者上限、确定性或 K 分段覆盖；这些条件仍按本卡和当前平台验证。"
+    - kind: alternative_to
+      target:
+        skill: pypto-pro-kernel
+        id: "document:skill/api/gemm.md#count-the-complete-output-grid-before-assigning-workers"
+      scope: "完整 M×N 输出网格仍不足以提供并行工作时，再比较 K 维拆分与部分和合并。"
+      boundary: "输出轴分工不需 K 合并；Split-K 增加原子或 merge 成本并改变累加顺序，不能因空闲核直接启用。"
 bound_hint: "MAC"
 applicability: "matmul 的 M/N tile 数明显小于可用核数且 K 足够长；输出 dtype 支持原子累加；FP32 部分和精度预算允许"
 target_api_gate: "仅限 Ascend 950PR 或 950DT；依赖 pl.store/store_tile 的 atomic=AtomicAdd（目的区域须预先初始化）与 kernel[stream, block_dim] 启动"

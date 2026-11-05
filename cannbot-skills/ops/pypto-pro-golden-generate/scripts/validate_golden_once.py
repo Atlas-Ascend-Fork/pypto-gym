@@ -119,8 +119,10 @@ def _read_json(path: Path) -> dict[str, Any]:
 
 def _op_name(spec_path: Path) -> str:
     validator = Path(__file__).resolve().parents[2] / (
-        "pypto-pro-intent-understand/scripts/validate_spec.py"
+        "pypto-pro-kernel/scripts/validate_spec.py"
     )
+    if not validator.is_file():
+        raise ReceiptError(f"SPEC validation requires pypto-pro-kernel: {validator}")
     spec = importlib.util.spec_from_file_location("_pypto_spec_validator", validator)
     if spec is None or spec.loader is None:
         raise ReceiptError(f"cannot load canonical SPEC validator: {validator}")
@@ -132,12 +134,55 @@ def _op_name(spec_path: Path) -> str:
         raise ReceiptError(f"invalid SPEC.md: {error}") from error
 
 
+def _framework_imports(tree: ast.Module) -> list[str]:
+    """Find direct framework imports, including literal dynamic imports."""
+    names: set[str] = set()
+    importlib_aliases = {"importlib"}
+    loader_aliases = {"__import__"}
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Import):
+            names.update(alias.name for alias in node.names)
+            for alias in node.names:
+                if alias.name == "importlib":
+                    importlib_aliases.add(alias.asname or alias.name)
+        elif isinstance(node, ast.ImportFrom):
+            module = node.module or ""
+            names.add(module)
+            names.update(
+                f"{module}.{alias.name}" if module else alias.name
+                for alias in node.names
+            )
+            if module == "importlib":
+                loader_aliases.update(
+                    alias.asname or alias.name
+                    for alias in node.names if alias.name == "import_module"
+                )
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.Call) or not node.args:
+            continue
+        function = node.func
+        is_loader = isinstance(function, ast.Name) and function.id in loader_aliases
+        is_module_loader = (
+            isinstance(function, ast.Attribute)
+            and function.attr == "import_module"
+            and isinstance(function.value, ast.Name)
+            and function.value.id in importlib_aliases
+        )
+        argument = node.args[0]
+        if (is_loader or is_module_loader) and isinstance(argument, ast.Constant) and isinstance(argument.value, str):
+            names.add(argument.value)
+    return sorted(name for name in names if name.split(".", 1)[0] in {"pypto", "pypto_pro"})
+
+
 def _golden_contract(path: Path, op_name: str, role: str) -> None:
-    """Reject scripts without the required validation function definitions."""
+    """Check direct framework independence and required validation functions."""
     try:
         tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
     except (OSError, SyntaxError, UnicodeError) as error:
         raise ReceiptError(f"invalid {path.name}: {error}") from error
+    forbidden = _framework_imports(tree)
+    if forbidden:
+        raise ReceiptError(f"{path.name} must be independent of PyPTO: {', '.join(forbidden)}")
     functions = {
         node.name: node for node in tree.body
         if isinstance(node, ast.FunctionDef)

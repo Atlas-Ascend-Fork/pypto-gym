@@ -63,8 +63,8 @@ cannbot-skills/
 ├── ops/                      # 算子 Skills（PyPTO classic + PyPTO-Pro）
 │   ├── pypto-api-explore/
 │   ├── pypto-op-design/
-│   ├── pypto-pro-op-develop/
-│   └── ...                   # 共 34 个顶层 Skill 子目录
+│   ├── pypto-pro-kernel/
+│   └── ...                   # 共 29 个顶层 Skill 子目录
 ├── model/                    # 模型适配与推理优化 Skills
 │   ├── hf-npu-e2e-workflow/
 │   ├── pypto-convert-model/
@@ -96,8 +96,8 @@ cannbot-skills/
 | 验证与调优类 | `pypto-golden-generate`、`pypto-precision-compare`、`pypto-precision-debug`、`pypto-op-verify`、`pypto-op-review`、`pypto-op-perf-tune`、`pypto-op-perf-panko-manual`、`pypto-kernel-validate` | Golden 生成、精度对比与排查、功能验证、代码检视、性能调优（分步骤 / PANKO 搜索式）、产物校验（反作弊 + 精度 + 性能） |
 | 监控与调试类 | `pypto-op-monitor`、`pypto-general-debug` | 任务监控、通用诊断 |
 | 断裂点分析与报告类 | `pypto-benchmark-fracture-aggregator`、`pypto-fracture-point-detector`、`pypto-session-dfx-report` | Session 断裂点聚合/检测/复现取证、Issue 文档产出、DFX 报告 |
-| Pro 专属类 | `pypto-pro-intent-understand`、`pypto-pro-material-explore`、`pypto-pro-op-plan`、`pypto-pro-op-design`、`pypto-pro-op-develop`、`pypto-pro-op-perf-tune`、`pypto-pro-golden-generate`、`pypto-pro-environment-check`、`pypto-pro-precision-debug`、`pypto-pro-cann-delivery`、`pypto-pro-docs-search` | PyPTO-Pro 需求、开发、调优与调试、CANN 交付与文档检索 |
-| Pro 独立技能（实验） | `pypto-pro-kernel` | 原生 kernel 开发、验证、调试与优化，内含参考资料、检查工具和样例 |
+| Pro 专属类 | `pypto-pro-op-perf-tune`、`pypto-pro-golden-generate`、`pypto-pro-environment-check`、`pypto-pro-precision-debug`、`pypto-pro-cann-delivery`、`pypto-pro-docs-search` | PyPTO-Pro 需求、开发、调优与调试、CANN 交付与文档检索 |
+| Pro 核心技能 | `pypto-pro-kernel` | 原生 kernel 开发、验证、调试与优化，内含参考资料、检查工具和样例 |
 
 ### 模型适配（model/）
 

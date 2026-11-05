@@ -5,6 +5,15 @@ description: "tile 数巨大、每 tile 计算量小时，每块固定标量开�
 status: "stable"
 tags: ["pypto-pro", "scalar", "tiling"]
 item_id: "scalar-03"
+knowledge_links:
+  schema: "pypto-knowledge-links/1"
+  relations:
+    - kind: overlaps_with
+      target:
+        skill: pypto-pro-kernel
+        id: "document:skill/patterns/vf-row-reduce.md#batch-independent-rows-even-when-each-row-fits"
+      scope: "通过增大每块有效工作量减少逐 tile 固定标量与 descriptor 开销，并检查最后一个 worker 的工作。"
+      boundary: "本卡改变静态 Tile 粒度，尾判定保持独立；不据历史每块耗时或 TR 值生成通用运行时阈值。"
 bound_hint: "scalar"
 applicability: "总计算量小或 shape 小，块数远大于每块工作量（如行块高取 1~2）；scalar 占比高、发射率低，热点在逐块固定标量开销而非数据搬运或计算本身"
 target_api_gate: "仅限已核验 pl.make_tile_group/TileType、pl.range、pl.min、pl.set_validshape 的 Ascend 950PR 或 950DT 工具链"

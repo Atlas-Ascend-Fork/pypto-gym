@@ -5,6 +5,21 @@ description: "Vector 产出的 tile 如果马上给 Cube 使用，可以直接�
 status: "stable"
 tags: ["pypto-pro", "pipe", "cross-engine", "memory"]
 item_id: "pipe-07"
+knowledge_links:
+  schema: "pypto-knowledge-links/1"
+  relations:
+    - kind: overlaps_with
+      target:
+        skill: pypto-pro-kernel
+        id: "document:skill/api/gemm.md#transformed-operands-format-residency-and-repeated-work"
+      scope: "Vector 产生 Cube 操作数后，通过片上驻留和交接减少中间 GM 写回、读回。"
+      boundary: "目标章节还讨论生产者复用、所有权和物化方案的权衡；本卡不与整个章节等价。若 GM 副本还有其他消费者，必要写回必须保留。"
+    - kind: uses_contract
+      target:
+        skill: pypto-pro-kernel
+        id: "contract:ub-l1"
+      scope: "核对 Vector 产物经 UB 交给 L1/Cube 时的物理表示、布局、有效范围和消费同步。"
+      boundary: "该关联不证明当前布局和工具链已经验证；本卡删除 GM 往返，与目标内 ub-l1-extra-layout-move 候选删除局部 ND→NZ 转换是不同改法。"
 bound_hint: "VEC、MTE2、MTE3"
 applicability: "Vector 和 Cube 在同一次 kernel 中前后相接，Vector 的结果只需被后面的 Cube 消费，且 GM 读写位于关键路径。"
 target_api_gate: "需要当前版本支持 UB 到 L1 的布局转换、pl.insert、valid shape 和跨核事件；具体 tile、地址和事件语义必须在目标设备上复核。"

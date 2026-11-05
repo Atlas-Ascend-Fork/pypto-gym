@@ -176,11 +176,13 @@ def _build_validate(op: str, case_names: list[str]) -> str:
 
 
 def _load_spec_contract(path: Path) -> dict[str, Any]:
-    """Load Stage 1's canonical parser without copying its schema rules."""
+    """Load the companion kernel skill's optional SPEC parser."""
     parser_path = (
         Path(__file__).resolve().parents[2]
-        / "pypto-pro-intent-understand" / "scripts" / "validate_spec.py"
+        / "pypto-pro-kernel" / "scripts" / "validate_spec.py"
     )
+    if not parser_path.is_file():
+        raise ValueError(f"SPEC validation requires pypto-pro-kernel: {parser_path}")
     module_spec = importlib.util.spec_from_file_location("pypto_spec_contract", parser_path)
     if module_spec is None or module_spec.loader is None:
         raise ValueError(f"cannot load canonical SPEC parser: {parser_path}")

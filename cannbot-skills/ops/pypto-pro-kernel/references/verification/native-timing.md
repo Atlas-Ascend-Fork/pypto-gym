@@ -1,6 +1,6 @@
 # Native-task timing
 
-Use this after numerical validation when the task asks for device time or an implementation comparison. The bundled [profile_kernel.py](../../scripts/profile_kernel.py) owns warmup, capture validation, task grouping and temporary-capture cleanup. Device locks, process timeouts and input setup belong to the caller; follow [board runs](board-runs.md).
+Use this after numerical validation when the task asks for device time or an implementation comparison. The bundled [profile_kernel.py](../../scripts/profile_kernel.py) owns warmup, capture validation, task grouping and temporary-capture cleanup. For a configuration shortlist, use [batched configuration screening](#screen-configurations-in-two-captures) to share export cost across adjacent paired comparisons. Device locks, process timeouts and input setup belong to the caller; follow [board runs](board-runs.md).
 
 Validation is scoped to the exact shape, dtype, runtime workload and launch configuration being timed. An early [representative computation-path comparison](../workflows/authoring.md#compare-computation-paths-before-expanding-coverage) can precede full-matrix correctness. Final acceptance still needs the complete numerical matrix; it does not require profiling every case. Keep representative timing coverage explicit and do not infer times for unmeasured cases.
 
@@ -31,6 +31,8 @@ Require nonempty native-task data with the expected units and complete-call aggr
 For collectors that invoke external exporters, verify executable lookup in the actual child environment. For example, a PATH-based `msprof` lookup can fail even when `ASCEND_HOME_PATH` identifies a complete CANN installation. Check `shutil.which("msprof")`, the resolved executable and the installed collector's lookup code; a dangling convenience symlink is not the executable. If the selected SDK provides the tool under `tools/profiler/bin/`, prepend that verified directory for the trial process while preserving the pinned library paths. Keep machine-specific paths in the external environment configuration. A successful help command establishes discovery, not a successful capture.
 
 If the first capture or export fails, repair that path before expanding the performance matrix; focused numerical diagnostics may continue separately. Retain the requested metric and benchmark protocol from [Choose and name the metric](#choose-and-name-the-metric). A compiler success or numerical pass does not establish that profiling works.
+
+The helper retains a failed capture in its temporary directory and prints its path while preserving the original exception. Inspect that capture's exporter logs and raw/exported files before another device request: collection, CANN export and the host parser are different failure boundaries. A missing `kernel_details.csv` does not establish that the device recorded no tasks. Use the installed collector's supported offline analysis/export on the retained capture when available; changing the temporary directory or repeating the same launch without new evidence does not diagnose the failing boundary. Keep these artifacts outside tracked source and remove them after retaining the needed evidence. Successful captures are removed automatically.
 
 ## Resolve the helper on the execution host
 
@@ -74,6 +76,20 @@ The `measure_pipes` call above already supplies the initial timing baseline and 
 
 This explicitly requests `AiCMetrics.PipeUtilization` and checks that capability. Its `pipe_scope="task_aggregate"` does not expose individual cores. For uneven work or an unexplained tail, take the exact symbol from `identity["Name"]` into a per-core `msprof op` capture using [performance diagnosis](../diagnostics/performance.md#collect-the-right-profile). Ratios from different pipes overlap and must not be summed; preserve the collector's clock and units. Counter interpretation does not replace the paired comparison below.
 
+## Collect a memory metric group
+
+Use `measure_metrics` for one explicit group: `Memory`, `MemoryUB`, `L2Cache`, `ResourceConflictRatio` or `PipeUtilization`. It uses the same warmup, strict task-count checks and native-task clock as `measure_pipes`:
+
+```python
+stats = helper["measure_metrics"](
+    lambda: run(x, out, workers=workers),
+    metric="Memory",
+    tasks_per_call=TASKS_PER_CALL,
+)
+```
+
+The result labels the requested `counter_group` and `counter_scope="task_aggregate"`; `counters` retains the exported names/units, valid zeros and missing sample counts by native task position. No usable counter values leaves that position's `available=False`, while task timing can remain valid. Unsupported groups/counts fail before runtime access; unavailable installed configuration capabilities fail without substituting another group. A successful configuration still needs a complete capture with relevant fields. This entry does not enable the separate `l2_cache` export switch or collect several groups in one capture. Interpret scope and cache evidence through [SIMT memory diagnosis](../diagnostics/performance.md#simt-memory-paths-and-cache-evidence).
+
 ## Compare paired implementations
 
 Validate both callbacks first. Use equivalent inputs, consistent allocations and the same shape, worker count and runtime data distribution. Each callback must fully define its outputs; mutating callbacks follow the [stateful contract](#in-place-and-stateful-callbacks) below. Keep the board lock for the whole comparison; do not infer an implementation gain from separate-session absolute timings.
@@ -102,4 +118,27 @@ For a single-update comparison, prepare independent state pools with identical i
 
 A matched evolving trajectory is another workload: use separate identical starting states, the same parameter sequence and call counts on both sides, account for warmups, and verify the resulting states. Describe that trajectory and its value/address reuse instead of calling it a repeated fixed-input measurement. Include nonzero representative updates as well as zero/special cases; a shape alone does not specify the workload. [Reference and evaluator calibration](../workflows/authoring.md#reference-and-evaluator) owns per-call correctness and the runnable state-update example.
 
-Choose active, skipped, boundary and locality regimes through [data-dependent work](../workflows/optimization.md#data-dependent-work). Return the source hash, toolchain identity, shapes/dtypes, workers, metric source and measured distribution in the result. Captures are temporary; do not add profiler dumps or experiment ledgers to the repository.
+Choose active, skipped, boundary and locality regimes through [data-dependent work](../workflows/optimization.md#data-dependent-work). Return the source hash, toolchain identity, shapes/dtypes, workers, metric source and measured distribution in the result. Failed captures remain at the reported temporary path for diagnosis; do not add profiler dumps or experiment ledgers to the repository.
+
+## Screen configurations in two captures
+
+For a fixed implementation family with the same native task count per call, `compare_configurations` screens a named shortlist with one AB capture and one BA capture. This shares collector/export overhead across configurations. Validate every callback first against the original numerical contract, bind its label to the exact parameter tuple and source, and prepare all inputs/outputs before calling:
+
+```python
+calls = {label: (lambda config=config: run_config(x, out, **config))
+         for label, config in shortlist.items()}
+for call in calls.values():
+    call()
+    validate_output(out)
+screen = helper["compare_configurations"](
+    baseline_call, calls, warmup=3, repeats=5, tasks_per_call=TASKS_PER_CALL,
+)
+for label, result in screen["candidates"].items():
+    print(label, result["orders"])
+```
+
+Each repetition pairs a candidate with its own adjacent baseline call. AB follows the dictionary's candidate order; BA reverses it and invokes each candidate before its baseline. Results retain the same complete-call sums, per-pair ratios and win fractions as `compare_native`. Counts, timestamps and units receive the same strict capture checks. Missing tasks or a failed order raise an error; no partial ranking is returned. Configurations with different task counts use separate `compare_native` calls with explicit counts.
+
+Callbacks use equivalent immutable inputs and overwrite their outputs. With `N` candidates, the baseline executes `warmup + 2*N*repeats` times, while each candidate executes `warmup + 2*repeats` times. Candidate creation, compilation warmup, numerical checking and result serialization stay outside capture. Keep the shortlist bounded by the caller's execution timeout, including compile time; save completed batches in ignored scratch and resume missing batches after interruption.
+
+This screens one declared workload and cache protocol. Reverse order reduces a fixed ordering bias, but does not eliminate drift or interference from the candidate set. Confirm close rankings and the retained public selector with ordinary [paired comparisons](#compare-paired-implementations), including additional workload regimes from the [configuration procedure](../workflows/optimization.md#choose-configuration-comparisons). Do not turn separately collected medians into paired evidence.

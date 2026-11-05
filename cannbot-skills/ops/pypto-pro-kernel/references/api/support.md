@@ -88,6 +88,7 @@ For a pure Vector loop that processes one row per iteration, use `pl.range(pl.ge
 
 The distinction is **where each can be called**: `pl.get_block_idx()` is rejected during parsing inside a SIMT body (`parse_op_call` in `_call_parser.py`), while `pl.simt.block_idx()` is the SIMT-side entry point. For the measured block index and grid size above, their values agree across the two scopes; do not infer different ownership merely from the namespace.
 
+<!-- kernel-query: {"id":"gm-scalar-write-ownership","aliases":["GM scalar writes","adjacent multiworker scalar writes","GM 标量写回"],"symbols":["pl.setval"],"when":"Multiple workers write nearby values through the GM scalar path; a UB Tile setval or a single-worker control has a different contract.","missing_facts":["Identify GM Tensor versus UB Tile, physical write regions, worker count, dense output layout, installed behavior and complete readback/guards before selecting the writeback route."],"discovery_terms":[["gm","global","GM"],["scalar","setval","标量"],["write","writes","writeback","写回"]]} -->
 ## 7. Small GM Scalar Writes from Multiple Blocks
 
 The following historical observation applies only to the GM scalar path using `pl.setval`; eight blocks each write four INT32 values to their own segment. Do not generalize it into a rule requiring gaps between all GM writes.
@@ -203,6 +204,7 @@ Tile declaration table (A5, FP16):
 
 `set_mm_layout_transform` was checked only to show that it is accepted and does not change the result of one ordinary transfer; only a matmul that accumulates along K reveals the transposed direction. **No layer rejects it inside a vector section.**
 
+<!-- kernel-query: {"id":"debug-assert-behavior","aliases":["pto_assert behavior","assert logging","日志断言"],"term_groups":[["log","logging","print","打印","日志"],["without abort","does not abort","not abort","不中止","不终止","不退出"]],"symbols":["pl.pto_assert"],"when":"A device assertion is being used as an abort or safety boundary; reconcile the selected official documentation, source docstring and matching installed behavior.","missing_facts":["A source statement or historical probe does not establish the current installed assertion behavior; keep a potentially unsafe continuation in an isolated diagnostic probe."]} -->
 ## 13. `debug_probe`: Printing, Assertions, and Their Boundaries
 
 **These four constraints determine how the tests in later examples are written**, so they are collected here. See [`examples/basic_api/support/debug_probe/`](../../examples/basic_api/support/debug_probe/test.py) for reproductions and a table of four pitfalls.
@@ -212,7 +214,7 @@ Tile declaration table (A5, FP16):
 | Printing cannot be used inside an `@pl.vector_function` body (`_call_parser.py:1159`, rejected during parsing). | To inspect a VF register, `store_align` it to a Tile, then call `dump_data` **outside** the body. |
 | Device printing is not flushed by `torch.npu.synchronize()`. | To **assert** printed content, read the child process's stdout. |
 | Each print point is multiplied by the number of cores (56 copies for one point). | Two points in a probe produce more than 400 lines, burying pytest's summary line (see [verification/board-runs.md](../verification/board-runs.md) §1). |
-| `pl.pto_assert` only logs and **does not abort**. | It is not a safety net. The source docstring says “abort if condition is false”; official documentation and measurement both show logging only—when the three evidence sources disagree, state which one is authoritative. |
+| The selected `pl.pto_assert` contract and docstring specify logging without aborting. | The official contract (`pypto/docs/zh/api/pro_api/Utils-API/debugging/pto_assert.md` in the matching source checkout) and `_api.py::pto_assert` (`pypto/python/pypto_pro/language/_api.py` in the matching source checkout) at review baseline `cbd3c4a778` both describe continuation. Do not use the assertion as a safety boundary; establish behavior on the matching installation with an isolated probe rather than promoting a source statement or historical pass to current execution evidence. |
 
 One related point: only `pl.trap` unconditionally terminates execution; **give it its own test shape**, not the same process as other cases.
 

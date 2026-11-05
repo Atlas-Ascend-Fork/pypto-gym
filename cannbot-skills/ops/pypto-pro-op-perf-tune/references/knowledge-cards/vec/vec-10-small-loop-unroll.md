@@ -5,6 +5,15 @@ description: "把 VF 内编译期已知的极小循环显式展开，以删除�
 status: "stable"
 tags: ["pypto-pro", "vec", "loop", "unroll"]
 item_id: "vec-10"
+knowledge_links:
+  schema: "pypto-knowledge-links/1"
+  relations:
+    - kind: uses_contract
+      target:
+        skill: pypto-pro-kernel
+        id: "document:skill/api/constraints.md#for-must-use-plrange"
+      scope: "显式展开前先区分编译期 trip count 与运行期 pl.range，逐分支保留 offset、mask 和覆盖范围。"
+      boundary: "循环语法契约不推荐固定展开度，也不证明独立指令增多必然比 spill 或代码体积成本更有利。"
 bound_hint: "VEC"
 applicability: "trip count 编译期已知且很小，展开后的数据、offset 与 mask 等价"
 target_api_gate: "仅限 Ascend 950PR 或 950DT；只使用已核验 VF 基础算术，是否源码展开由当前 parser、生成物和 TilingKey 决定"

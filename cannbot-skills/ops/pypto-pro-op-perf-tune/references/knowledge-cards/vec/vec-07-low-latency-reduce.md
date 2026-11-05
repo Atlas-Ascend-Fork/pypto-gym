@@ -5,6 +5,15 @@ description: "用 vf.reduce_sum、reduce_max 或 reduce_min 替代逐元素或�
 status: "stable"
 tags: ["pypto-pro", "vec", "reduction", "tree"]
 item_id: "vec-07"
+knowledge_links:
+  schema: "pypto-knowledge-links/1"
+  relations:
+    - kind: uses_contract
+      target:
+        skill: pypto-pro-kernel
+        id: "contract:vf-reduction-result"
+      scope: "硬件 reduce 的 lane0 结果、后续广播和 FIRST_ELEMENT 写回应分别遵循结果布局。"
+      boundary: "多寄存器归约、重关联误差、对齐和实际收益不由单次 reduce 契约证明。"
 bound_hint: "VEC"
 applicability: "当前归约由标量循环或线性依赖链实现，结果只需单值或可广播，且 mask 与 dtype 满足 reduce 接口"
 target_api_gate: "仅限 Ascend 950PR 或 950DT；reduce、full 与 FIRST_ELEMENT 的语义、对齐和 dtype 支持均须核验"

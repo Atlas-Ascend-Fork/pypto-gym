@@ -5,6 +5,15 @@ description: "把跨行不变量移出热循环，并仅在 packed 布局、蝶�
 status: "stable"
 tags: ["pypto-pro", "vec", "broadcast", "packing"]
 item_id: "vec-06"
+knowledge_links:
+  schema: "pypto-knowledge-links/1"
+  relations:
+    - kind: overlaps_with
+      target:
+        skill: pypto-pro-kernel
+        id: "document:skill/patterns/vf-outer-reduce.md#metadata-and-invariant-inputs"
+      scope: "循环不变的统计量或输入可在复用范围内一次加载，再按消费行广播。"
+      boundary: "关联只覆盖不变输入复用；八值 BLK、VL merge、蝶式归约和尾 pack 仍须各自的布局与数值证明。"
 bound_hint: "VEC、MTE2"
 applicability: "外提时数据须在复用循环内不变；VL merge 时须证明 R、packed 布局及 Tile、tiling、mask、dispatch 一致"
 target_api_gate: "仅限 Ascend 950PR 或 950DT；BRC_B32 是保守路径；BLK 须八哨兵 value ST；VL merge 须完整 packed/蝶式布局与尾 mask value ST"

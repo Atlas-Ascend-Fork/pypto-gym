@@ -5,6 +5,15 @@ description: "多组 make_tile_group 共享同一物理地址空间时，用每�
 status: "stable"
 tags: ["pypto-pro", "pipeline", "tile-group", "scheduling", "double-buffer"]
 item_id: "pipe-04"
+knowledge_links:
+  schema: "pypto-knowledge-links/1"
+  relations:
+    - kind: uses_contract
+      target:
+        skill: pypto-pro-kernel
+        id: "document:skill/api/crosscore-sync.md#keep-slot-selection-visible-to-the-stage-scanner"
+      scope: "共享地址空间的显式计数器要与实际槽位选择一致，并让阶段扫描器能够追踪被选择的 Tile。"
+      boundary: "目标的可追踪性不证明计数器相位正确；本卡每空间单游标、递增点、depth 与跨 task 生命周期仍需人工核验。"
 bound_hint: "PIPELINE"
 applicability: "同一地址空间（相同 addrs 与 mutex_ids）被多组 tile group 共享，且不同流水线阶段（如 QK 与 PV、drain 扩展轮、按位图跳块）对这些组的调用次数不一致"
 target_api_gate: "仅限 Ascend 950PR 或 950DT；仅使用 pl.make_tile_group 的下标取用 group[idx] 与 Python 标量计数器，已在当前工具链 kernel 中核验；其它 SoC 重新查表并验证"

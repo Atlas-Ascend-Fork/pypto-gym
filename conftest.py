@@ -11,6 +11,7 @@
 """Pytest 配置控制
 """
 import os
+import json
 import sys
 from pathlib import Path
 
@@ -76,8 +77,15 @@ def device_id():
 
 def pytest_configure(config):
     """按 --mode 注入运行时环境(sys.path / 环境变量), 供 op_caller 消费."""
+    from op_caller import configure_op_entries
+
     mode = config.getoption("--mode", "jit")
     os.environ["GYM_TEST_MODE"] = mode
+    try:
+        configure_op_entries(config.getoption("--op-entry"), mode=mode,
+                             base_dir=config.invocation_params.dir)
+    except ValueError as error:
+        raise pytest.UsageError(str(error)) from error
 
     if mode == "aclnn":
         lib_dir = config.getoption("--aclnn-lib-dir", "")
@@ -114,6 +122,53 @@ def pytest_addoption(parser: pytest.Parser):
         "--aclnn-lib-dir", default="",
         help="Directory containing pybind11 bridge .so (default: <repo>/build/<soc>/tests/)"
     )
+    parser.addoption(
+        "--op-entry", action="append", default=[], metavar="OP=FILE.py:CALLABLE",
+        help="Select a candidate public JIT entry for tests using get_op_caller; repeat for multiple operators"
+    )
+
+
+def pytest_terminal_summary(terminalreporter):
+    from op_caller import loaded_op_entries, unused_op_entries
+
+    for op, identity in sorted(loaded_op_entries().items()):
+        terminalreporter.write_line(
+            f"JIT entry {op}: {identity['path']}:{identity['callable']} "
+            f"sha256={identity['sha256']}"
+        )
+    if unused_op_entries():
+        terminalreporter.write_line(
+            "Requested JIT entries were not loaded: " + ", ".join(unused_op_entries()),
+            yellow=True,
+        )
+
+
+def pytest_sessionfinish(session, exitstatus):
+    from op_caller import unused_op_entries
+
+    if hasattr(session.config, "workeroutput"):
+        return
+
+    if exitstatus == 0 and not session.config.option.collectonly and unused_op_entries():
+        session.exitstatus = pytest.ExitCode.USAGE_ERROR
+
+
+@pytest.hookimpl(hookwrapper=True)
+def pytest_runtest_makereport(item, call):
+    from op_caller import loaded_op_entries
+
+    outcome = yield
+    entries = loaded_op_entries()
+    if call.when == "call" and entries:
+        outcome.get_result().user_properties.append(("pypto_gym_entries", json.dumps(entries)))
+
+
+def pytest_runtest_logreport(report):
+    from op_caller import merge_op_entry_identities
+
+    for name, value in report.user_properties:
+        if name == "pypto_gym_entries":
+            merge_op_entry_identities(json.loads(value))
 
 
 def _is_case_match_cards(item, target_cards) -> bool:

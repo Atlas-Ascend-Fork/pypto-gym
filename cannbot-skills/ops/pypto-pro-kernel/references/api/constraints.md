@@ -6,7 +6,7 @@ These restrictions are easy to work around, but each encounter costs a compilati
 
 ---
 
-## Type aliases cannot be used as annotations
+## Spell out complete Tensor annotations
 
 ```python
 T_A = pl.Tensor[[M, K], pl.DT_FP16]
@@ -15,7 +15,7 @@ T_A = pl.Tensor[[M, K], pl.DT_FP16]
 def kernel(a: T_A):          # InvalidType: Unsupported type annotation
 ```
 
-Annotations must spell out `pl.Tensor[[...], ...]` literally. **Module-level int constants can** appear in shapes (`[M, 2 * K]` works); the alias itself is what gets rejected.
+The selected parameter parser requires the complete `pl.Tensor[[...], ...]` form rather than a name holding that Tensor declaration. **Module-level int constants can** appear in shapes (`[M, 2 * K]` works). This does not reject aliases inside the Tensor's dtype position; [scalar annotations and dtype subexpressions](#annotate-scalar-parameters-directly-with-a-dtype) have different resolution paths. First establish that the selected callable reached this parser.
 
 ## Inline helpers accept only positional arguments
 
@@ -79,6 +79,7 @@ inner box cols (16), got remainder 8. Pad Cols to a multiple of 16.
 
 When slicing an accumulator into strips by address, **round the last strip's width up to 16** rather than declaring the exact remaining column count. Extra columns outside the valid region do not affect the result: store reads the narrowed parent handle.
 
+<!-- kernel-query: {"id":"jit-annotation-types","aliases":["jit-annotation-types","JIT scalar annotation","scalar parameter annotation"],"when":"The selected parser reports an unsupported or incomplete parameter annotation.","rules":["jit-scalar-dtype-alias","jit-annotation-type"]} -->
 ## Annotate scalar parameters directly with a dtype
 
 Use a concrete dtype for `@pl.jit` scalar parameters, such as `scale: pl.DT_FP32` or `count: pl.DT_INT64`. `pl.Scalar` is the DSL scalar value class; using it alone as a parameter annotation raises `Incomplete type annotation: pl.Scalar`. Do not change it to `pl.Scalar[...]` either. Tensor and Ptr parameters use complete declarations of `pl.Tensor[[shape], dtype]` and `pl.Ptr[dtype]`, respectively.
@@ -86,6 +87,17 @@ Use a concrete dtype for `@pl.jit` scalar parameters, such as `scale: pl.DT_FP32
 Distinguish the complete parameter annotation from its dtype subexpression: even if `FP32 = pl.DT_FP32` is defined, `epsilon: FP32` still raises `Unsupported type annotation: FP32`; write `epsilon: pl.DT_FP32`. In contrast, the alias in `pl.Tensor[[M,N], FP32]` is resolved by `resolve_dtype` and is supported. At behavior version `872df763f`, `resolve_type` requires a dtype attribute expression for a complete scalar annotation; the two entry points are not equivalent. Named TilingData classes follow a separate path, so this rule must not reject all name annotations.
 
 The official kernel parameter documentation (`pypto/docs/zh/guide/programming_guide/pro/development/kernel_function.md`) shows the dtype form. The installed parser's `_type_resolver.py::resolve_type` at behavior version `872df763f` agrees with actual parameter calls. Scalar values produced inside a kernel by `getval`, shape, or block APIs are a different use case and do not replace parameter declarations for caller-supplied scalars.
+
+<!-- kernel-query: {"id":"jit-entry-kind","aliases":["jit-entry-kind","jit-postponed-entry","native entry classification","postponed Tensor annotations","legacy JIT entry"],"symbols":["pl.jit"],"when":"Native capture rejects the imported entry's kind; inspect its observed callable type and annotation values.","rules":["native-entry-kind","jit-postponed-entry"]} -->
+## Check the imported entry before changing its layout
+
+`Expected a native @pl.jit Pro kernel` is an entry-classification boundary. Inspect the reported callable type, selected declaration and `string_annotations`; a host wrapper or legacy dispatch is not a native capture result. Native preflight preserves the source module's own future flags and reads fresh source bytes, so the inspection must have the same annotation semantics as ordinary Python loading.
+
+`declaration` identifies the selected callable's own code, while `wrapped_declaration`, when available, identifies its separately unwrapped function. Each available declaration binds its original file SHA. A wrapper's `__wrapped__` or copied annotations do not change which object was selected for capture. Native preflight reports this rejection as `entry_classification` with native parsing `not_established`; an entry-import or argument-binding failure must be resolved before a kernel-body parser or layout hypothesis. Plain output logs retain an unknown stage unless the caller supplies separate stage evidence.
+
+`jit-postponed-entry` brings this entry check forward when all supplied parameter annotations are strings and the selected recognizer cannot identify their Tensor/Ptr spellings. It is an advisory bound to the complete `_is_tile_kernel` source SHA256; changed or missing recognizers remain outside the check. Another recognized dtype parameter, eager annotation, wrapper or annotation rewrite has a different dispatch boundary. The check does not import the candidate or prove native parsing.
+
+On the selected `cbd3c4a778` frontend, CPU capture accepted eager Tensor annotations containing a dtype alias and accepted postponed Tensor annotations spelling `pl.DT_FP32` explicitly. Postponed Tensor annotations containing the alias instead produced a plain function rejected by native capture. Current JIT recognition (`pypto/python/pypto_pro/runtime/jit.py` in the matching source checkout) and a minimal paired probe establish this boundary; it is not an unconditional prohibition of `from __future__ import annotations` or of aliases inside Tensor/Ptr dtype positions. Inspect current installed behavior before choosing an eager annotation form or an explicit dtype spelling, then revalidate the unchanged numerical contract. A successful CPU capture is neither compilation nor numerical/performance evidence.
 
 ## Bind `pl.gemm` operands to variables first
 
@@ -183,17 +195,7 @@ The first entry in the official `wait_cross_core.md` parameter table defines `pi
 
 The [INT8/INT16 probe in Fixpipe §15](fixpipe.md#15-the-hf8-cell-neither-of-two-failures-was-an-hf8-problem) observed zeros for nonzero layouts, but its recorded conditions do not establish a general layout restriction. Check the supported conversion pair, loaded register arrangement and selected predicate bits before diagnosing unavailable lanes.
 
-For narrowed outputs, choose the store from its physical container map: [port packing](vf.md#distinguish-numerical-conversion-from-port-bit-packing-first) can emit dense ND output directly, while [de-interleave packing](vf.md#210-narrowing-astype-occupies-only-half-the-width-pair-two-chunks-and-de_interleave-before-storing) serves consumers needing a dense register. A valid layout selector alone does not establish a dense write.
-
-## Kernel definition modules cannot use `from __future__ import annotations`
-
-```python
-from __future__ import annotations   # ✗ Turns every annotation into a string
-...
-kernel[None, 1](a, b, out)           # TypeError: 'function' object is not subscriptable
-```
-
-`pl.jit` identifies Tile kernels through **actual objects** in parameter annotations (`_is_tile_kernel`'s isinstance check). Once future annotations turn them into strings, jit **silently returns an ordinary function wrapper** through the legacy path; only bracket launch fails. The symptom and root cause are one layer apart; hardware evidence dated 2026-09-29. It is fine in test/bench files, but **not in modules defining `@pl.jit` kernels**.
+For narrowed outputs, choose the store from its [physical container map](vf.md#210-narrowing-fp32-to-fp16-choose-port-packing-or-a-dense-register): port packing can emit dense ND output directly, while de-interleave packing serves consumers needing a dense register. A valid layout selector alone does not establish a dense write.
 
 ## Variable names inside `@pl.vector_function` have a single type environment; masks and data cannot share names
 

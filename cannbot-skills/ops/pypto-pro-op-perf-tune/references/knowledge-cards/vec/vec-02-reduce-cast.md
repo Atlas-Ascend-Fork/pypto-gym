@@ -5,6 +5,21 @@ description: "在精度合同允许时删除往返 Cast，否则批量转换，�
 status: "stable"
 tags: ["pypto-pro", "vec", "cast", "dtype"]
 item_id: "vec-02"
+knowledge_links:
+  schema: "pypto-knowledge-links/1"
+  relations:
+    - kind: uses_contract
+      target:
+        skill: pypto-pro-kernel
+        id: "contract:vf-fp16-widening"
+      scope: "必须用 FP32 计算时，核对 FP16 UNPK 搬入、数值 Cast、lane 顺序与计算 mask，避免不必要的 FP32 中转 Tile。"
+      boundary: "该契约的 FP16 路径不替代本卡 BF16、整数或特定工具链的能力门控；删除 Cast 还须满足原精度和舍入合同。"
+    - kind: uses_contract
+      target:
+        skill: pypto-pro-kernel
+        id: "contract:vf-fp32-narrowing"
+      scope: "收窄后按物理寄存器容器、PACK 方式与有效元素数设计输出。"
+      boundary: "端口压缩不执行数值转换；不继承其它 dtype 的舍入、饱和或当前性能结论。"
 bound_hint: "VEC"
 applicability: "存在冗余 Cast、可批量或就近转换的机会，或不必要的转换中转 Tile，且 dtype、rounding、布局与值域允许相应改写"
 target_api_gate: "仅限 Ascend 950PR 或 950DT；Tile 级 pl.cast 需当前 ST 支持，UNPK/PACK 须有明确分布模式与端到端 value ST"

@@ -17,6 +17,11 @@ import sys
 import pytest
 import torch
 
+# Slab publication orders intentional Vec reuse; keep its warning visible.
+pytestmark = pytest.mark.filterwarnings(
+    "error:Tile buffers in (Mat|Left|Right|ScaleLeft|ScaleRight|Acc) overlap:pypto_pro._errors.MutexMismatch"
+)
+
 # Support both direct execution and pytest from the repository root.
 if __package__:
     from .reference import attn_epilogue_golden_cpu, inverse_rope, quantize_mx

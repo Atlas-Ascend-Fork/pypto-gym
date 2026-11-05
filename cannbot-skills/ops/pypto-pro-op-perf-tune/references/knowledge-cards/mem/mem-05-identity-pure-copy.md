@@ -5,6 +5,15 @@ description: "identity（恒等映射）快路径：tiling 证明输出是输入
 status: "stable"
 tags: ["pypto-pro", "mem", "identity", "routing"]
 item_id: "mem-05"
+knowledge_links:
+  schema: "pypto-knowledge-links/1"
+  relations:
+    - kind: uses_contract
+      target:
+        skill: pypto-pro-kernel
+        id: "document:skill/api/datamove.md#host-tensor-strides-and-boundary-guards"
+      scope: "identity/pure-copy 路由须同时保留真实 shape、stride、offset、dtype、alias 与输出 guard 合同。"
+      boundary: "该物理契约不证明算子已退化为 identity；数学谓词和通用 fallback 仍需独立推导，不能按测试形状白名单路由。"
 bound_hint: "SCALAR、MTE2"
 applicability: "算子存在退化语义（identity reshape、单段 split、参数使变换退化为 copy），且该条件可由 shape/axis/layout/属性在 tiling 阶段完整证明"
 target_api_gate: "仅限 Ascend 950PR 或 950DT；依赖 pl.load/pl.store 二维整块搬运与 host 侧模板路由"

@@ -1,13 +1,18 @@
 # Debugging: symptom → first check → owner
 
-Open this when anything fails. Close it when you have either a verified fix or a framework-side escalation with evidence. The table routes; causes and mechanisms live in the owner documents — a row here is a *first check*, never a diagnosis.
+Use this table when the failing boundary still needs classification; a recognized diagnostic's focused context can take you directly to its owner. Close it when you have a verified fix or a framework-side escalation with evidence. The table routes; a row is a first check, never a diagnosis.
 
 ## First moves (before any theory)
 
-1. Preserve the evidence: full output, real exit code, the exact command, toolchain identity. No `pytest | tail` ([verification/board-runs.md](../verification/board-runs.md)).
-2. Classify: parse/compile-time error → compile-time *warning* → runtime fault (hang, AICore error) → wrong numbers. Different rows below.
-3. Re-run nothing yet. Repeating a run without changing state is not a second verification ([verification/evidence.md](../verification/evidence.md) #16).
-4. If the failure came from a suite run, isolate: after a first AICore fault the process is poisoned and later failures are cascade — rerun the first failure alone in a fresh process with a timeout ([verification/board-runs.md](../verification/board-runs.md)).
+1. Preserve the evidence: full output, real exit code, the exact command, toolchain
+   identity. No `pytest | tail` ([verification/board-runs.md](../verification/board-runs.md)).
+2. Classify: parse/compile-time error → compile-time *warning* → runtime fault (hang,
+   AICore error) → wrong numbers. Different rows below.
+3. Re-run nothing yet. Repeating a run without changing state is not a second
+   verification ([verification/evidence.md](../verification/evidence.md) #16).
+4. If the failure came from a suite run, isolate: after a first AICore fault the process
+   is poisoned and later failures are cascade — rerun the first failure alone in a fresh
+   process with a timeout ([verification/board-runs.md](../verification/board-runs.md)).
 
 For a Tensor rank mismatch, the [source-gated runner](../tooling/checks.md#run-a-command-after-source-checks) automatically associates the reported parameter with source declarations and same-name Host allocations. Inspect the selected callable and actual launch argument before changing JIT names or blaming caches. `check.py explain --source candidate.py --error-log failure.log` provides the same source-bound inspection without another device request. A name match is a lead, not proof of the call binding; unsupported error forms remain unclassified. Verify an edit actually changed the intended declaration, then retry the smallest relevant check. Renaming the kernel while leaving the wrong annotation intact does not isolate a cache defect.
 
@@ -15,7 +20,13 @@ When a contradictory declaration explains the reported boundary and the repair p
 
 ## Is your test lying to you?
 
-Before debugging the kernel, spend one minute on the verification harness itself. [diagnostics/validation-traps.md](../diagnostics/validation-traps.md) §1–§5 collects ways a test passes or fails *without meaning it*: a `raises(match=)` that matches its own source, a missing soc marker silently skipping the board, IR comparison that cannot see certain transforms, and false diffs from narrowing/compact and `memref_id`. Each entry has a discriminating experiment. A green test that is green for the wrong reason is worse than a red one ([verification/evidence.md](../verification/evidence.md) #14).
+Before debugging the kernel, spend one minute on the verification harness itself.
+[diagnostics/validation-traps.md](../diagnostics/validation-traps.md) §1–§5 collects ways a test
+passes or fails *without meaning it*: a `raises(match=)` that matches its own source, a
+missing soc marker silently skipping the board, IR comparison that cannot see certain
+transforms, and false diffs from narrowing/compact and `memref_id`. Each entry has a
+discriminating experiment. A green test that is green for the wrong reason is worse than
+a red one ([verification/evidence.md](../verification/evidence.md) #14).
 
 ## Validate the diagnostic probe
 
@@ -47,29 +58,45 @@ Before attributing periodic wrong values to a physical layout, inspect the emitt
 | Wrong *and nondeterministic* right after a cross-core handover (repeat runs corrupt differently) | Is the handover GM buffer the **same tensor as (or overlapping) the kernel's declared output**? Board-verified failure shape: reusing `out` as the cube→vector relay corrupts once the consumer does real VF compute (a pure passthrough hides it); a separate `ws` tensor fixes it | [api/crosscore-sync.md](../api/crosscore-sync.md) silent-failure checklist |
 | ~70% of elements wrong in a **multi-core mix kernel**, large regions still holding the output's initial value, every variant wrong in exactly the same way | The core index: in a mix kernel the vector side's `pl.get_block_idx()` is the flattened **AIV-thread** number (two consecutive values per physical core) — the core id is `get_block_idx() // get_subblock_num()`; skipping the division makes even threads write only the front half of each core's slice and odd threads the back half | [api/support.md](../api/support.md) §15 |
 | **First call correct, every later call deterministically wrong** (identical corruption signature across reruns); or sporadic 507015 on a mix kernel that scales with the output size | The launch group count: `kernel[None, X]` takes execution groups (1 cube + 2 vec each), NOT the AIV-thread count — passing 2× launches ghost groups whose `core_id ≥ NUM_CORES` stores land past `out`, silently clobbering a neighbouring tensor (an input goes dirty → every later call wrong) or an unmapped page (507015). Check the bracket number == physical cores first, then diff inputs against host copies, and only then sync theories | [api/crosscore-sync.md](../api/crosscore-sync.md) mix-kernel block_dim counts execution groups; [api/support.md](../api/support.md) §15 |
-| Columns alternate correct / near-constant garbage right after a **narrowing cast** (`vf.astype` to a half-width dtype) | The cast fills only the even half-lanes (`CastLayout.ZERO` semantics) — pair two chunks + `vf.de_interleave` into a dense register before the store | [api/vf.md](../api/vf.md) §2.10; [examples/algorithms/mm_softmax_mm](../../examples/algorithms/mm_softmax_mm/) |
+| Columns alternate correct / near-constant garbage right after a **narrowing cast** (`vf.astype` to a half-width dtype) | Inspect the physical containers and next consumer: explicit port packing can write dense ND memory; scatter or another dense-register consumer needs register compaction | [Narrowed-output contract](../api/vf.md#210-narrowing-fp32-to-fp16-choose-port-packing-or-a-dense-register) |
 | Output almost entirely zeros/garbage, **no error**, and the kernel calls `@pl.pipeline.stage` functions | Does the `@pl.jit` carry `pipeline=pl.pipeline.PipelineConfig(...)`? Without it the stage transform never runs and cross-core sync is silently not inserted — the calls still parse as plain functions | [diagnostics/check-coverage.md](../diagnostics/check-coverage.md) |
+| Floating outputs pass but a few exact INT8/discrete outputs differ by one | Observe pre-round boundaries; verify instrumentation and independently replace payload/scale stages before attributing the error to division or conversion | [Discrete-output diagnosis](../api/numerics.md#locate-a-discrete-output-disagreement) |
 | A handful of elements (<0.01%) fail tolerance, all where the reference itself is near zero, in a chained-matmul kernel | Test reduction-order and reference sensitivity before attributing the mismatch to the kernel. Preserve the supplied evaluator and tolerance; use an absolute-term-sum criterion only when the contract permits deriving that bound | [api/numerics.md](../api/numerics.md); [examples/algorithms/swiglu_ffn](../../examples/algorithms/swiglu_ffn/) |
 | Hang / timeout | Preserve the fault dump and, when available, map stuck PCs to the executed binary before choosing event, pipe/buffer or addressing hypotheses | [PC localization](../verification/board-runs.md#localize-a-stall-from-the-executed-binary); [cross-core sync](../api/crosscore-sync.md); [regression leads](../diagnostics/regressions.md) |
 | A range clamp or skipped empty loop introduces a hang | Separate negative, empty and nonempty cases; inspect which participant stopped producing a handshake still consumed elsewhere. Localize one participant at a time under the fault-isolation controls, and rederive any tile-size/semantic-flag threshold | [Empty-consumer checks](../diagnostics/validation-traps.md#empty-consumer-loops-need-their-own-reuse-check); [cross-core synchronization](../api/crosscore-sync.md) |
 | AICore fault (e.g. 507015) | Treat the process as poisoned (cascade); check whether the construct is a known blocked/defective combination | [diagnostics/defects/fixpipe-dual-dst-plus-relu-faults-aicore.md](../diagnostics/defects/fixpipe-dual-dst-plus-relu-faults-aicore.md); [diagnostics/defects/fixpipe-overview.md](../diagnostics/defects/fixpipe-overview.md); isolation per [verification/board-runs.md](../verification/board-runs.md) |
 | Numbers silently wrong on a quant/scale path | Known silent-drop defect and its boundary (one path drops scale, the sibling path is correct) | [diagnostics/defects/fixpipe-fp32-to-fp32-drops-scale.md](../diagnostics/defects/fixpipe-fp32-to-fp32-drops-scale.md) |
-| Error location points into generated `kernel.cpp`, not your source | Whether you are on a base where this class is fixed; if it reproduces on the current base, that is framework infrastructure — escalate | [diagnostics/defects/tuple-unpack-collapses-tile-memory-space.md](../diagnostics/defects/tuple-unpack-collapses-tile-memory-space.md); [skill constraints](../../SKILL.md#constraints-and-workspace-policy) |
+| Error location points into generated `kernel.cpp`, not your source | Whether you are on a base where this class is fixed; if it reproduces on the current base, that is framework infrastructure — escalate | [diagnostics/defects/tuple-unpack-collapses-tile-memory-space.md](../diagnostics/defects/tuple-unpack-collapses-tile-memory-space.md); report a minimal framework reproducer |
 | `printf`/`dump_data` output missing, `pto_assert` didn't stop | What each probe can reach and when output lands — several "missing" outputs are documented reach limits, and `pto_assert` logs without aborting | [api/support.md](../api/support.md) §13; [examples/basic_api/support/debug_probe](../../examples/basic_api/support/debug_probe/) |
 | Passes alone, fails in the suite / nondeterministic | Uninitialized bytes and cross-job interference before sync theories; then sync | [verification/board-runs.md](../verification/board-runs.md) (numerics and races); [diagnostics/validation-traps.md](../diagnostics/validation-traps.md) |
 | Upstream ST regression failing | Known historical shapes and isolation method — it is a lead sheet, not a whitelist | [diagnostics/regressions.md](../diagnostics/regressions.md) |
 
-What the framework will and will not catch for you — so you know which absences of errors mean nothing: [diagnostics/check-coverage.md](../diagnostics/check-coverage.md). Notably: auto-inserted locks are not a race-freedom proof, transforms/checks only run when `pipeline=` is passed, and non-constant offsets skip static checks.
+What the framework will and will not catch for you — so you know which absences of
+errors mean nothing: [diagnostics/check-coverage.md](../diagnostics/check-coverage.md). Notably:
+auto-inserted locks are not a race-freedom proof, transforms/checks only run when
+`pipeline=` is passed, and non-constant offsets skip static checks.
 
 ## Claiming "unsupported" or "framework bug"
 
-- The capability gate before any "does not exist / cannot do": search Python *and* C++ sides, retry with variant names (`pto_`/`pl_` prefixes, keyword-avoiding suffixes), check the official interface index, and state what you searched ([skill constraints](../../SKILL.md#constraints-and-workspace-policy); [verification/evidence.md](../verification/evidence.md) #13, #21).
+- The capability gate before any "does not exist / cannot do": search Python *and* C++
+  sides, retry with variant names (`pto_`/`pl_` prefixes, keyword-avoiding suffixes),
+  check the official interface index, and state what you searched (follow the evidence rules;
+  [verification/evidence.md](../verification/evidence.md) #13, #21).
 - Your candidate failing proves your candidate failed — not that no valid form exists.
-- Escalate to `pypto/` (framework infra) when the error message cannot locate a source line, needed IR/schedule information is not exposed, or behavior contradicts docs — record a minimal reproducer and check the target installation first.
-- Framework-side skills exist under `pypto/.agents/skills/` (aicore error locating, precision triage, host stacktrace, simulation). They target framework development; their applicability to the pro path is **unverified** — if one looks useful, verify it on a known case before trusting its conclusions.
+- Escalate to `pypto/` (framework infra) when the error message cannot locate a source
+  line, needed IR/schedule information is not exposed, or behavior contradicts docs —
+  compiler semantics and framework diagnostics remain framework responsibilities. Record a minimal reproducer first.
+- Framework-side skills exist under `../pypto/.agents/skills/` (aicore error locating,
+  precision triage, host stacktrace, simulation). They target framework development;
+  their applicability to the pro path is **unverified** — if one looks useful, verify it
+  on a known case before trusting its conclusions.
 
 ## Exit criteria
 
-- The fix is verified by the discriminating experiment for that symptom, not by "it passes now" — say *why* it failed before saying it is fixed.
-- For a framework defect, provide the minimal reproducer and toolchain identity. File an external report only when requested; update reusable diagnostic guidance when that is part of the task.
-- Any tolerance change has a stated numerical basis; widening a tolerance to make a test pass is never a fix ([skill constraints](../../SKILL.md#constraints-and-workspace-policy)).
+- The fix is verified by the discriminating experiment for that symptom, not by "it
+  passes now" — say *why* it failed before saying it is fixed.
+- If it was a framework defect: minimal reproducer recorded, escalation filed per
+  the framework’s own regression suite, and a defect note added under [diagnostics/defects/](../diagnostics/defects/)
+  (facts go to owners, not to this skill).
+- Any tolerance change has a stated numerical basis; widening a tolerance to make a test
+  pass is never a fix under the evidence rules.

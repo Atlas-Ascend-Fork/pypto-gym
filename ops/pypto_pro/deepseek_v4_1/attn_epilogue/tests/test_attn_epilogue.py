@@ -29,6 +29,7 @@ _LOG = logging.getLogger(__name__)
 sys.path.insert(0, str(_HERE))
 sys.path.insert(0, str(_HERE / "assets"))
 sys.path.insert(0, str(_HERE.parent / "op_kernel"))
+sys.path.insert(0, str(_HERE.parents[4] / "tests/common"))
 
 from attn_epilogue_golden_cpu import (  # noqa: E402  local test modules, path set above
     attn_epilogue_golden_cpu,
@@ -36,9 +37,16 @@ from attn_epilogue_golden_cpu import (  # noqa: E402  local test modules, path s
     quantize_mx,
 )
 from precision_compare import assert_exact, assert_payload  # noqa: E402
+from op_caller import get_op_caller  # noqa: E402
 
 
-pytestmark = pytest.mark.soc("950")
+# Slab publication orders intentional Vec reuse; keep its warning visible.
+pytestmark = [
+    pytest.mark.soc("950"),
+    pytest.mark.filterwarnings(
+        "error:Tile buffers in (Mat|Left|Right|ScaleLeft|ScaleRight|Acc) overlap:pypto_pro._errors.MutexMismatch"
+    ),
+]
 
 SUPPLIED_CASES = [(1, 0, 1.0), (33, 0, 1.0), (72, 16, 1.0), (129, 0, 1.0),
                   (193, 0, 1.0), (255, 0, 1.0), (72, 0, 0.0), (256, 0, 1e-37)]
@@ -177,14 +185,14 @@ def test_public_tp1(weights, t):
 
 @pytest.mark.parametrize("t", BOUNDARY_TOKENS)
 def test_token_boundaries(weights, t):
-    from attn_epilogue import attn_epilogue
+    attn_epilogue = get_op_caller("attn_epilogue")
     args = arguments(weights, t)
     out = attn_epilogue(*args)
     assert_exact(out, native_reference(*args)[0])
 
 
 def test_dynamic_token_range(weights):
-    from attn_epilogue import attn_epilogue
+    attn_epilogue = get_op_caller("attn_epilogue")
     for t in range(1, 257):
         args = arguments(weights, t)
         assert_exact(attn_epilogue(*args), native_reference(*args)[0], f"runtime T={t}")

@@ -5,6 +5,15 @@ description: "对 bf16（fp16）行数据逐行做逐元素 VF 计算时，把�
 status: "stable"
 tags: ["pypto-pro", "vec", "bf16", "widen", "pack", "shuffle"]
 item_id: "vec-19"
+knowledge_links:
+  schema: "pypto-knowledge-links/1"
+  relations:
+    - kind: uses_contract
+      target:
+        skill: pypto-pro-kernel
+        id: "document:skill/api/vf.md#distinguish-numerical-conversion-from-port-bit-packing-first"
+      scope: "以 B16/32-bit 容器、有效 lane、数值 Cast 和 PACK 位提取分别描述单行 UNPK_B16/PACK 通路。"
+      boundary: "UNPK/PACK 本身不等于浮点数值转换；BF16 的舍入、行宽及逐行独立性不能从 FP16 示例继承。"
 bound_hint: "VEC"
 applicability: "VF 逐行处理 bf16/fp16 数据且一行恰好填满一个 b16 寄存器（如 64 元素），各行相互独立、不跨行归约；当前实现用『加载整寄存器（两行）+ astype(CastLayout.ZERO/ONE) + interleave』展开、用『astype(低精度) + de_interleave』收窄"
 target_api_gate: "仅限 Ascend 950PR 或 950DT；依赖已核验的 vf.load_align(dist=pl.LoadDist.UNPK_B16)、vf.astype(→DT_FP32, round_mode=pl.VFRoundMode.CAST_RINT, saturate=pl.SaturateMode.OFF)、vf.astype(→DT_BF16, round_mode=pl.VFRoundMode.CAST_ROUND) 与 vf.store_align(dist=pl.StoreDist.PACK)；仓库内 engram_gate / engram_gate_bwd 已有同用法"

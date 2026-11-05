@@ -2,16 +2,24 @@
 
 Before remote operations, read the target project’s external environment and execution configuration. It must identify machines, paths, device selection, locks and environment scripts. Keep these machine-specific settings outside the skill.
 
+After sourcing an SDK environment, verify that the resolved library and profiler paths exist and that the actual interpreter can import its runtime. A copied setup script can retain an unavailable installation prefix. Correct that prefix in trial-local environment configuration before diagnosing a kernel failure; preserve the selected runtime and matching framework source.
+
 ## Execution and evidence capture
 
 1. Pin source and installation identity; confirm CANN/compiler versions and [actual imports](#verify-imports-in-the-execution-process). Python-only changes can use the documented single-file synchronization flow. For C++ changes, confirm the new library is installed and actually loaded: a successful build does not prove that it took effect.
-2. Run one board job at a time and respect device locks. A failed lock with empty logs may mean the test never started. Select idle resources through the environment configuration; do not terminate others' jobs.
+2. Run one board job at a time and respect device locks. A failed lock with empty logs may mean the test never started. Select idle resources through the environment configuration; do not terminate others' jobs. Before a timing capture, and again after an intermittent capture failure or unexplained latency change, check [device identity and shared occupancy](#device-identity-and-shared-occupancy). Preserve evidence of overlapping work and exclude affected timing comparisons; a successful correctness call does not establish exclusive collector or device access.
 3. Capture full stdout/stderr and retain the real exit code and completion marker before extracting a summary. Numerical harnesses must assert or exit nonzero on mismatches and caught exceptions; printing `FAIL` or a failure list still leaves an ordinary script's exit status at 0. Do not use the exit status of `pytest | tail` as a test result or interpret a missing summary as absence of failures.
 4. Estimate the number of compilation variants first. Start with a probe answering one question; batch related targets to amortize initialization, then expand coverage experiments.
 
 Use [check.py run](../tooling/checks.md#run-a-command-after-source-checks) in the execution environment, under the configured device lock and timeout. Include the submitted kernel, host wrapper and test in `--source`; run the actual assertion-based test or evaluator as the child command. It preserves child output/status and reports source SHA256, and rejects a successful command whose selected sources changed during the run. It cannot make a print-only harness assert, infer numerical success, inspect another host's imports, or recover a status already swallowed by a child shell pipeline.
 
 Calibrate the test's failure path once with a deliberately corrupted result at the original tolerance: it must fail before any timing callback. Assert public output shape/dtype, finiteness where required, guards and the actual evaluator's numerical criterion. A reported error norm or `ok: false` followed by process exit 0 is an invalid acceptance harness. Use the reference's required precision and output dtype for each branch, including BF16; keep correctness and timing behind the same assertions.
+
+### Device identity and shared occupancy
+
+Keep the runtime's logical device index separate from the management CLI's device identifier. Remapping a physical card to `npu:0` does not show that `npu-smi -i 0` queries that card. Use the physical selection in the external environment and the inventory's mapping; retain the actual query command and returned device ID. Identify the measuring process and its children by PID before labeling a listed context as external.
+
+A cooperative lock excludes only jobs using that same lock. A foreign process holding a device context does not by itself prove overlapping kernels or an active collector, and one zero-utilization snapshot does not prove an idle measurement window. Correlate process ownership, commands and observed activity with the capture interval. Preserve shared-load measurements as explicitly scoped exploration when isolation or stability is unresolved; do not turn them into a confirmed optimization ranking. Continue independent correctness and source work while waiting for a comparable timing window.
 
 ### Keep device ownership through remote-job completion
 
@@ -24,6 +32,8 @@ A controller timeout or lost SSH/tool connection does not prove that a remote jo
 Inspect how the evaluator discovers the public callable and loads the submission before invoking its build/install path. A source-directory option can build a wheel and install it into the current interpreter; it does not imply source-only loading. For a read-only shared installation, verify the evaluator's supported source-loading mode or use a trial-owned installation environment, preserving the pinned framework dependencies. Source loading still uses the original golden, checker and performance protocol.
 
 Inspect internal device-worker defaults as well as the parent command: an outer device lock does not serialize a worker pool. Match the environment's per-device concurrency policy and isolate compilation roots for any permitted concurrent workers. Set the evaluator's report, child-capture and temporary directories to trial-owned locations through its supported configuration before launching. A top-level output option need not control child reports or `TMPDIR`. Verify the [actual imports](#verify-imports-in-the-execution-process) in a fresh process matching the evaluator's execution context before launching the device evaluator.
+
+When comparing a bundled example with a repository operator, prefer an explicit public-callable override in the existing harness. Keep the original input generator, independent golden and comparator; first run the repository entry, then the candidate on their common supported domain. Private workspace, tiling or cache tests may remain specific to the repository implementation: select public-contract tests explicitly instead of treating their pass as candidate acceptance. Isolate same-named example modules, retain package-relative imports, report the loaded entry's path/hash and fail on loading errors rather than silently selecting the default. Include the loader and every executable local dependency in the checked source set. Metadata checks or candidate collection alone do not establish device execution.
 
 For a score target, complete the [capture preflight](native-timing.md#verify-capture-before-expanding-performance-coverage) as part of this first integration probe. A correctness-only invocation does not establish the evaluator's performance path.
 

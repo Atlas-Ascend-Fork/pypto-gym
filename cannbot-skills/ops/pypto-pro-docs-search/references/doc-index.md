@@ -16,6 +16,6 @@
 
 从快速入门总索引读取当前版本的样例页面路径；不同版本可能采用子目录或同级文件布局。
 
-按关键词补充发现时，仅检索 `guide/programming_guide/pro/`、`guide/quick_start/pro/` 和 `guide/introduction.md`。`PRO_MATERIAL_INDEX.md` §C 覆盖这三个范围的全部 Markdown 文件，包括各级 `index.md`；本表用于主题导航，不替代 §C 的完整清单。
+按当前问题补充发现时，限定检索 `guide/programming_guide/pro/`、`guide/quick_start/pro/` 和 `guide/introduction.md`。需要目录导航时读取对应 `index.md`，不要求先生成或遍历全量资料索引。
 
 缓存保留配套图片，未缓存的安装与通用配置页面由指南中的远端链接指向。当前缓存不含独立的错误码排障资料；报错时从上述调试指南与实际日志定位。API 参数与约束见 [`api-index.md`](api-index.md)，官方样例见 [`sample-index.md`](sample-index.md)。

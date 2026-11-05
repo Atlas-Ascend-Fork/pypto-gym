@@ -5,6 +5,15 @@ description: "把「GM→UB→NZ 转换→L1」的搬运，替换为消费数据
 status: "stable"
 tags: ["pypto-pro", "pipe", "cube", "load", "layout"]
 item_id: "pipe-05"
+knowledge_links:
+  schema: "pypto-knowledge-links/1"
+  relations:
+    - kind: alternative_to
+      target:
+        skill: pypto-pro-kernel
+        id: "document:skill/api/gemm.md#thin-row-contractions-compare-arithmetic-and-transport-paths"
+      scope: "针对章节中的原始 GM 操作数经 GM→UB→NZ→L1 路线，比较在 Cube 消费阶段直接 GM→L1 加载的替代方案。"
+      boundary: "仅关联运输路径讨论，不关联该章节的算术核心选择。本卡要求无需 Vector 加工、串行链无法有效重叠，并核对尾块可读范围；不能替换实际需要 Vector 计算的生产阶段。"
 bound_hint: "PIPELINE"
 applicability: "多阶段 V/C 串行链中存在仅为把 GM 数据搬入 L1 而设的 vec 暂存段（GM→UB→NZ 转换→L1），数据只被紧邻 cube 阶段消费、无需 vec 侧加工，串行链同步主导（阶段间无重叠），且上游恒写满全部行（尾块整行加载安全）"
 target_api_gate: "Ascend 950PR（A5）实测；依赖已核验的 pl.load（GM→Mat/L1 直达 + order 轴映射 + set_validshape 尾块语义）与 Mat/NZ TileType；尾块整行直载必须确认上游写满全部行，否则越界读未定义内存"

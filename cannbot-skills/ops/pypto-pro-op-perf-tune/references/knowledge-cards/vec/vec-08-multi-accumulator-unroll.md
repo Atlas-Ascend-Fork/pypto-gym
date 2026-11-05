@@ -6,6 +6,21 @@ status: "stable"
 tags: ["pypto-pro", "vec", "reduction", "unroll"]
 sources: [{"id": "mul-add-dst-api", "resource": "https://pypto.gitcode.com/pypto_pro/api/SIMD-API/operation/vf_computation/composite_computation/mul_add_dst.html", "title": "vf.mul_add_dst 官方 API"}]
 item_id: "vec-08"
+knowledge_links:
+  schema: "pypto-knowledge-links/1"
+  relations:
+    - kind: overlaps_with
+      target:
+        skill: pypto-pro-kernel
+        id: "document:skill/patterns/vf-row-reduce.md#choose-the-horizontal-reduction-frequency"
+      scope: "用独立 lane/寄存器累加器延后横向归约，并比较依赖链长度与寄存器压力。"
+      boundary: "独立累加、双块折叠和分层合并不是同一改法；尾部 MERGING 支持及重关联误差须单独证明。"
+    - kind: uses_contract
+      target:
+        skill: pypto-pro-kernel
+        id: "contract:vf-destination-state"
+      scope: "mul_add_dst 必须读取已初始化的各路累加器，并保留尚需的 inactive lane 状态。"
+      boundary: "隐式目标契约不代表当前版本支持 MERGING，不能把 ZEROING 作为保留旧累加值的替代。"
 bound_hint: "VEC"
 applicability: "结合性能指标及源码、生成物或 trace 判断单累加器 RAW 链是瓶颈且 spill 不是主因，归约长度足以摊销多累加器与最终合并"
 target_api_gate: "仅限 Ascend 950PR 或 950DT；示例所需 mul_add_dst MERGING 当前文档不支持，采用该示例前须另证；另核验 reduce、动态 pl.range 与展开度"

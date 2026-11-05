@@ -5,6 +5,21 @@ description: "删除仅供紧邻 VF 步骤消费的 Vec Tile store-load 往返�
 status: "stable"
 tags: ["pypto-pro", "vec", "memory", "register"]
 item_id: "vec-05"
+knowledge_links:
+  schema: "pypto-knowledge-links/1"
+  relations:
+    - kind: overlaps_with
+      target:
+        skill: pypto-pro-kernel
+        id: "document:skill/patterns/vf-row-reduce.md#choose-where-dependent-phases-share-state"
+      scope: "中间值仅被紧邻计算消费时，比较同 VF 寄存器接力或同 JIT 的 UB 状态共享，删除临时 Tile 往返。"
+      boundary: "仍承担跨循环状态、其它输出或 bank 布局作用的 Tile 不能删除；融合后的寄存器压力须实测。"
+    - kind: uses_contract
+      target:
+        skill: pypto-pro-kernel
+        id: "document:skill/api/vf.md#212-multiple-memory-accesses-to-the-same-tile-inside-vf-have-no-ordering-guarantee"
+      scope: "保留下来的同 VF store→load 依赖须按 VF 内存排序契约处理。"
+      boundary: "auto_mutex 的 Tile 调用间依赖不能代替 VF 内 barrier；直接寄存器接力不因本关联额外添加 barrier。"
 bound_hint: "VEC、MTE2、MTE3"
 applicability: "中间 Vec Tile 仅供紧邻 VF 步骤使用且无跨循环、输出或 bank-conflict 角色，生成物存在 store-load"
 target_api_gate: "仅限 Ascend 950PR 或 950DT；使用已核验的 Vf.full、reduce、shuffle、mem_bar 与 Cast，布局能力须补 value ST"

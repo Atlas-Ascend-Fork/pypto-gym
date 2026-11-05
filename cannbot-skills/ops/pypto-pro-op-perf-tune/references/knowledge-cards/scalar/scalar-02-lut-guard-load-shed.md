@@ -5,6 +5,15 @@ description: "SCALARLDST 饱和时，把热循环内链式查表（getval(meta)�
 status: "stable"
 tags: ["pypto-pro", "scalar", "load-store", "lut"]
 item_id: "scalar-02"
+knowledge_links:
+  schema: "pypto-knowledge-links/1"
+  relations:
+    - kind: overlaps_with
+      target:
+        skill: pypto-pro-kernel
+        id: "document:skill/patterns/vf-outer-reduce.md#metadata-and-invariant-inputs"
+      scope: "区分可提前捕获的小型不变查表与必须逐块读取的运行时索引，减少重复 getval 链。"
+      boundary: "UB 批量广播是另一备选，不能把它等同于标量分支选表；state 初始化副作用、动态 offset 支持及表规模门槛仍需核验。"
 bound_hint: "SCALARLDST、SCALAR"
 applicability: "热循环内存在 getval 结果再作为下一个 getval 偏移的链式查表，或每轮读取 state 类守卫标量；表项 launch 后不变且表很小，守卫条件首轮后恒成立"
 target_api_gate: "仅限 Ascend 950PR 或 950DT；须核验 pl.getval/pl.setval 动态偏移与运行期标量分支"
