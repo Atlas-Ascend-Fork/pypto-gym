@@ -9,7 +9,7 @@
 
 ## 📢 项目概述
 
-**CANNBot Skills — PyPTO-Gym** 是面向 PyPTO 与 PyPTO-Pro Tile 算子开发、大模型适配和模型治理的 CANNBot Agent Skills 模块，提供 37 个顶层技能与 4 个开发路径插件。
+**CANNBot Skills — PyPTO-Gym** 是面向 PyPTO 与 PyPTO-Pro Tile 算子开发、大模型适配和模型治理的 CANNBot Agent Skills 模块，提供 37 个领域技能、1 个公共技能与 4 个开发路径插件。
 
 **面向用户**：基于 PyPTO 编程框架的昇腾 NPU 算子开发者、模型适配工程师。
 
@@ -96,12 +96,21 @@ python scripts/check.py
 
 > 模型插件的 `init.sh` 同时安装 8 个算子支撑 skill（`pypto-intent-understand` 等），仅由 `pypto-fused-op-integration` 按需调用，不计入独立 skill 数。
 
+## 公共技能
+
+| 技能 | 用途 |
+|---|---|
+| [使用 ASD-STE100 约束技术文本](common/constrain-text-asd-ste100/SKILL.md) | 简化技术说明、知识卡片、交接文档和讲解稿；保留事实与证据范围，默认使用中文 |
+
+技能不依赖特定算子或仓库。可将整个技能目录复制到所用智能体的技能目录。
+
 ## 🔍 项目架构
 
 ### 目录结构
 
 ```
 cannbot-skills/
+├── common/               # 跨项目公共技能
 ├── ops/                  # 算子 Skills（PyPTO classic + PyPTO-Pro）
 ├── model/                # 模型适配与推理优化 Skills
 └── plugins-official/     # 官方 Plugins（开发路径入口，含 Agents）
