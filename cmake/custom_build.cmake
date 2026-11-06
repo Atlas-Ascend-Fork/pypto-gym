@@ -151,12 +151,10 @@ if (ENABLE_OPS_HOST AND NOT PREPARE_BUILD)
     get_property(_infer_srcs GLOBAL PROPERTY GYM_INFER_SRCS)
     get_property(_tiling_srcs GLOBAL PROPERTY GYM_TILING_SRCS)
     get_property(_opapi_srcs GLOBAL PROPERTY GYM_OPAPI_SRCS)
-    get_property(_pypto_gen_dirs GLOBAL PROPERTY GYM_PYPTO_GEN_DIRS)
     get_property(_tiling_check_srcs GLOBAL PROPERTY GYM_TILING_CHECK_SRCS)
     list(REMOVE_DUPLICATES _infer_srcs)
     list(REMOVE_DUPLICATES _tiling_srcs)
     list(REMOVE_DUPLICATES _opapi_srcs)
-    list(REMOVE_DUPLICATES _pypto_gen_dirs)
     list(REMOVE_DUPLICATES _tiling_check_srcs)
 
     # autogen 源清单
@@ -224,17 +222,30 @@ if (ENABLE_OPS_HOST AND NOT PREPARE_BUILD)
     set_target_properties(ophost_gym_tiling_obj PROPERTIES POSITION_INDEPENDENT_CODE ON)
     target_include_directories(ophost_gym_tiling_obj PRIVATE ${GYM_HOST_INCLUDES})
     if (_tiling_srcs)
-        # force-include pypto 生成头进 tiling 源(与 kernel 侧 tiling 定义一致性的权威参照)
-        set(_force_opts "")
-        foreach(_gen_dir ${_pypto_gen_dirs})
-            file(GLOB _gen_headers ${_gen_dir}/*_tilingkey.h ${_gen_dir}/*_tiling.h)
-            foreach(_h ${_gen_headers})
-                list(APPEND _force_opts -include ${_h})
-            endforeach()
+        # Per-source force-include: each tiling source only sees its own operator's
+        # generated headers. Globally including every operator's *_tilingkey.h in
+        # one TU redefines g_tilingDeclareParams/g_tilingSelectParams and breaks
+        # --ops ALL and comma-separated multi-op builds.
+        foreach(_src ${_tiling_srcs})
+            string(MD5 _src_id "${_src}")
+            unset(_gen_dir)
+            get_property(_gen_dir GLOBAL PROPERTY GYM_TILING_GEN_${_src_id})
+            if(_gen_dir AND EXISTS "${_gen_dir}")
+                # tilingkey header first: it pulls in template_argument.h, which
+                # defines int64_t needed by the tiling header (see migration doc
+                # fault "generated tiling 头顺序").
+                file(GLOB _gen_tilingkey_headers ${_gen_dir}/*_tilingkey.h)
+                file(GLOB _gen_tiling_headers ${_gen_dir}/*_tiling.h)
+                set(_op_force_opts "")
+                foreach(_h ${_gen_tilingkey_headers} ${_gen_tiling_headers})
+                    list(APPEND _op_force_opts -include ${_h})
+                endforeach()
+                if(_op_force_opts)
+                    set_source_files_properties(${_src} PROPERTIES
+                        COMPILE_OPTIONS "${_op_force_opts}")
+                endif()
+            endif()
         endforeach()
-        if (_force_opts)
-            set_source_files_properties(${_tiling_srcs} PROPERTIES COMPILE_OPTIONS "${_force_opts}")
-        endif()
         target_sources(ophost_gym_tiling_obj PRIVATE ${_tiling_srcs})
     target_link_libraries(ophost_gym_tiling_obj PRIVATE intf_pub)
     endif()

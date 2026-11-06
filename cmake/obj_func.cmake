@@ -88,6 +88,13 @@ macro(add_tiling_modules)
     endif()
     if(DEFINED PYPTO_GEN_DIR)
         set_property(GLOBAL APPEND PROPERTY GYM_PYPTO_GEN_DIRS ${PYPTO_GEN_DIR})
+        # 记录“tiling 源 -> 本算子生成目录”映射: 多算子同一 build tree 时,
+        # custom_build.cmake 只把本算子的 *_tilingkey.h/*_tiling.h force-include
+        # 进对应 tiling 源, 避免 g_tilingDeclareParams 等固定名变量重复定义.
+        foreach(_src ${_tiling_srcs} ${_sub_tiling_srcs})
+            string(MD5 _src_id "${_src}")
+            set_property(GLOBAL PROPERTY GYM_TILING_GEN_${_src_id} "${PYPTO_GEN_DIR}")
+        endforeach()
         # tiling 布局校验(configure 期执行, codegen 已由 enable_pypto_kernel 完成).
         # 手写 TilingData 与 kernel dataclass 字段级 diff, 不一致即 FATAL_ERROR;
         # 一致则登记布局核对程序源(构建期编译并执行)供 custom_build.cmake 消费.
