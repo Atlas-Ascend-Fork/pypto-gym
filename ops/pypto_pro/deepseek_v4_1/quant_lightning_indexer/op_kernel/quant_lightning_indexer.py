@@ -76,9 +76,8 @@ def _selection_keys_from_scores(scores, keys, size, valid_size):
 
 
 @pl.vector_function
-def _selection_emit_ordered(scores, out_idx, out_val, span):
+def _selection_emit_ordered(scores, out_idx, out_val, topk, count, offset, write_values):
     """All keys fit: preserve logical order and pad without selection."""
-    topk, count, offset, write_values = span
     p = vf.create_mask(pattern=pl.MaskPattern.ALL, dtype=U32)
     inf_bits = vf.full(0xFF80, p, dtype=U32)
     minus_one = vf.full(-1, p, dtype=I32)
@@ -112,7 +111,7 @@ def _selection_emit_selection(
     mapping,
     mapped,
     offset,
-    write_values=True,
+    write_values,
 ):
     p16 = vf.create_mask(pattern=pl.MaskPattern.ALL, dtype=U16)
     p32 = vf.create_mask(pattern=pl.MaskPattern.ALL, dtype=U32)
@@ -246,19 +245,19 @@ def _selection_select_part(groups, scores, index_map, offsets,
         pl.set_validshape(mt, [1, size])
         pl.load(mt, index_map, [row, part * SELECTION_CHUNK])
     _selection_keys_from_scores(st, kt, SelectWidth, size)
-    _selection_histograms_high_vf(ht, kt, SelectWidth // 256)
+    _selection_histograms_high_vf(ht, kt, SelectWidth // 256, 0)
     _selection_find_high_bin_and_histograms_low(
         lt, it, ht, kt, bt, nt,
-        SelectWidth - pl.min(topk, size) + 1, SelectWidth // 256,
+        SelectWidth - pl.min(topk, size) + 1, SelectWidth // 256, 0,
     )
     _selection_find_kth_vf(tt, lt, it, bt, nt)
-    _selection_collect_indices_gt_eq_vf(xt, kt, tt, SelectWidth // 128)
+    _selection_collect_indices_gt_eq_vf(xt, kt, tt, SelectWidth // 128, 0)
     offset = 0
     if HasOffset:
         offset = pl.getval(offsets, row)
     _selection_emit_selection(
         xt, st, ot, vt, topk, pl.min(topk, size),
-        part * SELECTION_CHUNK, mt, Mapped, offset,
+        part * SELECTION_CHUNK, mt, Mapped, offset, True,
     )
     pl.set_validshape(ot, [1, topk])
     pl.set_validshape(vt, [1, topk])
@@ -288,7 +287,7 @@ def _selection_select_parts(
 
 @pl.vector_function
 def _selection_histograms_high_vf(
-    hist_high_tile, score_u16_tile, hist_loop: pl.DT_INT64, base=0
+    hist_high_tile, score_u16_tile, hist_loop: pl.DT_INT64, base
 ):
     """Histogram high byte (BYTE_1, MSB); chistv2 accumulates into dst reg."""
     preg_b8 = vf.create_mask(pattern=pl.MaskPattern.ALL, dtype=pl.DT_UINT8)
@@ -334,7 +333,7 @@ def _selection_histograms_high_vf(
 @pl.vector_function
 def _selection_find_high_bin_and_histograms_low(
     hist_low_tile, idx_high_tile, hist_high_tile, score_u16_tile,
-    sqz_idx_buf, nk_value_tile, bottom_k, hist_loop, base=0,
+    sqz_idx_buf, nk_value_tile, bottom_k, hist_loop, base,
 ):
     p8 = vf.create_mask(pattern=pl.MaskPattern.ALL, dtype=pl.DT_UINT8)
     p16 = vf.create_mask(pattern=pl.MaskPattern.ALL, dtype=U16)
@@ -414,7 +413,7 @@ def _selection_collect_indices_gt_eq_vf(
     score_u16_tile,
     kth_value_tile,
     vf_loop: pl.DT_INT64,
-    base=0,
+    base,
 ):
     """Collect indices where value > kth (GT), then value == kth (EQ).
 
@@ -486,7 +485,7 @@ def _cache_select_widen_histogram(src, dst, row):
 @pl.vector_function
 def _cache_select_emit_cached(
     indices, cache, out_idx, out_val, topk, base, begin,
-    mapped=False, mapping=0, permuted=False, offset=0, write_values=True,
+    mapped, mapping, permuted, offset, write_values,
 ):
     p = vf.create_mask(pattern=pl.MaskPattern.ALL, dtype=U32)
     zero = vf.full(0, p, dtype=U32)
@@ -668,8 +667,7 @@ def _streaming_selection_count_keys(src, count_tile, active, threshold):
 
 
 @pl.vector_function
-def _streaming_selection_collect_keys(src, index_tile, count_tile, span):
-    active, threshold, equal = span
+def _streaming_selection_collect_keys(src, index_tile, count_tile, active, threshold, equal):
     p = vf.create_mask(pattern=pl.MaskPattern.ALL, dtype=U16)
     zero = vf.full(0, p, dtype=U16)
     one = vf.full(1, p, dtype=U16)
@@ -788,18 +786,18 @@ def _streaming_selection_write(scores, indices, values, groups, span):
                 pl.load(src, scores, [row, start])
                 if phase == 0:
                     _streaming_selection_collect_keys(
-                        src, local, ct, (active, lo, False)
+                        src, local, ct, active, lo, False
                     )
                 else:
                     _streaming_selection_collect_keys(
-                        src, local, ct, (active, lo, True)
+                        src, local, ct, active, lo, True
                     )
                 available = pl.getval(ct, 0)
                 count = pl.min(available, topk - written)
                 if count > 0:
                     _selection_emit_selection(
                         local, src, oi, ov, count, count,
-                        start, local, False, offset,
+                        start, local, False, offset, True,
                     )
                     pl.set_validshape(oi, [1, count])
                     pl.set_validshape(ov, [1, count])
@@ -1377,10 +1375,10 @@ def _generic_score_generic(
                 if HasOffset:
                     offset = pl.getval(offsets, row)
                 if max_k <= topk:
-                    _selection_emit_ordered(src, oi, ov, (topk, max_k, offset, True))
+                    _selection_emit_ordered(src, oi, ov, topk, max_k, offset, True)
                 else:
                     _selection_keys_from_scores(src, keys, SelectWidth, max_k)
-                    _selection_histograms_high_vf(high, keys, SelectWidth // 256)
+                    _selection_histograms_high_vf(high, keys, SelectWidth // 256, 0)
                     _selection_find_high_bin_and_histograms_low(
                         low,
                         index,
@@ -1389,11 +1387,11 @@ def _generic_score_generic(
                         buf,
                         nth,
                         SelectWidth - pl.min(topk, max_k) + 1,
-                        SelectWidth // 256,
+                        SelectWidth // 256, 0,
                     )
                     _selection_find_kth_vf(threshold, low, index, buf, nth)
                     _selection_collect_indices_gt_eq_vf(
-                        selected, keys, threshold, SelectWidth // 128
+                        selected, keys, threshold, SelectWidth // 128, 0
                     )
                     _selection_emit_selection(
                         selected,
@@ -1406,6 +1404,7 @@ def _generic_score_generic(
                         src,
                         False,
                         offset,
+                        True,
                     )
                 pl.set_validshape(oi, [1, topk])
                 pl.set_validshape(ov, [1, topk])
@@ -1425,11 +1424,11 @@ def _generic_score_generic(
                     blocks = (max_k + 7) // 8
                     if capacity >= blocks:
                         _selection_emit_ordered(
-                            src, oi, ov, (capacity, blocks, 0, False)
+                            src, oi, ov, capacity, blocks, 0, False
                         )
                     else:
                         _selection_keys_from_scores(src, keys, block_width, blocks)
-                        _selection_histograms_high_vf(high, keys, block_width // 256)
+                        _selection_histograms_high_vf(high, keys, block_width // 256, 0)
                         _selection_find_high_bin_and_histograms_low(
                             low,
                             index,
@@ -1438,11 +1437,11 @@ def _generic_score_generic(
                             buf,
                             nth,
                             block_width - pl.min(capacity, blocks) + 1,
-                            block_width // 256,
+                            block_width // 256, 0,
                         )
                         _selection_find_kth_vf(threshold, low, index, buf, nth)
                         _selection_collect_indices_gt_eq_vf(
-                            selected, keys, threshold, block_width // 128
+                            selected, keys, threshold, block_width // 128, 0
                         )
                         _selection_emit_selection(
                             selected,
@@ -1524,8 +1523,7 @@ def _paged_convert_weights(src, dst, count):
 
 
 @pl.vector_function
-def _paged_reduce_heads(src, weight, dst, hist, span):
-    position, e0, o0, e1, o1, e2, o2, all_valid = span
+def _paged_reduce_heads(src, weight, dst, hist, position, e0, o0, e1, o1, e2, o2, all_valid):
     p16 = vf.create_mask(pattern=pl.MaskPattern.ALL, dtype=BF)
     zb = vf.full(0, p16, dtype=pl.DT_UINT16)
     zero = vf.bit_cast(zb, dtype=BF)
@@ -1762,7 +1760,7 @@ def _paged_emit_shard(groups, buffers, out_idx, out_val, span):
         )
         _cache_select_emit_cached(
             xt, ot, oi, ov, PAGED_TOPK, r * shard_width,
-            part * shard_width, False, 0, True,
+            part * shard_width, False, 0, True, 0, True,
         )
         pl.store(out_idx, oi, [row + r, part * PAGED_TOPK])
         pl.store(out_val, ov, [row + r, part * PAGED_TOPK])
@@ -1796,11 +1794,11 @@ def _paged_vector_step(weights, out_idx, out_val, groups, span):
     position = t * PAGED_TILE_N
     if kbase + PAGED_TILE_N <= pl.min(visible0, pl.min(visible1, visible2)):
         _paged_reduce_heads(
-            vt, wbt, ot, hist, (position, e0, o0, e1, o1, e2, o2, True)
+            vt, wbt, ot, hist, position, e0, o0, e1, o1, e2, o2, True
         )
     else:
         _paged_reduce_heads(
-            vt, wbt, ot, hist, (position, e0, o0, e1, o1, e2, o2, False)
+            vt, wbt, ot, hist, position, e0, o0, e1, o1, e2, o2, False
         )
     if t == steps - 1:
         _paged_emit_shard(
@@ -2183,12 +2181,12 @@ def _paged_score_paged(
             pl.load(val, out_val, [row, 0])
             pl.load(idx, out_idx, [row, 0])
             _selection_keys_from_scores(val, sk, merge_width, merge_width)
-            _selection_histograms_high_vf(ht, sk, merge_width // 256)
+            _selection_histograms_high_vf(ht, sk, merge_width // 256, 0)
             _selection_find_high_bin_and_histograms_low(
-                lt, it, ht, sk, bt, nt, merge_width - PAGED_TOPK + 1, merge_width // 256
+                lt, it, ht, sk, bt, nt, merge_width - PAGED_TOPK + 1, merge_width // 256, 0
             )
             _selection_find_kth_vf(tt, lt, it, bt, nt)
-            _selection_collect_indices_gt_eq_vf(xt, sk, tt, merge_width // 128)
+            _selection_collect_indices_gt_eq_vf(xt, sk, tt, merge_width // 128, 0)
             row_offset = 0
             if HasOffset:
                 row_offset = pl.getval(offsets, row)
