@@ -41,6 +41,8 @@ NPU 端到端用例在无设备时自动跳过（`@requires_npu`）。用例矩�
 
 ## 3. 性能数据
 
+> **采集机器**：本节全部耗时、带宽与占用率数据均在本机 `Ascend950PR_9589`（32 AI Core，32 Cube / 64 Vector，L2 128 MiB）上采集。
+
 环境：Ascend950PR（cube/vector 32/64）；CANN 9.3.0；模型规格 `H=7168, D=512, Dr=510, block=128`
 （`value_bytes=256`、`scale_bytes=16`）；`torch.npu.Event` 取中位；派发阈值 `FUSED_T_MAX=2048`。
 

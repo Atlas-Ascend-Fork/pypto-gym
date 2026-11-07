@@ -77,6 +77,8 @@ golden（`tests/assets/engram_gate_bwd_golden_cpu.py`）自身还有一层独立
 
 ## 性能结果
 
+> **采集机器**：本节全部耗时、带宽与占用率数据均在本机 `Ascend950PR_9589`（32 AI Core，32 Cube / 64 Vector，L2 128 MiB）上采集。
+
 **采集口径。** 采用 CANN 官方的 kernel 明细采集方式（`kernel_details`），在单张 Ascend 950PR 上完成：
 
 1. 预热：先以一次大尺寸矩阵乘把频率带到稳态，随后清空 L2 缓存；

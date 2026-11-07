@@ -49,6 +49,8 @@ TopK；`s_ori`/`s_cmp` 为两侧 KV 窗口长度（页数 × `bs`）。用例名
 
 ## 性能结果
 
+> **采集机器**：本节全部耗时、带宽与占用率数据均在本机 `Ascend950PR_9589`（32 AI Core，32 Cube / 64 Vector，L2 128 MiB）上采集。
+
 ### 绝对性能结果
 
 设备 `Ascend950PR_9589`（32 Cube / 64 Vector），分核数由运行期 `cube_core_num` 规划；msprof

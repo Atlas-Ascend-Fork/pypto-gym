@@ -60,6 +60,8 @@
 
 ## 性能结果
 
+> **采集机器**：本节全部耗时、带宽与占用率数据均在本机 `Ascend950PR_9589`（32 AI Core，32 Cube / 64 Vector，L2 128 MiB）上采集；为历史批次，本轮未重新采集。
+
 ### 绝对性能结果
 
 **环境与批次**：Ascend950PR_9589（32 Cube / 64 AIV，L2 = 128 MiB），CANN 9.3.0、PyPTO 0.2.1、PyTorch 2.12.0+cpu、torch_npu 2.12.0.post2、Python 3.12，device 0。下表数据采自内核源码 SHA256 `349f6aa6dddeec19d6a8ac3329b3926d44ea0e317bf6e69209f53a5738d29764`；本次核对的 kernel 文件 SHA256 `62503e2ca494678a2078e11662a67fff8ba70a1017ed0ed7763d5a15387126ca`。原文说明两者差异仅为文件头和模块 docstring；当前目录没有前一版本的原始采集附件，本次未独立重建这一历史比较。

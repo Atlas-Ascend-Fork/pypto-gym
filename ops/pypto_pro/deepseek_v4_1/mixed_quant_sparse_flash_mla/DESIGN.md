@@ -10,8 +10,8 @@
 
 - 13 个 P0（README.md「约束说明」的合约）真机精度 PASS（pro_scheme_a + LSE 1e-5 +
   空行严格 0/sink + 输出有限）。
-- 平台：Ascend950PR_9579（950PR_957x.ini：UB 248KB/AIV、L1 512KB、L0A/L0B 64KB、
-  L0C 256KB、28 Cube/56 Vector）。launch `block_dim = metadata.planner blocks`（≤`AIC_CORE_MAX_NUM=36`；host 规划器缺省取当前设备 `cube_core_num`）。
+- 平台：Ascend950PR_9589（`Ascend950PR_9589.ini`：UB 248KB/AIV、L1 512KB、L0A/L0B 64KB、
+  L0C 256KB、32 Cube/64 Vector）。launch `block_dim = metadata.planner blocks`（≤`AIC_CORE_MAX_NUM=36`；host 规划器缺省取当前设备 `cube_core_num`）。
 - host 边界：wrapper 只校验、`torch.empty`、派生标量、一次 launch；metadata 由
   host 入口 `mixed_quant_sparse_flash_mla_metadata` 生成（用户指令）。
 

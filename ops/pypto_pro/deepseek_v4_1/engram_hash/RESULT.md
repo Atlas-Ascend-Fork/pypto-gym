@@ -33,18 +33,20 @@ NPU 用例自动跳过（`make_offsets` 的 CPU 用例始终运行）。用例�
 
 ## 4. 性能
 
+> **采集机器**：本节全部耗时、带宽与占用率数据均在本机 `Ascend950PR_9589`（32 AI Core，32 Cube / 64 Vector，L2 128 MiB）上采集。
+
 ### 4.1 采集环境与口径
 
 采集环境（本机规格）：
 
 | 项目 | 规格 |
 |---|---|
-| 设备 | Ascend950PR_9579，单卡，HBM 128 GB |
-| SoC | DAV_3510（arch=a5）；core_num=28，cube_core_num=28，vector_core_num=56 |
+| 设备 | Ascend950PR_9589，单卡，HBM 128 GB |
+| SoC | DAV_3510（arch=a5）；core_num=32，cube_core_num=32，vector_core_num=64 |
 | CANN | 9.2.0 |
 | PyPTO | pypto_pro 0.2.1（随 CANN 9.2 发布包提供） |
 | torch / torch_npu | 2.12.0 / 2.12.0.post2 |
-| 主机 | AMD EPYC 9355（128 线程），754 GB 内存 |
+| 主机 | Intel Xeon E5-2690 v4（2 路 × 14 核，56 线程），314 GiB 内存 |
 
 采集口径：性能以 **kernel 采集耗时（msprof `Task Duration`）** 为准，条件如下。
 

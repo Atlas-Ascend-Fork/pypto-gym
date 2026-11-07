@@ -28,6 +28,8 @@
 
 ## 性能结果
 
+> **采集机器**：本节全部耗时、带宽与占用率数据均在本机 `Ascend950PR_9589`（32 AI Core，32 Cube / 64 Vector，L2 128 MiB）上采集。
+
 ### 采集协议
 
 - 设备：device 0（空闲卡），核配额 `Block Num=32 / Mix Block Num=64`。

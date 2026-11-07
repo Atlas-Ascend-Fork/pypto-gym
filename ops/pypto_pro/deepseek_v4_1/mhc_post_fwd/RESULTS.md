@@ -53,6 +53,8 @@
 
 ## 性能结果
 
+> **采集机器**：本节全部耗时、带宽与占用率数据均在本机 `Ascend950PR_9589`（32 AI Core，32 Cube / 64 Vector，L2 128 MiB）上采集。
+
 ### 采集口径
 
 - **设备**：`Ascend950PR_9589`（`DAV_3510`，64 Vector core），物理卡 0；`TILE_FWK_DEVICE_ID=0`。

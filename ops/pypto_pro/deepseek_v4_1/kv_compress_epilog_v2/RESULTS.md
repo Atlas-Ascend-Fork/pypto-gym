@@ -38,6 +38,8 @@
 
 ## 性能结果
 
+> **采集机器**：本节全部耗时、带宽与占用率数据均在本机 `Ascend950PR_9589`（32 AI Core，32 Cube / 64 Vector，L2 128 MiB）上采集。
+
 验证平台为 Ascend 950PR，CANN 9.1.0；Python 3.10.20、torch 2.10.0+cpu、torch_npu 2.10.0.post4，安装包 `pypto` 为 0.3.0，导入模块为 `pypto_pro`。
 
 测量前完成编译、预热和精度检查。每次被测调用之前，按 [cann-bench](https://gitcode.com/cann/cann-bench) 的官方 utility 清理 L2 并同步，清理输入为 192 MiB FP16 张量。utility 按每个核的完整 tile 处理缓存。清理任务和同步不计入被测任务时长。

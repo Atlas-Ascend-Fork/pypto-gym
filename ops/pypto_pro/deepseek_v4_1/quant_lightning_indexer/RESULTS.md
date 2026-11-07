@@ -110,6 +110,8 @@ CPU 参考实现另有一层独立性校验：分数用 **E2M1 位域解码 + FP
 
 ## 性能结果
 
+> **采集机器**：本节全部耗时、带宽与占用率数据均在本机 `Ascend950PR_9589`（32 AI Core，32 Cube / 64 Vector，L2 128 MiB）上采集。
+
 **采集口径。** 全部使用 Ascend 官方 profiler：`msprof --output=<dir> --ascendcl=off --task-time=on
 python <bench>`，取 `op_summary_*.csv` 里 `Op Name = PYPTO_quant_lightning_indexer_kernel`
 那些行的 `Task Duration(us)`；`Block Num` 恒为 32、`Task Type` 恒为 `MIX_AIC`。计时流程：
