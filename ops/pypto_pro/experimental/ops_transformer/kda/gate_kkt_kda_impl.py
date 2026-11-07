@@ -119,7 +119,7 @@ def gate_kkt_kda_kernel(
     acc_g = pl.make_tile_group(
         type=pl.TileType(shape=[C, K], dtype=pl.DT_FP32,
                          target_memory=pl.MemorySpace.Acc, layout=pl.NZ,
-                         fractal=1024),
+                         fractal=1024, compact=0),
         addrs=0x0, mutex_ids=[6])
 
     # ── Phase 3 tiles ──

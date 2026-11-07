@@ -151,7 +151,7 @@ def wy_kda_kernel(
     acc = pl.make_tile_group(
         type=pl.TileType(shape=[C, TILE_N], dtype=pl.DT_FP32,
                          target_memory=pl.MemorySpace.Acc, layout=pl.NZ,
-                         fractal=1024),
+                         fractal=1024, compact=0),
         addrs=0x0, mutex_ids=[13])
 
     # ── Common tile references ──

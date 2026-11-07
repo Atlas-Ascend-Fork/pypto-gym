@@ -133,12 +133,12 @@ def inversion_kda_cube_kernel(
     # reads of the previous buffer. fp32 [CS,CS]=64KB x2 = 128KB (L1=512KB, fits).
     y_l1 = pl.make_tile_group(
         type=pl.TileType(shape=[CS, CS], dtype=pl.DT_FP32,
-                         target_memory=pl.MemorySpace.Mat, layout=pl.NZ,
+                         target_memory=pl.MemorySpace.Mat, layout=pl.NZ, compact=0,
                          valid_shape=[-1, -1]),
         addrs=L1_A, mutex_ids=[0, 1])
     x_l1 = pl.make_tile_group(
         type=pl.TileType(shape=[CS, CS], dtype=pl.DT_FP32,
-                         target_memory=pl.MemorySpace.Mat, layout=pl.NZ),
+                         target_memory=pl.MemorySpace.Mat, layout=pl.NZ, compact=0),
         addrs=L1_B, mutex_ids=[2])
     # ── 64x64 block tiles: BOTH matmuls (Y@Y and X@Y) are block-sparse, so the old
     # 128x128 a_l0a/b_l0b/acc are gone.  These own L0 outright — no aliasing, no stomp.
@@ -177,7 +177,7 @@ def inversion_kda_cube_kernel(
     # stage_nz: NZ staging, reused sequentially for the Y and X UB->L1 inserts each round.
     stage_nz = pl.make_tile_group(  # [CS_HALF, CS] NZ staging for X half -> x_l1 insert
         type=pl.TileType(shape=[CS_HALF + 1, CS], dtype=pl.DT_FP32,
-                         target_memory=pl.MemorySpace.Vec, layout=pl.NZ),
+                         target_memory=pl.MemorySpace.Vec, layout=pl.NZ, compact=0),
         addrs=UB_NZ, mutex_ids=[17])
 
     # ── Compute num_chunks by scanning cu_seqlens ──
