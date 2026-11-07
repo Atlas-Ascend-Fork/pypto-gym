@@ -128,6 +128,8 @@ inline aclDataType to_acl_dtype(at::ScalarType dtype) {
         case at::ScalarType::Char: return ACL_INT8;
         case at::ScalarType::Short: return ACL_INT16;
         case at::ScalarType::Bool: return ACL_BOOL;
+        case at::ScalarType::Float8_e4m3fn: return ACL_FLOAT8_E4M3FN;
+        case at::ScalarType::Float8_e5m2: return ACL_FLOAT8_E5M2;
         default:
             TORCH_CHECK(false, "unsupported tensor dtype for aclTensor: ", c10::toString(dtype));
     }
