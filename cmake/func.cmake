@@ -163,12 +163,18 @@ function(add_ops_compile_options)
 endfunction()
 
 function(add_ops_tiling_keys)
-    cmake_parse_arguments(OP_COMPILE "" "OP_NAME" "COMPUTE_UNIT" "TILING_KEYS" ${ARGN})
+    # cmake_parse_arguments takes exactly three keyword lists (options / one-value /
+    # multi-value). TILING_KEYS used to be passed as a fourth list, which made it an
+    # *unparsed* argument: OP_COMPILE_TILING_KEYS stayed empty and the guard below
+    # returned silently, so --tiling_key never reached custom_opc_options.ini.
+    cmake_parse_arguments(OP_COMPILE "" "OP_NAME" "COMPUTE_UNIT;TILING_KEYS" ${ARGN})
     if(NOT OP_COMPILE_TILING_KEYS)
         return()
     endif()
     list(JOIN OP_COMPILE_TILING_KEYS "," STRING_TILING_KEYS)
-    add_ops_compile_options(OP_NAME ${OP_COMPILE_OP_NAME} OPTIONS --tiling_key=${STRING_TILING_KEYS})
+    add_ops_compile_options(OP_NAME ${OP_COMPILE_OP_NAME}
+            COMPUTE_UNIT ${OP_COMPILE_COMPUTE_UNIT}
+            OPTIONS --tiling_key=${STRING_TILING_KEYS})
 endfunction()
 
 function(add_compile_cmd_target)
@@ -183,6 +189,19 @@ function(add_compile_cmd_target)
 
     add_custom_target(${COMPILE_CMD_TARGET} ALL
         COMMAND ${CMAKE_COMMAND} -E make_directory ${GEN_OUT_DIR}
+        # Per-build-round transient state of the generated compile scripts. Both files
+        # outlive the build that created them, and nothing else ever clears them:
+        #   compile_stop.flag  - touched by a script's on_failure so its parallel
+        #                        siblings bail out early. Left behind, the NEXT round's
+        #                        scripts exit at their entry check_stop with only
+        #                        "Stop flag detected, exiting..." and no real error.
+        #   compile_pids.txt   - on_failure kill -9's every pid listed here; stale pids
+        #                        from an interrupted round can hit recycled processes.
+        # This target runs before every kernel compile target (they depend on
+        # generate_compile_cmd), so clearing here is once per round, not per script,
+        # and the in-round fail-fast behaviour is preserved.
+        COMMAND ${CMAKE_COMMAND} -E rm -f
+            ${GEN_OUT_DIR}/compile_stop.flag ${GEN_OUT_DIR}/compile_pids.txt
         COMMAND ${Python3_EXECUTABLE} ${GYM_UTIL_SCRIPT_DIR}/ascendc_bin_param_build.py
             ${ASCEND_AUTOGEN_DIR}/aic-${CMD_COMPUTE_UNIT}-ops-info.ini
             ${GEN_OUT_DIR} ${CMD_COMPUTE_UNIT} ${OP_TILING_KEY_OPTION} ${OP_DEBUG_CONFIG_OPTION}
