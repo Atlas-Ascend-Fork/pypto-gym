@@ -15,6 +15,7 @@ import importlib.util
 import json
 import os
 from pathlib import Path
+import re
 import shutil
 import subprocess
 import tempfile
@@ -32,6 +33,18 @@ spec.loader.exec_module(installer)
 def write(path, content):
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(content, encoding="utf-8")
+
+
+def snapshot_user_files(project):
+    files = {}
+    for path in project.rglob("*"):
+        if not path.is_file():
+            continue
+        relative_path = path.relative_to(project)
+        if relative_path.parts[0] == ".opencode" or path == project / "AGENTS.md":
+            continue
+        files[relative_path.as_posix()] = path.read_bytes()
+    return files
 
 
 def expected_skill_files() -> dict:
@@ -178,6 +191,27 @@ class ActualResourceTest(unittest.TestCase):
             result = installer.install(project)
             config = project / ".opencode"
             self.assert_skill_bundle(config, expected_skill_files())
+            standard = config / "skills/pypto-pro-op-standard/SKILL.md"
+            for entry in (project / "AGENTS.md", config / "agents" / f"{installer.PLUGIN}.md"):
+                self.assertIn(installer.display_path(standard), entry.read_text(encoding="utf-8"))
+            reference = "references/precision_compare.py"
+            self.assertIn(f"]({reference})", standard.read_text(encoding="utf-8"))
+            self.assertTrue((standard.parent / reference).is_file())
+            kernel = config / "skills/pypto-pro-kernel"
+            for relative in (
+                "SKILL.md",
+                "references/workflows/delivery.md",
+            ):
+                document = kernel / relative
+                links = re.findall(
+                    r"\]\(([^)\s]+/pypto-pro-op-standard/SKILL\.md)\)",
+                    document.read_text(encoding="utf-8"),
+                )
+                self.assertTrue(links, relative)
+                for target in links:
+                    resolved = (document.parent / target).resolve()
+                    self.assertEqual(resolved, standard.resolve())
+                    self.assertTrue(resolved.is_file())
             for obsolete in (
                 "hooks",
                 "plugins",
@@ -196,6 +230,40 @@ class ActualResourceTest(unittest.TestCase):
                 receipt["installed_agents"], [installer.PLUGIN, *installer.AGENTS]
             )
             self.assertEqual(result["subagents"], list(installer.AGENTS))
+
+    def test_installation_preserves_delivery_choices_and_operator_artifacts(self):
+        """Installing the default resource must not execute a delivery policy."""
+        choices = {
+            "default": "Python/JIT 源码交付整理采用默认策略。\n",
+            "disabled": "关闭交付整理，保留现有目录、入口和文档。\n",
+            "alternative": "交付整理仅采用 docs/delivery-policy.md 的格式。\n",
+        }
+        contract = "功能、精度和性能按 acceptance.json 验收，验证最终公开入口。\n"
+        for name, choice in choices.items():
+            with self.subTest(policy=name), tempfile.TemporaryDirectory() as temporary:
+                project = Path(temporary).resolve() / name
+                files = {
+                    "business/op.py": "def public_entry(value):\n    return value\n",
+                    "business/golden.py": "def reference(value):\n    return value\n",
+                    "business/test_op.py": "# Existing project test entry.\n",
+                    "docs/usage.rst": "Existing operator documentation\n",
+                    "docs/delivery-policy.md": "Keep business/ entries; document only in docs/usage.rst.\n",
+                    "acceptance.json": json.dumps({
+                        "cases": ["regular", "boundary"],
+                        "rtol": 0.001,
+                        "atol": 0.001,
+                        "performance": "supplied evaluator; original cache policy",
+                    }),
+                }
+                write(project / "AGENTS.md", choice + contract)
+                for relative, content in files.items():
+                    write(project / relative, content)
+                original = {relative: (project / relative).read_bytes() for relative in files}
+                for _ in range(2):
+                    installer.install(project)
+                    self.assertIn(choice + contract, (project / "AGENTS.md").read_text(encoding="utf-8"))
+                    self.assertEqual(snapshot_user_files(project), original)
+                    self.assertTrue((project / ".opencode/skills/pypto-pro-op-standard/SKILL.md").is_file())
 
 
 class InstallationTest(unittest.TestCase):

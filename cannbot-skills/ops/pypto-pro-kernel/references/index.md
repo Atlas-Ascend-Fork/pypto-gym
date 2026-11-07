@@ -23,7 +23,7 @@ Choose the current workflow from [SKILL.md](../SKILL.md), then consult the match
 | Compilation failure, incorrect results or a hang | [Symptom-driven debugging](workflows/debugging.md) |
 | Numerically correct; only device timing is needed | [Native-task timing](verification/native-timing.md) |
 | Numerically correct; optimization is needed | [Experiment selection and complete-call comparison](workflows/optimization.md) |
-| Prepare a standalone operator handoff | [Delivery layout, direct kernel definitions and packaging](workflows/delivery.md) |
+| Prepare an operator handoff | [Delivery target and policy selection, native implementation and final validation](workflows/delivery.md) |
 
 ## Implementation patterns
 

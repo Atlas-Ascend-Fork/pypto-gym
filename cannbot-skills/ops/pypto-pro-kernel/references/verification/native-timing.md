@@ -8,7 +8,9 @@ Before collecting samples, define the [performance workload and locality regimes
 
 ## Choose and name the metric
 
-The workspace's default speed claim uses profiler device-task duration. Keep one source throughout a comparison; these metrics are not interchangeable:
+Choose the final performance protocol before the first complete timed case. Follow the user's supplied evaluator and measurement requirements, then applicable project performance rules. When none are specified, use CANN official `msprof`, with L2 clearing recommended. Keep that protocol through optimization and final acceptance. Disabling or replacing artifact organization does not change the selected collector, workload, cache policy or acceptance requirements. Performance validation does not require running the default artifact-organization stage first.
+
+The bundled helper measures profiler device-task duration for diagnosis and paired experiments. Its results establish final performance only when the selected protocol uses the same collector, workload and cache policy. Keep one source throughout a comparison; these metrics are not interchangeable:
 
 | Metric | Meaning |
 | --- | --- |

@@ -42,6 +42,7 @@ class LicenseScopeTests(unittest.TestCase):
                 (
                     "cannbot-skills/plugins-official/pypto-pro-op-orchestrator/",
                     "cannbot-skills/ops/pypto-pro-kernel/",
+                    "cannbot-skills/ops/pypto-pro-op-standard/",
                 )
             ):
                 continue
