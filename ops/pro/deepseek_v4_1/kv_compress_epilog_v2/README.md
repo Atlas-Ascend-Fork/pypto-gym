@@ -129,6 +129,6 @@ kv_compress_epilog_v2/
 验证：
 
 ```bash
-pytest ops/pro/experimental/kv_compress_epilog_v2/tests -q --mode jit
-pytest ops/pro/experimental/kv_compress_epilog_v2/tests -q --mode aclnn
+pytest ops/pro/deepseek_v4_1/kv_compress_epilog_v2/tests -q --mode jit
+pytest ops/pro/deepseek_v4_1/kv_compress_epilog_v2/tests -q --mode aclnn
 ```
