@@ -159,9 +159,30 @@ Task subagent 启动时，遵循以下信息传递规则：
   - 当前迭代状态中的"当前轮次""连续无提升""失败累计"是否与轮次记录表一致？
   - ❌ 任何一项不一致 → **禁止进入 Task subagent！必须先修正 Todo**
 - [ ] ⛔ 校验通过后，是否已启动 Task subagent？（未启动禁止进入下一阶段）
-- [ ] ⛔ 达标状态校验（Task 返回后检查）：
-  - 摘要中"达标状态"为 ✅已达标 → 进入 S5_REPORT
-  - 摘要中"达标状态"为 ❌未达标 → 继续启动下一个 PHASE 的 Task
+- [ ] ⛔ INIT 退出门控（INIT→S1 转移时必查）：
+  - `run_cases.py` 已创建（`custom/<op>/<op_dir>/run_cases.py`）且 `py_compile` 通过？
+  - smoke 验证通过：`run_cases.py --cases <smallest> --compile-only` → OK？
+  - 交叉验证通过：`run_cases.py --cases <tuning-case-id> --perf` 的 E2E 数字 == 官方 `draw_swim_lane.py` summary 的 E2E？（一次性确认 dyn_topo 解析正确）
+  - `tuning_case_set`（精度集）+ `compile_only_gap_fill`（编译期补漏）已记录到 MEMORY + Todo？
+  - ❌ 任一缺失 → **禁止 dispatch S1！必须在 INIT 会话内补完**
+- [ ] ⛔ S2 退出门控（S2→S3 转移时必查）：
+  - tuning case swimlane 数据存在（`merged_swimlane.json` / `bubble_analysis.log`）——重量级，S3 详细分析用
+  - covering set 其余 case 的 light E2E 基线已采集（`run_cases.py --cases <non-tuning> --perf` 输出行）？
+  - ❌ tuning case swimlane 缺失 → 禁止用 light E2E 替代——S3 bubble/core 分析依赖完整 swimlane
+- [ ] ⛔ S3 退出门控（S3→S4 转移时必查）：
+  - tuning case 详细性能报告存在（`performance_analysis_report.md`）？
+  - covering set per-case E2E 基线表已写入 MEMORY（tuning case from swimlane summary, 其余 from S2 light runs）→ 作为 S4 ITer 比较基线？
+  - ⛔ Tile 站点清单 + A4 议程骨架已生成（机械存在性门控）：`list_tile_boundaries.py <impl> --out _debug/tile_boundaries.txt --emit-agenda _debug/a4_agenda.md` 已运行且两文件存在；报告头部 impl sha256 与当前 impl 一致（impl 后续任何结构/配置变更 → 必须重新生成）。文件缺失或 sha256 过期 → 禁止进入 S4——所有 Rule 4 站点级门控以该清单的站点集合为准，清单缺失即门控空洞（历史事故：脚本未运行 → 自创豁免无人拦截）。
+- [ ] ⛔ 达标状态校验（Task 返回后首先检查）：
+  - 摘要中"达标状态"为 ✅已达标 → 进入 S5_REPORT（跳过以下完整性校验——达标即止，不强制消除所有潜在精度问题）
+  - 摘要中"达标状态"为 ❌未达标 → 继续以下结构变更台账校验
+- [ ] ⛔ 结构变更台账校验（仅未达标时执行）：
+  - §2 表格中每个已采纳项是否均标注 结构级/配置级？
+  - F-1~F-21 全表标记是否完整（无 ⏳ 遗留）？
+  - ⛔ 分支验证证据完整性（tile/unroll 类 ITER，措辞无关门控）：台账中每个 tile 取值/unroll_list 变更类已采纳 ITER，必须含 `run_cases.py` 的 `[case N]` 输出行（受影响分支参数 + 验证 case + 逐 case 结果）。缺 → 摘要退回。"已在 tuning case 上精度通过"不满足本门控（见 SKILL.md §5 + §1b「分支验证」）
+  - ⛔ 精度集实测完整性（tile/unroll 类 ITER，措辞无关门控）：台账中每个 tile/unroll 类 ITER 是否含 `run_cases.py --cases <affected> --perf` 的 per-case `[case N] E2E XXXus` 行？分歧时是否记录了为回退 case 增设/修改的分支 + 重测数字（⛔ 禁止整体回退）？缺 → 摘要退回（判据是逐 case 数字）
+  - 首轮摘要是否包含入口基线既有结构标记清单及 audited 状态？
+  - 结构 delta 计算是否正确？delta 非空且未达标 → 是否已按 PHASE_SUMMARY_F 门控路由到 PHASE_FRONTEND 重跑？
 
 ## 摘要模板
 
@@ -181,12 +202,19 @@ Task subagent 启动时，遵循以下信息传递规则：
 - 调优目标: [目标] us（差距: [%]%）
 - 达标状态: ✅已达标 / ❌未达标
 
-### 2. 已采纳优化
-| # | 轮次 | 优化项 | 修改内容 | 收益 | 代码位置 |
-|---|------|--------|---------|------|---------|
-| 1 | F-1 | BLOCK_SIZE | 128→64 | -13.6% | file:line |
+### 2. 已采纳优化（⛔ 结构变更台账）
+| # | 轮次 | 优化项 | 修改内容 | 变更类型（⛔必填：结构级/配置级） | 收益 | 代码位置 |
+|---|------|--------|---------|------|---------|---------|
+| 1 | F-1 | BLOCK_SIZE | 128→64 | 配置级 | -13.6% | file:line |
 
-### 3. 已失败优化（⛔ 禁止重试）
+> **⛔ 结构变更台账（FRONTEND 摘要必填，编排器 PHASE_SUMMARY_F 门控依据）**：
+> - 每个已采纳未回退优化点标注 `结构级`（循环消除/创建/合并/类型变更/外提改变了最内层循环/M轴重映射）或 `配置级`（tile/cache/pass option）
+> - **首轮追加**：入口基线既有结构标记清单（如已应用的 F-19 批量化、已消除的循环等，非本轮采纳但存在于代码中）+ `audited: yes/no` 状态（本轮已重审的标记置 yes）
+> - 结构 delta = 本轮结构级采纳数 +（仅首轮）未 audited 的基线结构标记数；delta 非空且未达标 → 编排器触发 FRONTEND 重跑（清除全部 DO-NOT-RETRY + 重跑完整阶段A + F- 全表重查）；delta 为空或已达标 → 正常推进
+> - F-1~F-21 全表标记完整性（✅已尝试/❌已失败/❌不适用/⏳待尝试）作为台账附表一并提供
+> - **⛔ tile/unroll 类已采纳 ITER 附表（分支验证 + covering set 实测，缺失 = 门控退回）**：每个 tile 取值/unroll_list 变更类已采纳 ITER 一行——受影响分支参数 | 分支验证 case+结果（精度/compile-only）| covering set 逐 case 前后 µs（case_id: before→after）| 分歧处理（无分歧 = "一致改善"；有分歧 = 增设/修改的分支 + 重测数字）
+
+### 3. 已失败优化（⛔ 禁止重试；结构变更重跑轮次中该清单作废，须重新实测）
 | # | 轮次 | 尝试项 | 失败原因 | 已回退 |
 |---|------|--------|---------|--------|
 | 1 | F-2 | unroll_list | 性能回退+8.6% | ✅ |

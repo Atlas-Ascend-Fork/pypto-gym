@@ -116,21 +116,67 @@ S4_TUNE = PHASE_FRONTEND → PHASE_SUMMARY_F
 
 | 当前状态 | 完成条件 | 转移到 | 强制动作 | ⛔ state_transition 门控 |
 |---------|---------|--------|---------|------------------------|
-| INIT | 用户已提供目标（如"提升X倍"/"≤X us"）或用户确认 | S1_SETUP | 记录目标到 Todo，计算目标执行时间 | 完成时调用 `state_transition(opDir, "complete_stage", 0)` |
-| S1_SETUP | 环境检查全部通过（见下方「环境检查清单」）+ 精度通过 | S2_COLLECT | ⛔ S1a 环境检查：逐项检查环境；⛔ S1b 精度校验：环境通过后运行精度校验；⛔ 全部通过后强制创建完整 Todo | S1a通过时调用 `state_transition(opDir, "start_stage", 1)`，全部通过后调用 `state_transition(opDir, "complete_stage", 1)` |
-| S2_COLLECT | swimlane.json 存在 + ⛔ S-20 检查完成（max_workspace_kb 已按 NPU 推荐值设置，host_options 已配置） | S3_ANALYZE | ⛔ S2 阶段首次运行时检查 stdout 中 "Recommended: set max_workspace_kb near XXXX KB" 提示，提取推荐值设置到 runtime_options；同时设置 host_options={"compile_monitor_enable": 0} | 完成时调用 `state_transition(opDir, "start_stage", 2)` → 验证后调用 `complete_stage(2)` |
-| S3_ANALYZE | 性能报告文件存在 | S4_TUNE | 记录基准性能 | 完成时调用 `state_transition(opDir, "start_stage", 3)` → 验证后调用 `complete_stage(3)` |
+| INIT | 用户已提供目标（如"提升X倍"/"≤X us"）或用户确认 | S1_SETUP | 记录目标到 Todo，计算目标执行时间；⛔ **确定 tuning case + covering set + 创建 run_cases.py**（见下方「covering set + runner 创建」），写入 Todo 并传入后续所有 S4 dispatch | 完成时调用 `state_transition(opDir, "complete_stage", 0)` |
+| S1_SETUP | 环境检查全部通过（见下方「环境检查清单」）+ 精度通过 | S2_COLLECT | ⛔ S1a 环境检查：逐项检查环境；⛔ S1b 精度校验：环境通过后运行 `run_cases.py --cases all`（精度模式，全 covering set）→ 验证 runner + 建立 per-case 精度基线；⛔ 全部通过后强制创建完整 Todo | S1a通过时调用 `state_transition(opDir, "start_stage", 1)`，全部通过后调用 `state_transition(opDir, "complete_stage", 1)` |
+| S2_COLLECT | swimlane.json 存在 + ⛔ S-20 检查完成（max_workspace_kb 已按 NPU 推荐值设置，host_options 已配置） | S3_ANALYZE | ⛔ S2 阶段首次运行时检查 stdout 中 "Recommended: set max_workspace_kb near XXXX KB" 提示，提取推荐值设置到 runtime_options；同时设置 host_options={"compile_monitor_enable": 0}；**tuning case 全 swimlane merge（重量级，S3 详细分析用）；covering set 其余 case 用 `run_cases.py --cases <non-tuning> --perf`（轻量 E2E，per-case 基线）** | 完成时调用 `state_transition(opDir, "start_stage", 2)` → 验证后调用 `complete_stage(2)` |
+| S3_ANALYZE | 性能报告文件存在 | S4_TUNE | 记录基准性能：tuning case 详细 bubble/core/load 分析（from swimlane）+ covering set per-case E2E 基线表（tuning case from swimlane summary, 其余 from S2 light runs）→ 写入 MEMORY 作为 S4 ITer 比较基线 | 完成时调用 `state_transition(opDir, "start_stage", 3)` → 验证后调用 `complete_stage(3)` |
 | S4_TUNE | ⛔ 提前达标（PHASE_SUMMARY_F / PHASE_SUMMARY_I_n 达标时直接→S5）或 外循环≤3轮全部完成（FRONTEND + [SWIMLANE→INCORE]×≤3 及其对应的 SUMMARY） | S5_REPORT | ⛔ 各PHASE间通过SUMMARY强制交接；⛔ 每轮外循环从SWIMLANE_n入口重新独立采集性能数据 | 每个 PHASE 完成时调用 `state_transition(opDir, "complete_stage", 4)` |
 | S5_REPORT | 报告文件已保存 | DONE | ⛔ 还原 debug_options | 完成时调用 `state_transition(opDir, "complete_stage", 5)` |
 
 ### 第二级状态转移表（S4_TUNE 内部）
+
+**⛔ covering set + runner 创建（INIT 时，与 tuning case 同时确定）**：
+
+> 目的：tile/unroll 类优化（F-8/F-9/F-10/F-11/F-16/F-17/F-20/S-11/S-12）改变**编译期分支**——单 tuning case 实测无法覆盖其他分支取值的编译正确性与性能。covering set + run_cases.py runner 是这些优化的验证基线（分支验证 + 采纳决策见 basic-block-optimization.md §1b）。
+
+**步骤 1：确定 covering set（规则驱动，最小集）**：
+
+不从 cases.yaml 枚举"每个参数的每个取值"（过冗余）——按以下规则选出 **2-3 个精度 case + 编译期补漏**的最小集，覆盖结构极端值而非穷举：
+
+1. **锚点 case** = tuning case（主性能 case，必须在集合内——perf 信号须在其上）
+2. **边界 regime** = 与锚点 qualitatively 不同的 loop_count regime（如 decode 类（loop_count=1）vs prefill 类（loop_count 大））
+3. **覆盖 2 个最内层 loop + 每个 if-statement 的分支**：选一个 case 覆盖锚点未覆盖的 layout/causal/case 标量分支值（结构补集 case，如锚点用 layout A + flag=True，补集 case 用 layout B + flag=False）
+4. **编译期补漏（compile-only gap-fill）**：未被精度集覆盖的等价类分支（如某 case 标量=8, 某 case 标量=512, 某 loop_count=2/4）→ 用 `--compile-only` 快速检查（不做精度/性能实测），只验证编译正确性
+5. **每次 INIT 从当前 impl 的分支结构重新推导**（规则，不硬编码 case 列表）——分支结构随调优变化时，集合相应扩展
+
+**步骤 2：创建 run_cases.py（多 case 验证 runner）**：
+
+在 `custom/<op>/<op_dir>/` 下创建 `run_cases.py`。参考实现：`custom/<op>/<class>/test_<op>.py`。
+
+runner 规格：
+- **导入** `make_case_inputs`, `<op>_wrapper`, `<op>_golden`, `detailed_tensor_compare` 从现有 `test_<op>.py`（复用 env/path/compare 逻辑）
+- **CASES 表**：covering set 的 case_id → kwargs 字典（匹配 `_run` 签名；seed = SHA256(case_id)，对齐 `eval/test_inputs.py`）
+- **模式**：
+  - 默认（精度）：逐 case 调 `_run`（golden compare）；per-case `try/except`（不 raise）；输出 `[case N] layout=.. causal=.. -> PASS/FAIL` + `OVERALL: n/N` + exit code；`[PRECISION_PASS]` 仅全通过时打印
+  - `--compile-only`：wrapper 调两次（t1=compile+exec, t2=cached exec, compile≈t1−t2）；跳过 golden；输出 `[case N] compile 63s exec 0.9s -> OK`
+  - `--perf`：`DUMP_DEVICE_PERF=true`（`debug_options` 由 LLM S4 添加/S5 移除）；解析 `dyn_topo.txt` 的 `min(exec_start)`/`max(exec_end)` → `E2E = max−min`（跳过 swimlane merge）；输出 `[case N] E2E 214076.58us util 3.88% -> OK`
+- **选择器**：`--cases <id1>,<id2>,<id3>`（默认 = all）；`--l1-only` 保留为 `--cases <tuning-case-id>` 别名（S2 依赖）
+
+**步骤 3：验证 runner（INIT 退出条件）**：
+1. `py_compile run_cases.py` 通过
+2. `run_cases.py --cases <smallest> --compile-only` 通过（~2 min smoke）
+3. **交叉验证（一次性）**：`run_cases.py --cases <tuning-case-id> --perf` vs 官方 `draw_swim_lane.py` summary → E2E 数字一致（确认 dyn_topo 解析正确）；记录到 MEMORY
+
+记录到 Todo + MEMORY：`tuning_case_set: [case_id, ...]`（精度集）+ `compile_only_gap_fill: [case_id, ...]` + runner 路径 + 交叉验证结果。每次 S4 dispatch 摘要须包含精度集 + 编译期补漏清单。
+
+**各 stage 使用方式（S4/S5 — S1b/S2/S3 见上表强制动作列）**：
+- **S4 ITers**：ITER_MODIFY 后 → `run_cases.py --cases <affected> --compile-only`（分支验证）→ `run_cases.py --cases <affected> --perf`（ITER_VERIFY，对比 S3 基线表）→ per-case `[case N]` 台账 → 采纳决策（分歧→分支细化，§1b）
+- **S5 / regression**：`run_cases.py --cases all`（精度模式，covering set 回归）
 
 > **state_transition 调用说明**：表中所有 `state_transition` 调用均在**当前会话**中执行（即生成摘要的那个会话），在启动 Task subagent **之前**完成。新 subagent 通过摘要获取状态，不调用 state_transition。
 
 | 当前 PHASE | 进入动作 | 退出条件 | 转移到 | ⛔ state_transition 门控 |
 |-----------|---------|---------|--------|------------------------|
 | PHASE_FRONTEND | 加载 tune-frontend 子技能 + ⛔ 执行阶段A(全局分析:Loop+常量+Reshape+TileShape) + 阶段B(局部分析:数据操作) + ⛔ 编排器核查分析制品 + 生成优化点清单 | ⛔ 见「退出条件详细定义」 | PHASE_SUMMARY_F | 退出时调用 `state_transition(opDir, "start_stage", 4)` |
-| PHASE_SUMMARY_F | 生成 FRONTEND 阶段交接摘要 + ⛔ **检查是否已达标** + Task 启动新 subagent 进行隔离 | 摘要已生成 且 新 subagent 已启动 | 达标→S5_REPORT / 未达标→PHASE_SWIMLANE_1 | Task 启动前调用 `state_transition(opDir, "complete_stage", 4)` |
+| PHASE_SUMMARY_F | 生成 FRONTEND 阶段交接摘要 + ⛔ **检查是否已达标** + ⛔ **结构变更台账门控**（见下）+ Task 启动新 subagent 进行隔离 | 摘要已生成 且 新 subagent 已启动 | **达标 → S5_REPORT（不重跑）**；未达标 + 台账结构 delta 非空 → **PHASE_FRONTEND 重跑**；未达标 + delta 为空 → PHASE_SWIMLANE_1 | Task 启动前调用 `state_transition(opDir, "complete_stage", 4)` |
+
+**⛔ PHASE_SUMMARY_F 结构变更台账门控（FRONTEND 重跑机制）**：
+
+> **⛔ 所有权声明**：本门控是**跨 PHASE 路由决策**，由持有路由权的代理执行——auto_pipeline 模式下为根会话（编排器角色），插件模式下为 pypto-op-orchestrator。**不是** optimizer 子代理的 ITER 内部机制：optimizer 在 PHASE_SUMMARY_F 交付台账后即停止，不自行重跑、不自行执行本门控；路由代理须在派发下一个 subagent 前从 PHASE_SUMMARY_F 摘要提取结构 delta 并按本门控决定下一 dispatch（重跑 FRONTEND 或推进 SWIMLANE/S5）。`pypto-op-orchestrator/AGENTS.md` 路由规则中已内联同款门控——两处表述不一致时以更严格者为准。
+
+- **读取台账**（FRONTEND 交付物）：结构 delta = 本轮结构级采纳数 + （**仅首轮**）入口基线未 audited 的既有结构标记数
+- **delta 非空 且 未达标** → 下一状态为 **PHASE_FRONTEND 重跑**（不计入新的 perf 轮，计入 S4 外循环 ≤3 预算），dispatch 必须注明：**清除全部 DO-NOT-RETRY 标记** + 重新运行完整阶段A（A1 Loop 结构分析 + A2 常量分析 + A3 Reshape 与依赖深度分析 + A4 分段优化议程）+ 重新检查全部 F- 优化（F-1~F-21）——结构变更后循环体已改变，旧结论可能失效；本轮台账中已重审的结构标记置 `audited`，后续轮次不再触发
+- **delta 为空 或 已达标** → 按原流程转移（SWIMLANE_1 / S5_REPORT）
 | PHASE_SWIMLANE_n (n=1,2,3) | ⛔ **外循环第{n}轮**：独立采集性能数据(S2型) → 独立分析泳道图(S3型) → 加载 tune-swimlane 子技能 → ⛔ **核使用率分析** → 生成调优点清单 | ⛔ 见「退出条件详细定义」 | PHASE_SUMMARY_S_n | 退出时调用 `state_transition(opDir, "complete_stage", 4)` |
 | PHASE_SUMMARY_S_n | 生成 SWIMLANE 阶段交接摘要 + 检查达标状态 + 按序列推进（见「阶段交接流程」） | 摘要已生成 | 达标→S5_REPORT / 未达标→PHASE_INCORE_n | - |
 | PHASE_INCORE_n (n=1,2,3) | ⛔ **外循环第{n}轮**：独立采集性能数据(S2型) → 独立分析性能数据(S3型) → 加载 tune-incore 子技能 → ⛔ 生成调优点清单 | ⛔ 见「退出条件详细定义」 | PHASE_SUMMARY_I_n | 退出时调用 `state_transition(opDir, "complete_stage", 4)` |
@@ -190,7 +236,7 @@ Step 0a: 独立性能数据分析
 
 | PHASE | 加载子技能 | 编排器核查的产出制品 | 退出后进入 |
 |-------|-----------|-------------------|-----------|
-| PHASE_FRONTEND | `tune-frontend` | 阶段A 全局分析制品 + 阶段B 局部分析制品 + 最终优化点排序清单（具体清单见 `../tune-frontend/SKILL.md`） | PHASE_SUMMARY_F |
+| PHASE_FRONTEND | `tune-frontend` | 阶段A 全局分析制品 + 阶段B 局部分析制品 + 最终优化点排序清单（具体清单见 `../tune-frontend/SKILL.md`）+ ⛔ **结构变更台账**（F-1~F-21 全表标记完整性 + 已采纳未回退优化点的 `结构级`/`配置级` 标注 + 首轮追加入口基线既有结构标记及 `audited` 状态）。⛔ **F-19 为必做项**（两种模式均须检查，详见 `../tune-frontend/SKILL.md` §1.2.4/§1.2.5） | PHASE_SUMMARY_F |
 | PHASE_SWIMLANE_n | `tune-swimlane` | 核使用率分析 + 调优点清单（具体清单见 `../tune-swimlane/SKILL.md`）；⛔ 泳道图重采次数记录在 Todo 中 | PHASE_SUMMARY_S_n |
 | PHASE_INCORE_n | `tune-incore` | 瓶颈 task 分析 + 调优点清单（具体清单见 `../tune-incore/SKILL.md`） | PHASE_SUMMARY_I_n |
 
@@ -639,16 +685,17 @@ todowrite  # 读取当前 Todo 清单
 | 基准 | 0 | - | - | - | ✅ | 79.34 | - | - | ✅ |
 | #1 | 1 | FRONTEND | F-1 | BLOCK_SIZE 128→64 | ✅ | 68.54 | -13.6% | 性能提升 | ✅ |
 | #2 | 1 | FRONTEND | F-8 | unroll_list [8,4,2,1] | ✅ | 74.44 | +8.6% | 性能回退 | ❌回退 |
-| #3 | 1 | FRONTEND | F-10 | TileShape 2560 | ❌ | - | - | 编译失败 | ❌回退 |
+| #3 | 1 | FRONTEND | F-19 | 内层批量化 unroll→M | ✅ | 52.10 | -30.1% | 性能提升 | ✅ |
+| #4 | 1 | FRONTEND | F-10 | TileShape 2560 | ❌ | - | - | 编译失败 | ❌回退 |
 
 ### 当前迭代状态
 - 外循环轮次: 1 / 3
 - 当前阶段: FRONTEND
 - 当前第三级状态: ITER_START
-- 当前轮次: #3
-- 当前最佳性能: 68.54 us（较基准 79.34 us 提升 13.6%）
+- 当前轮次: #4
+- 当前最佳性能: 52.10 us（较基准 79.34 us 提升 34.3%）
 - 连续无提升: 0 / 5
-- 失败累计: 1 轮（#3 编译失败）
+- 失败累计: 1 轮（#4 编译失败）
 ```
 
 ### 状态看板（每5轮输出）

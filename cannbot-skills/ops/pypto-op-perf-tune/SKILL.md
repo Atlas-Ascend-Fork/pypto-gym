@@ -489,6 +489,7 @@ SWIMLANE 重试"的回环是预期行为，不是异常——外循环机制天�
   ├─ ⭐⭐⭐ F-8 内层unroll → unroll_list=[64,16,4]
   ├─ ⭐⭐⭐ S-20 max_workspace_kb → 从NPU输出提取推荐值并设置
   ├─ ⭐⭐   F-6 合并独立loop → 合并无数据依赖的独立loop
+  ├─ ⭐⭐⭐ F-21 操作链依赖深度外提 → 部分依赖操作链按依赖深度外提，详见 references/loop-hoisting.md
   ├─ ⭐⭐   S-9 Stitch调优 → stitch_function_max_num: 128
   ├─ ⭐⭐⭐ S-4/S-5 普通合图 → sg_set_scope 或 nbuffer
   ├─ ⭐⭐⭐ S-14 A5 Mix合图 → pypto.experimental.auto_mix_partition(1)（自动）和 sg_set_scope（手动）是同一功能的两种开关方式，优先尝试自动，⛔编译超时禁止放弃Mix合图（缩小scope/TileShape后重试，自动超时→切手动），⛔退化禁止直接回退到非Mix优化（走诊断决策树），当前方式充分调优后未达到预期目标性能或需要最优性能时再切换另一种（仅A5 npuarch=='DAV_3510'，⚠️ UB并发须<248KB，须追踪CV间数据流向验证所有CV间数据走CV通路）
@@ -498,6 +499,7 @@ SWIMLANE 重试"的回环是预期行为，不是异常——外循环机制天�
 
 症状B：核心利用率 < 50%（对应目录症状B）
   ├─ ⭐⭐⭐ F-1 任务粒度检查 → 增大Matmul M/N轴
+  ├─ ⭐⭐⭐ F-19 内层批量化 → matmul M轴批量化（Mode A：循环维度批量进M，自含unroll）/tile扩展+操作外提（Mode B：共享输入广播批量外提）——必做，渐进变换每步精度门控
   ├─ ⭐⭐⭐ F-9 Cube TileShape → 使用推荐配置
   ├─ ⭐⭐⭐ F-16 多Matmul差异化Cube TileShape → C1/C2按M/N/K独立配置
   ├─ ⭐⭐⭐ F-17 V段内多shape分段vec tile → shape变化时重设vec tile
@@ -507,6 +509,7 @@ SWIMLANE 重试"的回环是预期行为，不是异常——外循环机制天�
   ├─ ⭐⭐   F-4 Reshape全局优化 → reshape(inplace=True)外提+合轴
   ├─ ⭐⭐   F-7 外层动态轴切块 → 切块增加任务数
   ├─ ⭐⭐   F-10 Vector TileShape → 设置vec_tile_shapes
+  ├─ ⭐⭐   F-20 邻居感知TileShape → matmul后reduce增大n/并发matmul匹配核数/vec跟随cube/view/assemble/reshape整shape显式设置
   ├─ ⭐⭐   S-12 Vector TileShape深度调优 → 对齐上下游TileShape/泳道图驱动
   ├─ ⭐⭐⭐ 主SKILL.md §4.3 A-D1~A-D3 → 核利用率因DDR等待偏低时算法级减少DDR往返
   ├─ ⭐     S-10 调度策略 → device_sched_mode

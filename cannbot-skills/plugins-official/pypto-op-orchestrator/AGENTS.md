@@ -240,7 +240,9 @@ S4 拆分为三个独立的 stage（FRONTEND / SWIMLANE / INCORE），编排器�
 1. **调度序列**：
 
    ```
-   S4_FRONTEND → [S4_SWIMLANE → S4_INCORE] × ≤3 轮 → S5
+   S4_FRONTEND → 达标 → S5
+               → 未达标 + 结构变更台账 delta 非空 → 重派 S4_FRONTEND（结构重跑，见路由规则第2条）
+               → 未达标 + delta 为空 → [S4_SWIMLANE → S4_INCORE] × ≤3 轮 → S5
    ```
 
    > PHASE 序列由编排器自持。若 skill 调整阶段顺序，须同步更新此处。
@@ -249,13 +251,14 @@ S4 拆分为三个独立的 stage（FRONTEND / SWIMLANE / INCORE），编排器�
 
    | stage | 输入（编排器从 MEMORY.md / 前次返回提取） | 编排器验证（返回后检查） |
    |-------|------------------------------------------|------------------------|
-   | `S4_FRONTEND` | `op_impl_file`, `test_command`, `work_dir`, `perf_baseline_us`, `perf_target_us`, `perf_report_path`, `output_dir` | 性能数值合法 + `target_met` 明确（✅/❌）+ 退出原因已填写 + 自核查声明非空且含核查结论 |
+   | `S4_FRONTEND` | `op_impl_file`, `test_command`, `work_dir`, `perf_baseline_us`, `perf_target_us`, `perf_report_path`, `output_dir` | 性能数值合法 + `target_met` 明确（✅/❌）+ 退出原因已填写 + 自核查声明非空且含核查结论 + **F-19 Mode A 与 Mode B 各有明确结论（✅/❌/⏳）且引用 A1 表行号**（缺失任一项或未引用行号 → 打回重派 S4_FRONTEND，不得记录到 accumulated_context）。**`target_met=✅` 时跳过以下台账校验（达标即止）**；`target_met=❌` 时强制：**⛔ 结构变更台账完整**（每个已采纳未回退项标注 `结构级`/`配置级` + F-1~F-21 全表标记完整性 + 首轮附入口基线既有结构标记及 `audited` 状态；缺失任一项 → 打回重派——台账是「路由规则」第二条门控的唯一输入，缺失即无法路由） |
    | `S4_SWIMLANE` | `op_impl_file`, `test_command`, `work_dir`, `perf_baseline_us`, `perf_target_us`, `round`, `accumulated_context` | 性能数值合法 + `target_met` 明确 + 退出原因已填写 + 自核查声明非空且含核查结论 |
    | `S4_INCORE` | `op_impl_file`, `test_command`, `work_dir`, `perf_baseline_us`, `perf_target_us`, `round`, `accumulated_context` | 性能数值合法 + `target_met` 明确 + 退出原因已填写 + 自核查声明非空且含核查结论 |
 
 3. **路由规则**：
 
    - **`target_met` 以编排器重算为准**：用 `perf_target_us` 与返回的"实际 us"计算 `target_met = 实际us ≤ perf_target_us`，不只信任 optimizer 自报；不一致以重算为准并记录到 MEMORY.md。`target_met=✅` → 跳出循环，进入 S5。
+   - **⛔ 结构变更台账门控（S4_FRONTEND 返回后、SWIMLANE 派发前，编排器在自身会话执行——⛔ 不是 optimizer 的 ITER 内部机制，optimizer 不自行重跑）**：S4_FRONTEND 的 PHASE_SUMMARY_F 必含**结构变更台账**（每个已采纳未回退项标注 `结构级`/`配置级` + 首轮附入口基线既有结构标记及 `audited` 状态）。编排器提取 `结构 delta = 本轮结构级采纳数 +（仅首轮）未 audited 的基线结构标记数`：**delta 非空 且 target_met=❌ → 下一 dispatch 必须是 S4_FRONTEND 重跑**（不得派发 SWIMLANE），dispatch 须注明：清除全部 DO-NOT-RETRY 标记 + 重跑完整阶段A（A1 Loop + A2 常量 + A3 Reshape 依赖深度 + A4 分段优化议程）+ F-1~F-21 全表重查（结构变更后循环体已改变，旧失败结论可能失效）；重跑计入 S4 ≤3 预算，台账中已置 `audited` 的标记不再触发。delta 为空或达标 → 正常路由（SWIMLANE / S5）。
    - `round=3` 的 INCORE 返回后仍未达标 → 询问用户是否尝试算法级优化（skill 步骤 4.3，用户手动触发）；拒绝 → 进入 S5。
 
 4. **accumulated_context 管理**：每次 S4 dispatch 返回后，按以下过滤规则将结果追加到 `accumulated_context`，**持久化到 MEMORY.md 的 `## Stage 7 accumulated context` 章节**（每次 dispatch 前读取、dispatch 后更新写回）：

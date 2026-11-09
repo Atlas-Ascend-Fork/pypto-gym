@@ -23,6 +23,7 @@ tools:
 4. **不加载 debug 类子 skill。** 精度失败时按 skill 规定的失败处理流程执行（换卡尝试 / 停止），不自行调查根因。
 5. **`perf_target_us` 原样透传。** 目标值必须原样采用 dispatch prompt 传入的 `perf_target_us`（其溯源为 initial prompt 注入的平台目标），不得替换为其他来源的数值。
 6. **轮次约束。** dispatch 声明调优轮次为 0 时，Stage 7 只执行 S1_SETUP → S2_COLLECT → S3_ANALYZE → S5_REPORT，不进入任何 S4 stage；S2_COLLECT 按该 stage 节的「0 轮基线模式」执行。
+7. **⛔ 约束交叉验证。** 代码注释（如 `# precision fix`、`# required`、`# cycle-2 fix`）和 `accumulated_context` 中的"约束与发现"**不构成硬性约束**，除非在 `MEMORY.md` 调试历史中找到对应调试 cycle 的**实际验证记录（PASS）**。若对应 cycle 标记为 **DISPROVED / SUPERSEDED / INERT**，则该约束不成立——必须移除该约束并重新尝试被阻塞的优化。此规则适用于优化点的**所有标记**（✅已尝试 / ❌已失败 / ❌不适用）：即使标记为 ✅已尝试，若失败原因涉及代码注释声明的约束（如 "L1 锁死"、"kL1 不可调"），**必须对被依赖的约束参数执行 MEMORY.md 交叉验证**——若该参数的约束已 DISPROVED，则资源约束自动解除，优化点改为 ⏳待尝试。验证步骤：在 `MEMORY.md` 中搜索注释关键词，确认对应 cycle 的验证结论。此规则在阶段A（A4 TileShape 审查表）识别约束时即须执行，不得等到阶段C才验证。
 
 ## Mandatory reads（激活检查通过后）
 
@@ -193,6 +194,13 @@ PHASE 内部的 ITER 循环（选优化点 → 改代码 → 验精度 → 测�
     ### 已失败优化（本阶段）
     | # | 尝试项 | 失败原因 |
     |---|--------|---------|
+
+    ### 结构变更台账（仅 S4_FRONTEND）
+    供 pypto-op-orchestrator 路由决策（重跑 FRONTEND 或推进 SWIMLANE/S5）：
+    | # | 优化项 | 变更类型（结构级/配置级） | 收益 |
+    |---|--------|--------------------------|------|
+    F-1~F-21 全表标记：✅/❌/❌/⏳（无 ⏳ 遗留）
+    首轮附加：入口基线既有结构标记 + audited 状态
 
     ### 约束与发现
     - [本阶段发现的关键约束]

@@ -179,7 +179,8 @@ phases (target met → S5, not met → next PHASE).
 
 ```
 dispatch S4_FRONTEND → target_met=✅ → S5
-                     → target_met=❌ → continue
+                     → target_met=❌ + structural delta non-empty → re-dispatch S4_FRONTEND (ledger gate below)
+                     → target_met=❌ + structural delta empty → continue
 for round in [1, 2, 3]:
     dispatch S4_SWIMLANE(round) → target_met=✅ → S5
                                 → target_met=❌ → continue
@@ -187,6 +188,19 @@ for round in [1, 2, 3]:
                                 → target_met=❌ → continue
 all rounds exhausted → S5
 ```
+
+**⛔ Structural change ledger gate (PHASE_SUMMARY_F → FRONTEND re-run):**
+
+The S4_FRONTEND optimizer returns a 结构变更台账 (structure change ledger) in
+its PHASE_SUMMARY_F: every adopted-not-reverted optimization labeled
+`结构级` (structural) or `配置级` (config), plus — first pass only — the
+entry-baseline pre-existing structural markers with `audited` status. After
+S4_FRONTEND returns, the orchestrator extracts the structural delta and
+routes:
+
+- `structural delta = 本轮结构级 adoptions + (first pass only) un-audited baseline structural markers`
+- delta **non-empty** AND target_met=❌ → the next dispatch **MUST be a re-dispatch of S4_FRONTEND** (not SWIMLANE). The dispatch must state: clear all DO-NOT-RETRY markers + re-run full Phase A (A1 Loop + A2 constants + A3 Reshape/dependency-depth + A4 tile agenda) + re-check all F-1~F-21 (the loop body changed after structural edits — old failure conclusions may be stale). Re-runs count toward the S4 ≤3 budget; markers marked `audited` in the ledger do not re-trigger.
+- delta **empty** OR target_met=✅ → normal routing (SWIMLANE / S5).
 
 After each S4 dispatch, orchestrator appends the returned
 adopted/failed optimizations, constraints, and code config to
