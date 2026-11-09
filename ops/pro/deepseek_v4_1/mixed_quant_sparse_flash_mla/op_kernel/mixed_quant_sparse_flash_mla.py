@@ -98,7 +98,7 @@ def zero_outc_vf(outc):
 
 
 @pl.vector_function
-def build_pair_tab_vf(idx_t, bt_t, tab, fan, tbase, bs_v, st_v, rb_v, segneg, win, cmax):
+def build_pair_tab_vf(idx_t, bt_t, tab, fan, tbase, bs_v, st_v, rb_v, segneg, win, cmax, cxl):
     _pall_i32 = vf.create_mask(pattern=pl.MaskPattern.ALL, dtype=pl.DT_INT32)
     _pall_u32 = vf.create_mask(pattern=pl.MaskPattern.ALL, dtype=pl.DT_UINT32)
     m_even = vf.create_mask(pattern=pl.MaskPattern.ALL, dtype=pl.DT_FP32)
@@ -134,11 +134,6 @@ def build_pair_tab_vf(idx_t, bt_t, tab, fan, tbase, bs_v, st_v, rb_v, segneg, wi
     vf.store_align(
         tab + (64 * tbase), packed, _pall_i32, data_copy_mode=pl.DataCopyMode.DATA_BLOCK_COPY, block_stride=1
     )
-    cxl = cmax - win
-    if cxl < 0:
-        cxl = 0
-    if cxl > 63:
-        cxl = 63
     c = vf.full(cxl, dtype=pl.DT_INT32)
     addr = vf.gather(addr, c)
     vf.store_align(fan, addr, _pall_i32, [0, (8 * tbase)], dist=pl.StoreDist.FIRST_ELEMENT)
@@ -244,24 +239,6 @@ def dequant_ori_pairgrp_vf(p, s, knz, roff):
 
 
 @pl.vector_function
-def fan_store_vf(knz, r0, cnt, reg, reg_1, reg_2, reg_3):
-    """Write the four dequantized row groups into the fanned-out L1 layout."""
-    _pall_bf16 = vf.create_mask(pattern=pl.MaskPattern.ALL, dtype=pl.DT_BF16)
-    for d in pl.range(0, pl.max(cnt, 0), 1):
-        mul = (r0 + d) * 16
-        vf.store_align(knz + mul, reg, _pall_bf16, data_copy_mode=pl.DataCopyMode.DATA_BLOCK_COPY, block_stride=17)
-        vf.store_align(
-            knz + (mul + 2176), reg_1, _pall_bf16, data_copy_mode=pl.DataCopyMode.DATA_BLOCK_COPY, block_stride=17
-        )
-        vf.store_align(
-            knz + (mul + 4352), reg_2, _pall_bf16, data_copy_mode=pl.DataCopyMode.DATA_BLOCK_COPY, block_stride=17
-        )
-        vf.store_align(
-            knz + (mul + 6528), reg_3, _pall_bf16, data_copy_mode=pl.DataCopyMode.DATA_BLOCK_COPY, block_stride=17
-        )
-
-
-@pl.vector_function
 def dequant_ori_row_fan_vf(fp8, sc_bf, knz, r0, cnt):
     _pall_u16 = vf.create_mask(pattern=pl.MaskPattern.ALL, dtype=pl.DT_UINT16)
     _pall_e4m3 = vf.create_mask(pattern=pl.MaskPattern.ALL, dtype=pl.DT_FP8E4M3FN)
@@ -310,7 +287,18 @@ def dequant_ori_row_fan_vf(fp8, sc_bf, knz, r0, cnt):
     idx = vf.adds(base, 12, _pall_u16)
     svec = vf.gather(srow, idx)
     reg_3 = vf.mul(reg_3, svec, _pall_bf16)
-    fan_store_vf(knz, r0, cnt, reg, reg_1, reg_2, reg_3)
+    for d in pl.range(0, pl.max(cnt, 0), 1):
+        mul = (r0 + d) * 16
+        vf.store_align(knz + mul, reg, _pall_bf16, data_copy_mode=pl.DataCopyMode.DATA_BLOCK_COPY, block_stride=17)
+        vf.store_align(
+            knz + (mul + 2176), reg_1, _pall_bf16, data_copy_mode=pl.DataCopyMode.DATA_BLOCK_COPY, block_stride=17
+        )
+        vf.store_align(
+            knz + (mul + 4352), reg_2, _pall_bf16, data_copy_mode=pl.DataCopyMode.DATA_BLOCK_COPY, block_stride=17
+        )
+        vf.store_align(
+            knz + (mul + 6528), reg_3, _pall_bf16, data_copy_mode=pl.DataCopyMode.DATA_BLOCK_COPY, block_stride=17
+        )
 
 
 @pl.vector_function
@@ -384,7 +372,18 @@ def dequant_cmp_row_fan_vf(pk, sc_bf, knz, r0, cnt):
     vals = vf.astype(view_8, m8, dtype=pl.DT_BF16, round_mode=pl.VFRoundMode.CAST_RINT, saturate=pl.SaturateMode.OFF)
     svec = vf.load_align(sc_bf, [0, 152], dist=pl.LoadDist.E2B_B16)
     reg_3 = vf.mul(vals, svec, _pall_bf16)
-    fan_store_vf(knz, r0, cnt, reg, reg_1, reg_2, reg_3)
+    for d in pl.range(0, pl.max(cnt, 0), 1):
+        mul = (r0 + d) * 16
+        vf.store_align(knz + mul, reg, _pall_bf16, data_copy_mode=pl.DataCopyMode.DATA_BLOCK_COPY, block_stride=17)
+        vf.store_align(
+            knz + (mul + 2176), reg_1, _pall_bf16, data_copy_mode=pl.DataCopyMode.DATA_BLOCK_COPY, block_stride=17
+        )
+        vf.store_align(
+            knz + (mul + 4352), reg_2, _pall_bf16, data_copy_mode=pl.DataCopyMode.DATA_BLOCK_COPY, block_stride=17
+        )
+        vf.store_align(
+            knz + (mul + 6528), reg_3, _pall_bf16, data_copy_mode=pl.DataCopyMode.DATA_BLOCK_COPY, block_stride=17
+        )
 
 
 @pl.vector_function
@@ -675,15 +674,12 @@ def accum_vf(res, o0, o1, o2, o3, al):
 
 
 @pl.vector_function
-def softmax_vf(su, pnz, tsum, tmax, m_buf, al_buf, valid_n, scale):
+def softmax_vf(su, pnz, tsum, tmax, m_buf, al_buf, valid_n, scale, c_o):
     _pall_f32 = vf.create_mask(pattern=pl.MaskPattern.ALL, dtype=pl.DT_FP32)
     vf.mem_bar(mode=pl.MemBarMode.VST_VLD)
     _pall_bf16 = vf.create_mask(pattern=pl.MaskPattern.ALL, dtype=pl.DT_BF16)
     m64 = vf.create_mask(pattern=pl.MaskPattern.ALL, dtype=pl.DT_FP32)
     pm_e = vf.update_mask((valid_n + 1) // 2, dtype=pl.DT_FP32)
-    c_o = valid_n // 2
-    if c_o < 0:
-        c_o = 0
     pm_o = vf.update_mask(c_o, dtype=pl.DT_FP32)
     ureg_m = vf.unalign_reg_for_store()
     ureg_s = vf.unalign_reg_for_store()
@@ -1301,7 +1297,10 @@ def compute_p(
     else:
         pl.system.wait_cross_core(pipe=P.V, event_id=8, sync_mode=pl.CrossCoreSyncMode.INTRA_BLOCK)
     mod_25 = (clk_1 - 1) & 1
-    softmax_vf(s_in, ub_pnz, sm_tsum, sm_tmax, sm_m_grp[h_r], sm_a_grp[mod_25], actual_nv, scale_v)
+    c_o = actual_nv // 2
+    if c_o < 0:
+        c_o = 0
+    softmax_vf(s_in, ub_pnz, sm_tsum, sm_tmax, sm_m_grp[h_r], sm_a_grp[mod_25], actual_nv, scale_v, c_o)
     if (clk_1 & 1) == 0:
         pl.system.set_cross_core(pipe=P.V, event_id=5, sync_mode=pl.CrossCoreSyncMode.INTRA_BLOCK)
     else:
@@ -2372,21 +2371,21 @@ def mixed_quant_sparse_flash_mla_kernel(
         )
         fan_grp = fan_grp_native
         ub_knz0_native = pl.make_tile_group(
-            type=pl.TileType(shape=[17, 512], dtype=pl.DT_BF16, target_memory=pl.MemorySpace.Vec),
+            type=pl.TileType(shape=[17, 512], dtype=pl.DT_BF16, target_memory=pl.MemorySpace.Vec, compact=0),
             addrs=[28928],
             mutex_ids=[6],
             depth=1,
         )
         ub_knz0 = ub_knz0_native[0]
         ub_knz1_native = pl.make_tile_group(
-            type=pl.TileType(shape=[17, 512], dtype=pl.DT_BF16, target_memory=pl.MemorySpace.Vec),
+            type=pl.TileType(shape=[17, 512], dtype=pl.DT_BF16, target_memory=pl.MemorySpace.Vec, compact=0),
             addrs=[46336],
             mutex_ids=[7],
             depth=1,
         )
         ub_knz1 = ub_knz1_native[0]
         ub_pnz_native = pl.make_tile_group(
-            type=pl.TileType(shape=[33, 128], dtype=pl.DT_BF16, target_memory=pl.MemorySpace.Vec),
+            type=pl.TileType(shape=[33, 128], dtype=pl.DT_BF16, target_memory=pl.MemorySpace.Vec, compact=0),
             addrs=[63744],
             mutex_ids=[8],
             depth=1,
@@ -2741,14 +2740,14 @@ def mixed_quant_sparse_flash_mla_kernel(
             depth=3,
         )
         nzsrc_native = pl.make_tile_group(
-            type=pl.TileType(shape=[17, 512], dtype=pl.DT_BF16, target_memory=pl.MemorySpace.Vec, layout=pl.NZ),
+            type=pl.TileType(shape=[17, 512], dtype=pl.DT_BF16, target_memory=pl.MemorySpace.Vec, layout=pl.NZ, compact=0),
             addrs=[28928],
             mutex_ids=[6],
             depth=1,
         )
         nzsrc = nzsrc_native[0]
         nzsrc_1_native = pl.make_tile_group(
-            type=pl.TileType(shape=[17, 512], dtype=pl.DT_BF16, target_memory=pl.MemorySpace.Vec, layout=pl.NZ),
+            type=pl.TileType(shape=[17, 512], dtype=pl.DT_BF16, target_memory=pl.MemorySpace.Vec, layout=pl.NZ, compact=0),
             addrs=[46336],
             mutex_ids=[7],
             depth=1,
@@ -3485,7 +3484,7 @@ def mixed_quant_sparse_flash_mla_kernel(
             depth=2,
         )
         nzsrc_2_native = pl.make_tile_group(
-            type=pl.TileType(shape=[33, 128], dtype=pl.DT_BF16, target_memory=pl.MemorySpace.Vec, layout=pl.NZ),
+            type=pl.TileType(shape=[33, 128], dtype=pl.DT_BF16, target_memory=pl.MemorySpace.Vec, layout=pl.NZ, compact=0),
             addrs=[63744],
             mutex_ids=[8],
             depth=1,
@@ -3892,6 +3891,11 @@ def mixed_quant_sparse_flash_mla_kernel(
                     winb = s128 + (sub * 64)
                     cmb = (s128 + anb) - 1
                     negb = 0 - s128
+                    cxlb = cmb - winb
+                    if cxlb < 0:
+                        cxlb = 0
+                    if cxlb > 63:
+                        cxlb = 63
                     t8b = clk_1 & 7
                     v_nb = 0
                     if cmp_9:
@@ -3900,7 +3904,7 @@ def mixed_quant_sparse_flash_mla_kernel(
                         pl.load(ub_tabs, ori_sparse_indices, [m_1, 0, s128])
                         pl.set_validshape(ub_tabs, [1, 2304])
                         build_pair_tab_vf(
-                            view_28, view_29, ub_pt_native[clk_1 & 1], fan_grp[clk_1 & 1], t8b, bso_v, stro_v, 544, negb, winb, cmb
+                            view_28, view_29, ub_pt_native[clk_1 & 1], fan_grp[clk_1 & 1], t8b, bso_v, stro_v, 544, negb, winb, cmb, cxlb
                         )
                     else:
                         v_nb = pl.min(128, (k_cmp - mul_6))
@@ -3908,7 +3912,7 @@ def mixed_quant_sparse_flash_mla_kernel(
                         pl.load(ub_tabs, si_v, [m_1, 0, s128])
                         pl.set_validshape(ub_tabs, [1, 2304])
                         build_pair_tab_vf(
-                            view_33, view_34, ub_pt_native[clk_1 & 1], fan_grp[clk_1 & 1], t8b, bsc_v, strc_v, 320, negb, winb, cmb
+                            view_33, view_34, ub_pt_native[clk_1 & 1], fan_grp[clk_1 & 1], t8b, bsc_v, strc_v, 320, negb, winb, cmb, cxlb
                         )
                 # Second priming on its own index staging buffer (ub_tabs_b), so the two
                 # load->VF pairs do not share one single-buffered region.
@@ -3929,6 +3933,11 @@ def mixed_quant_sparse_flash_mla_kernel(
                         winb = s128 + (sub * 64)
                         cmb = (s128 + anb) - 1
                         negb = 0 - s128
+                        cxlb2 = cmb - winb
+                        if cxlb2 < 0:
+                            cxlb2 = 0
+                        if cxlb2 > 63:
+                            cxlb2 = 63
                         t8b = (clk_1 + 1) & 7
                         v_nb = 0
                         if cmp_9:
@@ -3937,7 +3946,7 @@ def mixed_quant_sparse_flash_mla_kernel(
                             pl.load(ub_tabs_b, ori_sparse_indices, [m_1, 0, s128])
                             pl.set_validshape(ub_tabs_b, [1, 2304])
                             build_pair_tab_vf(
-                                view_28b, view_29, ub_pt_native[(clk_1 + 1) & 1], fan_grp[(clk_1 + 1) & 1], t8b, bso_v, stro_v, 544, negb, winb, cmb
+                                view_28b, view_29, ub_pt_native[(clk_1 + 1) & 1], fan_grp[(clk_1 + 1) & 1], t8b, bso_v, stro_v, 544, negb, winb, cmb, cxlb2
                             )
                         else:
                             v_nb = pl.min(128, (k_cmp - mul_6))
@@ -3945,7 +3954,7 @@ def mixed_quant_sparse_flash_mla_kernel(
                             pl.load(ub_tabs_b, si_v, [m_1, 0, s128])
                             pl.set_validshape(ub_tabs_b, [1, 2304])
                             build_pair_tab_vf(
-                                view_33b, view_34, ub_pt_native[(clk_1 + 1) & 1], fan_grp[(clk_1 + 1) & 1], t8b, bsc_v, strc_v, 320, negb, winb, cmb
+                                view_33b, view_34, ub_pt_native[(clk_1 + 1) & 1], fan_grp[(clk_1 + 1) & 1], t8b, bsc_v, strc_v, 320, negb, winb, cmb, cxlb2
                             )
                 if tl_1 == 0:
                     if rpar == 0:
@@ -3987,6 +3996,11 @@ def mixed_quant_sparse_flash_mla_kernel(
                         win = seg128 + mul_15
                         cmx = (seg128 + actual_n) - 1
                         sneg = 0 - seg128
+                        cxlm = cmx - win
+                        if cxlm < 0:
+                            cxlm = 0
+                        if cxlm > 63:
+                            cxlm = 63
                         if cmp_16:
                             if tab_fast == 0:
                                 v_n = pl.min(128, (k_ori - mul_11))
@@ -3994,7 +4008,7 @@ def mixed_quant_sparse_flash_mla_kernel(
                                 pl.load(ub_tabs, ori_sparse_indices, [m_1, 0, seg128])
                                 pl.set_validshape(ub_tabs, [1, 2304])
                                 build_pair_tab_vf(
-                                    view_48, view_49, ub_pt, view_50, clk_slot_8, bso_v, stro_v, 544, sneg, win, cmx
+                                    view_48, view_49, ub_pt, view_50, clk_slot_8, bso_v, stro_v, 544, sneg, win, cmx, cxlm
                                 )
                             nv = pl.min(pl.max((actual_n - mul_15), 0), 64)
                             for g in pl.range(0, 4, 1):
@@ -4006,7 +4020,7 @@ def mixed_quant_sparse_flash_mla_kernel(
                                 pl.load(ub_tabs, si_v, [m_1, 0, seg128])
                                 pl.set_validshape(ub_tabs, [1, 2304])
                                 build_pair_tab_vf(
-                                    view_138, view_139, ub_pt, view_140, clk_slot_8, bsc_v, strc_v, 320, sneg, win, cmx
+                                    view_138, view_139, ub_pt, view_140, clk_slot_8, bsc_v, strc_v, 320, sneg, win, cmx, cxlm
                                 )
                             nvc = pl.min(pl.max((actual_n - mul_15), 0), 64)
                             for g_1 in pl.range(0, 4, 1):
@@ -4029,6 +4043,11 @@ def mixed_quant_sparse_flash_mla_kernel(
                                 winn = s128n + (sub * 64)
                                 cmxn = (s128n + ann) - 1
                                 negn = 0 - s128n
+                                cxln = cmxn - winn
+                                if cxln < 0:
+                                    cxln = 0
+                                if cxln > 63:
+                                    cxln = 63
                                 v_nn = 0
                                 if cmp_54:
                                     v_nn = pl.min(128, (k_ori - mul_140))
@@ -4048,6 +4067,7 @@ def mixed_quant_sparse_flash_mla_kernel(
                                         negn,
                                         winn,
                                         cmxn,
+                                        cxln,
                                     )
                                 else:
                                     v_nn = pl.min(128, (k_cmp - mul_140))
@@ -4067,6 +4087,7 @@ def mixed_quant_sparse_flash_mla_kernel(
                                         negn,
                                         winn,
                                         cmxn,
+                                        cxln,
                                     )
                         pl.system.set_cross_core(pipe=P.MTE3, event_id=0, sync_mode=pl.CrossCoreSyncMode.INTRA_BLOCK)
                     run_t_1 = 0
