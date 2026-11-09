@@ -253,7 +253,7 @@ def _make_postprocess_row(*, dim, rd, storage_mode, write_actual_scale, threads,
         x = pl.simt.cast(proj[0, t], pl.DT_FP32)
         partial = pl.simt.warp_reduce_add(x * x)
         if lane == 0:
-            pl.simt.atomic_add(red[0, 0], partial)
+            pl.simt.atomic_add(red, [0, 0], partial)
         pl.simt.syncthreads()
         if t == 0:
             red[1, 0] = pl.simt.rsqrt(red[0, 0] * (1.0 / dim) + epsilon)
