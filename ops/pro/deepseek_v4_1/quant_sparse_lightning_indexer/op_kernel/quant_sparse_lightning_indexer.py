@@ -454,7 +454,7 @@ def _find_high_and_hist_low_vf(
     nk_value_tile,
     bottom_k,
     hist_loop,
-    base=0,
+    base,
 ):
     p8 = vf.create_mask(pattern=pl.MaskPattern.ALL, dtype=pl.DT_UINT8)
     p16 = vf.create_mask(pattern=pl.MaskPattern.ALL, dtype=U16)
@@ -740,42 +740,6 @@ def _count_positive_vf(total_tile, key_tile, chunks: pl.DT_INT64):
     red = vf.reduce_sum(acc, preg32)
     vf.store_align(total_tile, red, preg32)
     vf.mem_bar()
-
-
-@pl.vector_function
-def _split_page_general_vf(
-    page,
-    within,
-    cand_u,
-    recip_reg,
-    one32,
-    preg32,
-    blocks_per_page: pl.DT_INT64,
-    page_param: pl.DT_INT64,
-):
-    _recip_lo, page = vf.mull(cand_u, recip_reg, preg32)
-    product = vf.muls(page, blocks_per_page, preg32)
-    over = vf.gt(product, cand_u, preg32)
-    page_dec = vf.sub(page, one32, preg32)
-    page = vf.select(page_dec, page, over)
-    folded = vf.muls(page, blocks_per_page, preg32)
-    within = vf.sub(cand_u, folded, preg32)  # noqa: F841 - writes the caller register
-
-
-@pl.vector_function
-def _split_page_pow2_vf(
-    page,
-    within,
-    cand_u,
-    recip_reg,
-    one32,
-    preg32,
-    blocks_per_page: pl.DT_INT64,
-    page_param: pl.DT_INT64,
-):
-    page_mask_reg = vf.full(blocks_per_page - 1, preg32, dtype=pl.DT_UINT32)
-    page = vf.shift_right(cand_u, page_param, preg32)  # noqa: F841 - writes the caller register
-    within = vf.and_(cand_u, page_mask_reg, preg32)  # noqa: F841 - writes the caller register
 
 
 def _prepare_addresses_scalar(
@@ -1544,9 +1508,13 @@ def _prepare_addresses32_general_vf(
         cand = vf.gather(cand_tile, safe, preg32)
         cand = vf.maxs(cand, 0, preg32)
         cand_u = vf.bit_cast(cand, dtype=pl.DT_UINT32)
-        _split_page_general_vf(
-            page, within, cand_u, recip_reg, one32, preg32, blocks_per_page, page_param
-        )
+        _recip_lo, page = vf.mull(cand_u, recip_reg, preg32)
+        product = vf.muls(page, blocks_per_page, preg32)
+        over = vf.gt(product, cand_u, preg32)
+        page_dec = vf.sub(page, one32, preg32)
+        page = vf.select(page_dec, page, over)
+        folded = vf.muls(page, blocks_per_page, preg32)
+        within = vf.sub(cand_u, folded, preg32)
         phys_page = vf.gather(table_tile, page, preg32)
         phys_u = vf.bit_cast(phys_page, dtype=pl.DT_UINT32)
         addr = vf.mul(phys_u, stride_lo_reg, preg32)
@@ -1595,7 +1563,6 @@ def _prepare_addresses32_pow2_vf(
     odd_lane = vf.adds(even_lane, 1, preg32)
     one32 = vf.full(1, preg32, dtype=pl.DT_UINT32)
     zero32 = vf.full(0, preg32, dtype=pl.DT_UINT32)
-    recip_reg = vf.full(page_param, preg32, dtype=pl.DT_UINT32)
     page = vf.full(0, preg32, dtype=pl.DT_UINT32)
     within = vf.full(0, preg32, dtype=pl.DT_UINT32)
     for chunk in pl.range(0, tile_end, 2):
@@ -1605,9 +1572,9 @@ def _prepare_addresses32_pow2_vf(
         cand = vf.gather(cand_tile, safe, preg32)
         cand = vf.maxs(cand, 0, preg32)
         cand_u = vf.bit_cast(cand, dtype=pl.DT_UINT32)
-        _split_page_pow2_vf(
-            page, within, cand_u, recip_reg, one32, preg32, blocks_per_page, page_param
-        )
+        page_mask_reg = vf.full(blocks_per_page - 1, preg32, dtype=pl.DT_UINT32)
+        page = vf.shift_right(cand_u, page_param, preg32)
+        within = vf.and_(cand_u, page_mask_reg, preg32)
         phys_page = vf.gather(table_tile, page, preg32)
         phys_u = vf.bit_cast(phys_page, dtype=pl.DT_UINT32)
         addr = vf.mul(phys_u, stride_lo_reg, preg32)
@@ -1670,9 +1637,13 @@ def _prepare_addresses64_general_vf(
         cand = vf.gather(cand_tile, safe, preg32)
         cand = vf.maxs(cand, 0, preg32)
         cand_u = vf.bit_cast(cand, dtype=pl.DT_UINT32)
-        _split_page_general_vf(
-            page, within, cand_u, recip_reg, one32, preg32, blocks_per_page, page_param
-        )
+        _recip_lo, page = vf.mull(cand_u, recip_reg, preg32)
+        product = vf.muls(page, blocks_per_page, preg32)
+        over = vf.gt(product, cand_u, preg32)
+        page_dec = vf.sub(page, one32, preg32)
+        page = vf.select(page_dec, page, over)
+        folded = vf.muls(page, blocks_per_page, preg32)
+        within = vf.sub(cand_u, folded, preg32)
         phys_page = vf.gather(table_tile, page, preg32)
         phys_u = vf.bit_cast(phys_page, dtype=pl.DT_UINT32)
         low, high = vf.mull(phys_u, stride_lo_reg, preg32)
@@ -1738,7 +1709,6 @@ def _prepare_addresses64_pow2_vf(
     carry = vf.create_mask(pattern=pl.MaskPattern.ALLF, dtype=pl.DT_UINT32)
     carry_out = vf.create_mask(pattern=pl.MaskPattern.ALLF, dtype=pl.DT_UINT32)
     stride_hi_reg = vf.full(stride_hi, preg32, dtype=pl.DT_UINT32)
-    recip_reg = vf.full(page_param, preg32, dtype=pl.DT_UINT32)
     page = vf.full(0, preg32, dtype=pl.DT_UINT32)
     within = vf.full(0, preg32, dtype=pl.DT_UINT32)
     for chunk in pl.range(0, tile_end, 2):
@@ -1748,9 +1718,9 @@ def _prepare_addresses64_pow2_vf(
         cand = vf.gather(cand_tile, safe, preg32)
         cand = vf.maxs(cand, 0, preg32)
         cand_u = vf.bit_cast(cand, dtype=pl.DT_UINT32)
-        _split_page_pow2_vf(
-            page, within, cand_u, recip_reg, one32, preg32, blocks_per_page, page_param
-        )
+        page_mask_reg = vf.full(blocks_per_page - 1, preg32, dtype=pl.DT_UINT32)
+        page = vf.shift_right(cand_u, page_param, preg32)
+        within = vf.and_(cand_u, page_mask_reg, preg32)
         phys_page = vf.gather(table_tile, page, preg32)
         phys_u = vf.bit_cast(phys_page, dtype=pl.DT_UINT32)
         low, high = vf.mull(phys_u, stride_lo_reg, preg32)
@@ -3152,6 +3122,7 @@ def quant_sparse_lightning_indexer_kernel(
                                 nk.current(),
                                 bottom,
                                 hist_loop,
+                                0,
                             )
                             _find_kth_vf(
                                 kth.current(),
@@ -3415,6 +3386,7 @@ def quant_sparse_lightning_indexer_kernel(
                         nk.current(),
                         mbottom,
                         mhist,
+                        0,
                     )
                     _find_kth_vf(
                         kth.current(),
