@@ -4,6 +4,11 @@ Use this for a kernel that is numerically correct on the workloads being compare
 
 For a configuration-selection task, keep the supplied implementation family fixed and use [configuration comparisons](#choose-configuration-comparisons) to select its parameters and metadata dispatch. This task's acceptance concerns the selected configurations and their workload coverage.
 
+When the user asks to avoid missing known methods, use [coverage mode](optimization-coverage.md)
+with an explicitly supplied card library (`--cards-root`; see
+[tooling/optimization.md](../tooling/optimization.md)). Coverage closure is a process
+result; paired native-task timing still decides whether the kernel is faster.
+
 ## Measure first
 
 Use [native-task timing](../verification/native-timing.md) for the execution-host helper path, callback contract, task counts, metric definitions and AB/BA calls. Freeze the comparison inputs, shapes, worker counts, metric, baseline and stop condition before searching. Keep the best verified baseline available.

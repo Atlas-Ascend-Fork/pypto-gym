@@ -11,7 +11,7 @@ Choose the current workflow from [SKILL.md](../SKILL.md), then consult the match
 | `api/` | How does this interface or mechanism work? | DSL constraints, resource/synchronization contracts and API-family behavior boundaries |
 | `diagnostics/` | Why did it fail, and what can checks detect? | Error interpretation, blind spots, validation traps, regression leads and specific defects |
 | `verification/` | How can results be trusted? | Device runs, native-task timing, evidence assessment and working methods |
-| `tooling/` | Which tools and examples should be used? | Check commands, execution feedback, example index and coverage contracts |
+| `tooling/` | Which tools and examples should be used? | Check commands, execution feedback, example index, coverage contracts and external collector references |
 
 ## Workflows
 
@@ -23,6 +23,8 @@ Choose the current workflow from [SKILL.md](../SKILL.md), then consult the match
 | Compilation failure, incorrect results or a hang | [Symptom-driven debugging](workflows/debugging.md) |
 | Numerically correct; only device timing is needed | [Native-task timing](verification/native-timing.md) |
 | Numerically correct; optimization is needed | [Experiment selection and complete-call comparison](workflows/optimization.md) |
+| Structurally limited; micro-tuning stalled | [Forced structural review and reachable target](workflows/structural-review.md) |
+| Optimize with a coverage requirement | [Enumerate, close and record known methods](workflows/optimization-coverage.md) |
 | Prepare an operator handoff | [Delivery target and policy selection, native implementation and final validation](workflows/delivery.md) |
 
 ## Implementation patterns
@@ -45,6 +47,19 @@ Choose the current workflow from [SKILL.md](../SKILL.md), then consult the match
 | Indexed copy/packing or contiguous elements sharing runtime metadata | [SIMT transport units and record ownership](patterns/simt-payload.md) |
 | Each output element indexes a source axis independently | [Indexed-axis gather coordinates, source strips and pass costs](patterns/indexed-gather.md) |
 | Pairwise rotation with a reusable position-indexed table | [Pairing maps and coefficient-table access regimes](patterns/paired-rotation.md) |
+
+## Optimization methods
+
+| Need | Reference |
+| --- | --- |
+| Known method enumeration and lifecycle | [Card source and `--cards-root`](tooling/optimization.md#optional-performance-card-source) |
+| Coverage closure | [Coverage mode](workflows/optimization-coverage.md) |
+| Forced structural review and reachable target | [Structural review](workflows/structural-review.md) |
+
+> The card library must be supplied explicitly through `--cards-root`; the installation
+> bundle does not include one and never falls back to a sibling directory. The card library
+> kept in the source repository is for repository checks only and is not part of the
+> installed scope.
 
 ## API topics
 
@@ -71,7 +86,7 @@ Choose the current workflow from [SKILL.md](../SKILL.md), then consult the match
 | Tests pass but results may still be wrong | [Validation traps](diagnostics/validation-traps.md) |
 | Missing warnings, inaccurate locations or broken error matching | [Diagnostic messages and locations](diagnostics/messages.md) |
 | Unmatched frontend/lowering errors, upstream ST or combined regression failures | [Regression leads](diagnostics/regressions.md); historical behavior is not a skip whitelist |
-| Task durations are known but the bottleneck needs explanation | [Performance diagnosis](diagnostics/performance.md): pipe counters, timelines, bandwidth and critical paths |
+| Task durations are known but the bottleneck needs explanation | [Performance diagnosis](diagnostics/performance.md): pipe counters, timelines, bandwidth and critical paths; collect per-core and 7-group evidence through [performance collection](tooling/performance-collection.md) |
 | A specific framework defect is suspected | [Defect references](diagnostics/defects/); start Fixpipe cases at the [disposition overview](diagnostics/defects/fixpipe-overview.md) |
 
 ## Verification methods
@@ -84,6 +99,7 @@ Choose the current workflow from [SKILL.md](../SKILL.md), then consult the match
 | Assessing API capabilities and evidence without false attribution | [evidence.md](verification/evidence.md) |
 | Choosing verification actions, editing and shell operations | [methods.md](verification/methods.md) |
 | Measuring whether a skill/tool change helps an agent | [Matched agent evaluation](verification/agent-evaluation.md): isolated bundles, independent grading, budgets and missing telemetry |
+| Deciding whether `msprof` evidence can carry a performance claim | [Measurement boundaries](tooling/performance-collection.md#measurement-boundaries); field meanings in [performance fields](tooling/performance-fields.md) |
 
 ## Tools and examples
 
@@ -94,6 +110,8 @@ Choose the current workflow from [SKILL.md](../SKILL.md), then consult the match
 | Source-pattern candidates, measured-cost ranking and recoverable best/current state | [Optimization tools](tooling/optimization.md); verifier inputs, evidence gates and bounded scratch state |
 | Discovering complete programs, reading independent references/tests, and admitting examples | [Shared program query](tooling/checks.md#complete-example-programs); [example catalog and conventions](tooling/examples.md) |
 | Maintaining example coverage and VF assignments | [Coverage contract](tooling/example-coverage.md), consumed by `check.py coverage` |
+| External profiler collection (`msprof`, `msprof op` / `msopprof`) | [Performance collection](tooling/performance-collection.md), `python scripts/perf_collect.py` |
+| Profiler CSV and per-core field meanings | [Performance fields](tooling/performance-fields.md) |
 
 This skill bundles its knowledge, tools and examples. Framework source and the installed runtime remain external; no simulator is included.
 

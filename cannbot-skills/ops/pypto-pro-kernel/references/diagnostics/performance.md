@@ -1,6 +1,6 @@
 # Performance diagnosis
 
-Use this after the first correct [complete-call timing](../verification/native-timing.md) baseline, before choosing an implementation experiment, and again when the bottleneck changes. The [optimization workflow](../workflows/optimization.md) owns that sequence. These techniques were exercised on the linked examples with the toolchain identities in their source. Their historical measurements are not universal limits or current acceptance results.
+Use this after the first correct [complete-call timing](../verification/native-timing.md) baseline, before choosing an implementation experiment, and again when the bottleneck changes. The [optimization workflow](../workflows/optimization.md) owns that sequence. These techniques were exercised on the linked examples with the toolchain identities in their source. Their historical measurements are not universal limits or current acceptance results. Collection commands and profiler field tables live in [performance collection](../tooling/performance-collection.md) and the [field reference](../tooling/performance-fields.md); this page owns mechanism interpretation.
 
 ## Test a mechanism with source-bound evidence
 
@@ -16,21 +16,6 @@ Turn the next experiment into a short chain: **observed cost → source work →
 | Update the conclusion | A neutral/losing candidate rejects that implementation under the tested controls. Reconcile the observed result with the prediction, then retain, repair, change the hypothesis or stop using actual remaining budget. Do not turn one failed layout or coupled sweep into a framework/hardware ceiling. |
 
 Keep the comparison's scope explicit. For a claimed reduction in GM activation bytes, first compare that operand's producer loads, extents, repetitions and owners in both sources. L0 copies, accumulator capacity and measured speed are separate questions; leave them open if they are not needed to decide the stated byte prediction. Once the local question is resolved, report that result and select the next distinguishing measurement instead of expanding every referenced hardware topic.
-
-<!-- kernel-query: {"id":"performance-counters","aliases":["bank conflict profiling","UB bank conflict counters","UB bank 冲突采集","ResourceConflictRatio"],"term_groups":[["bank conflict","bank group","bank 冲突"],["profiling","profile","profiler","collector","counter","counters","metric","metrics","采集","指标"]],"when":"Discover a documented collector or metric; source discovery does not establish installed profiler capability or measured conflicts.","missing_facts":["Identify the target device, installed collector/version, native kernel symbol and requested metric; keep documentation, capture support and measured results separate."]} -->
-## Collect the right profile
-
-The official performance guide (`pypto/docs/zh/guide/programming_guide/pro/debug/performance_optimization.md#使用msopprof采集` in the matching source checkout) owns the collector metric and output-file descriptions. Confirm the installed capability before relying on its configuration. Keep profiler output in ignored scratch and remove captures after extracting the needed evidence.
-
-| Collector | Useful output | Checks before interpretation |
-| --- | --- | --- |
-| `torch_npu.profiler` | `kernel_details.csv`: `Duration(us)`, `aic_mac_ratio`, `aic_mte1/2/3_ratio`, `aic_fixpipe_ratio`, `aiv_vec_ratio`, `Block Num` | Warm up and synchronize before capture; verify task/variant identity |
-| `msprof op --aic-metrics=PipeUtilization python3 script.py` | Per-block/per-core `PipeUtilization.csv` and `OpBasicInfo.csv`, including active bandwidth | Select the native mangled symbol with `--kernel-name`; otherwise a framework fill may be captured first. Replay timing differs from application timing |
-| PipeTimeline | Event ordering, steady-state bubbles, startup/tail dependencies and scalar work | More expensive collection; inspect the relevant work-item window rather than only whole-kernel ratios |
-
-Use the [capture helper](../verification/native-timing.md#collect-pipe-counters-for-diagnosis) for the validated `torch_npu.profiler` configuration, capability checks and returned fields. Its task aggregate counters need the per-core collector above when averages hide a tail.
-
-Two collector traps observed in that environment: trace directory names containing `=` were rejected, and CSV `Name`/`Type` used C++-mangled symbols rather than `pl.jit(name=)`. Factory variants sharing an inner function name can share a symbol. Use separate captures or unambiguous variant names; do not split rows by the requested JIT label. The shared [native-task timer](../verification/native-timing.md) captures complete calls with explicit task counts.
 
 ## Read work distribution before pipe ratios
 
@@ -125,7 +110,7 @@ Optimize complete-call latency at the original numerical contract, not maximum u
 | VF → Cube passes through ND staging and an extra move | Examine the [NZ handover and row+1 pitch](../api/crosscore-sync.md); [mm_softmax_mm](../../examples/algorithms/mm_softmax_mm/) is a runnable case |
 | A separate activation/quantization pass dominates | Test an allowed [GEMM fusion](../patterns/gemm-desugar.md) or [fixpipe rider](../api/fixpipe.md), retaining the numerical contract |
 | A preload or buffer-depth change does not help | First meet required slot lifetimes. Extra slots are not free, and preload interacts with the shared L1 budget; sweep a justified range after other layout changes rather than assuming monotonic benefit. See [flash attention](../../examples/algorithms/flash_attention/) and [MHA](../../examples/algorithms/flash_attention_mha/) |
-| MTE2 is continuously busy | Ratios alone stop discriminating candidates. Distinguish [effective, sustained and active bandwidth](#distinguish-bandwidth-quantities) before comparing required bytes / device time, per-core counters and concurrent loading streams with a [per-core msprof capture](#collect-the-right-profile). Balanced core times can still lose; see [decode GQA](../../examples/algorithms/decode_attention_gqa/) |
+| MTE2 is continuously busy | Ratios alone stop discriminating candidates. Distinguish [effective, sustained and active bandwidth](#distinguish-bandwidth-quantities) before comparing required bytes / device time, per-core counters and concurrent loading streams with a [per-core msprof capture](../tooling/performance-collection.md). Balanced core times can still lose; see [decode GQA](../../examples/algorithms/decode_attention_gqa/) |
 | Several pipes are busy but local speedups do not move total time | Establish timing-only ablation floors: remove traffic or replace one computation station, clearly marking numerical results invalid. Overlapping ablations do not add linearly. See [MHA](../../examples/algorithms/flash_attention_mha/) |
 | Ablation points to coupling between stations | For each MAC gap, find the predecessor track whose final event plus a consistent delay predicts MAC resumption. Compare steady-state windows and account for adjacent merged events before calling one beat unusually slow; see the MHA dependency analysis |
 | Removing a station helps but shrinking it does not | Include both vector and serial scalar work, and compare the reduction with available slack. A cut below that slack can leave total time unchanged. A dependency model omitting scalar/slack terms can mispredict gains; use the removal-versus-shrink device comparison |

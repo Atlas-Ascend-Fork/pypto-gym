@@ -24,6 +24,14 @@ Historical cross-collector comparisons are scoped to their kernels/toolchains, n
 
 For a supplied benchmark baseline, establish its cache policy, warmup, input distribution, task aggregation and included wrapper work before quoting a speedup. Repeated calls on resident inputs from this helper do not reproduce an evaluator that clears L2 before each measured call, even when both read `Duration(us)`. Use the supplied evaluator for the final baseline comparison; retain helper timings as labeled diagnostic or paired-variant measurements. If the original protocol is unavailable, report the two measurements separately without claiming a baseline speedup.
 
+## External collectors
+
+When the task needs per-core samples or the metric groups not exposed here, collect through
+[performance collection](../tooling/performance-collection.md). Those captures are diagnostic:
+`msprof` application timing, operator replay and `Duration(us)` are different clocks, so they
+do not replace the paired comparison below. Per-core samples from `aicore.db` are process-level
+and derived from an inferred frequency; label them as such.
+
 ## Verify capture before expanding performance coverage
 
 After one representative passes numerically, exercise the requested collector, export, report parsing and scoring path on that case. For a score target, do this before scheduling any full matrix, including a numerical-only matrix. Choose a small case that exercises the newly mapped axes; a singleton axis can hide a layout or stride error. Use the observed compilation, reference and export cost to reserve time for the required complete score. When the supplied evaluator checks accuracy and performance together, that combined run can provide both final matrices; a separate full numerical pass needs a concrete diagnostic reason.
@@ -76,7 +84,7 @@ Defaults are three warmups, twenty measured calls and one task per call. Set `ta
 
 The `measure_pipes` call above already supplies the initial timing baseline and counters; no preceding `measure_native` capture is required. It adds `pipe_counters`, grouped by one-based native task position even when symbols are identical. Each entry includes the exported name/type/core family/block count and counters with their original CSV names/units, median, valid sample count and missing sample count. Missing values remain `None`; `available=False` means no usable counters in that task, not zero utilization. Ignore exported zeros for an inactive AIC/AIV family.
 
-This explicitly requests `AiCMetrics.PipeUtilization` and checks that capability. Its `pipe_scope="task_aggregate"` does not expose individual cores. For uneven work or an unexplained tail, take the exact symbol from `identity["Name"]` into a per-core `msprof op` capture using [performance diagnosis](../diagnostics/performance.md#collect-the-right-profile). Ratios from different pipes overlap and must not be summed; preserve the collector's clock and units. Counter interpretation does not replace the paired comparison below.
+This explicitly requests `AiCMetrics.PipeUtilization` and checks that capability. Its `pipe_scope="task_aggregate"` does not expose individual cores. For uneven work or an unexplained tail, take the exact symbol from `identity["Name"]` into a per-core `msprof op` capture using [performance collection](../tooling/performance-collection.md). Ratios from different pipes overlap and must not be summed; preserve the collector's clock and units. Counter interpretation does not replace the paired comparison below.
 
 ## Collect a memory metric group
 

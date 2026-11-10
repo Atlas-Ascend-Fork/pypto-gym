@@ -18,6 +18,7 @@ from pathlib import Path
 import re
 import shutil
 import subprocess
+import sys
 import tempfile
 import unittest
 from unittest import mock
@@ -963,6 +964,27 @@ class InstallationTest(unittest.TestCase):
         ):
             with self.subTest(name=name), self.assertRaises(installer.InstallError):
                 installer._safe_relative(name)
+
+
+class InstalledDocumentationTest(unittest.TestCase):
+    def test_installed_kernel_skill_document_links_resolve(self):
+        """Links must resolve from the installed skill, not only the source tree."""
+        with tempfile.TemporaryDirectory(
+            dir=installer.filesystem_path(tempfile.gettempdir())
+        ) as temporary:
+            project = Path(temporary).resolve() / "workspace with spaces"
+            installer.install(project)
+            skill = project / ".opencode/skills/pypto-pro-kernel"
+            result = subprocess.run(
+                [sys.executable, str(skill / "scripts/check.py"), "links"],
+                capture_output=True,
+                text=True,
+                timeout=300,
+                check=False,
+            )
+            output = (result.stdout or "") + (result.stderr or "")
+            self.assertEqual(result.returncode, 0, output)
+            self.assertIn("0 findings", output)
 
 
 if __name__ == "__main__":
