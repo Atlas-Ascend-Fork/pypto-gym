@@ -8,10 +8,10 @@ PyPTO-Gym 是 PyPTO 实验算子仓，应该提供从算子源码到可安装产
 
 重构后对于 Pro 模式算子，每个算子只需编写一次，即可同时交付两种产物形态：
 
-| 产物 | 命令 | 安装方式 | 适用场景 |
-| --- | --- | --- | --- |
-| **whl**（JIT 直调） | `python3 build_ci.py --pkg-type whl` | `pip install` | 开发调试、快速验证、PIP源生态发布 |
-| **.run**（custom run 包） | `python3 build_ci.py --pkg-type run` | `bash *.run` | 生产部署、批量交付 |
+| 产物                            | 命令                                   | 安装方式        | 适用场景                          |
+| ------------------------------- | -------------------------------------- | --------------- | --------------------------------- |
+| **whl**（JIT 直调）       | `python3 build_ci.py --pkg-type whl` | `pip install` | 开发调试、快速验证、PIP源生态发布 |
+| **.run**（custom run 包） | `python3 build_ci.py --pkg-type run` | `bash *.run`  | 生产部署、批量交付                |
 
 ### 1.2. 两种产物模式的区别
 
@@ -38,31 +38,67 @@ bash cann-950-pypto_gym_9.2.0_linux-aarch64.run
 - 内含预编译产物：kernel `.o`（按 dtype 组合）+ host 侧三个 `.so` + aclnn 头文件 + ops-info.json
 - 安装后零 JIT 开销，aclnn 接口直接查找已编译二进制
 
+正式 Torch 绑定默认一并预编译、装入 `.run`，当前支持
+`mega_mhc`。已加载 CANN 基础环境时，安装到其 `opp` 后即可使用
+`pypto_gym.mega_mhc(...)`；直接调用 `torch.ops.pypto_gym.mega_mhc(...)` 前需先
+`import pypto_gym` 并调用 `pypto_gym.load()`（或先访问任一 `pypto_gym.<op>`）。
+`import pypto_gym` 本身不导入 torch、不加载绑定库，无需运行时编译。
+构建环境需有 torch/torch_npu；部署环境需与其 ABI 兼容。标准 CANN 安装自动登记
+Python 入口并使用绑定库的相对运行时路径，无需额外 source vendor 脚本。
+自定义位置安装仍可使用 vendor 的 `set_env.bash`。
+
+```bash
+python3 build_ci.py --pkg-type run --ops mega_mhc --stest
+```
+
+默认情况下，`--stest` 对已提供绑定的算子使用 `--mode torch`；未提供绑定的算子使用 `--mode aclnn`。
+`run` 默认尝试启用绑定，但若所选算子**都没有**接入绑定，会自动降级为 ACLNN-only 包（打印
+WARNING），仍按原有的 ACLNN 方式调用和测试。仅需 ACLNN 接口时可显式传
+`--no-torch-bindings`（手工 CMake 对应 `-DENABLE_TORCH_BINDINGS=OFF`）；显式传
+`--torch-bindings` 则要求所选算子中至少有一个提供绑定，否则 configure 阶段报错。
+`whl` 构建保持 JIT 模式，不启用此绑定。
+详细接口和新算子接入方式见 [Torch 绑定说明](../torch_extension/README.md)。
+
 ### 1.3. 快速开始
 
 #### 1.3.1. 前置条件
 
-| 依赖 | 要求 |
-| --- | --- |
-| CANN 包 | ≥ 9.2.0（含 `op_build` 工具） |
-| bisheng / asc_opc | 在 PATH 中（`source CANN set_env.sh`） |
-| pypto_pro | Python 包可导入 |
-| cmake | ≥ 3.18（系统级，非 pip 版） |
+| 依赖              | 要求                                               |
+| ----------------- | -------------------------------------------------- |
+| CANN 包           | ≥ 9.2.0（含 `op_build` 工具）                   |
+| bisheng / asc_opc | 在 PATH 中（`source CANN set_env.sh`）           |
+| pypto_pro         | Python 包可导入                                    |
+| PyYAML            | ≥ 6.0，`.run` 的 `ALL` 构建用于读取 YAML 清单 |
+| cmake             | ≥ 3.18（系统级，非 pip 版）                       |
 
 #### 1.3.2 构建算子
 
 ```bash
 # 构建单个算子的 .run 包
-python3 build_ci.py --pkg-type run --ops flex_attention
+python3 build_ci.py --pkg-type run --ops flex_attention --no-torch-bindings
 
-# 构建所有算子（默认）
+# 按 ops/pro/build_ops.yaml 中列出的目录构建 .run（默认 ALL）
 python3 build_ci.py --pkg-type run
 
 # 构建 whl
 python3 build_ci.py --pkg-type whl
 ```
 
-> 测试用的 aclnn 桥默认不参与构建，需要 `ENABLE_TESTS=ON`（`build_ci.py` 暂未暴露该开关，手工 cmake 重配方式见 §2.3）。
+> 添加 `--stest` 会自动设置 `ENABLE_TESTS=ON`，构建测试目标并执行测试；不添加时默认不构建测试桥。手工构建测试桥见 §2.3。
+
+`.run` 构建的 `--ops ALL`（含省略 `--ops`）使用
+[ops/pro/build_ops.yaml](../ops/pro/build_ops.yaml) 控制发布范围，使用 YAML 路径列表：
+
+```yaml
+- deepseek_v4_1/mega_mhc
+```
+
+路径相对于 `ops/pro`。列出的目录参与构建，未列出的目录不参与；不想构建某项时，
+在对应行首加 `#` 即可。空行和 `#` 注释会被忽略。清单至少需要一个有效算子目录；
+文件缺失、路径错误或全部被注释时构建报错。
+`--stest` 使用相同名单，CMake 自动跟踪文件变化。
+显式 `--ops mega_mhc` 绕过清单，仍按算子目录名选择；多个名称用逗号分隔。
+`whl` 的 `ALL` 不受此文件影响。
 
 #### 1.3.3. 安装 .run 包
 
@@ -122,7 +158,8 @@ pypto-gym/
 
 ### 1.3.6. 算子目录契约
 
-新增算子只需满足以下结构，构建链自动发现并接入：
+新增算子需满足以下结构；加入 `.run` 的 `ALL` 发布范围时，还需将相对于 `ops/pro` 的算子目录加入 `ops/pro/build_ops.yaml`。
+显式使用 `--ops <op_name>` 可直接选择符合构建约定的算子。
 
 ```bash
 ops/<paradigm>/<network>/<op_name>/
@@ -163,12 +200,12 @@ python3 build_ci.py --pkg-type run --soc ascend950,ascend910b
 
 ### 1.3.8. 环境变量
 
-| 变量 | 用途 | 默认值 |
-| --- | --- | --- |
-| `ASCEND_HOME_PATH` | CANN 包路径 | `/usr/local/Ascend/cann` |
-| `Python3_EXECUTABLE` | Python 解释器 | 系统 python3 |
-| `CANN_3RD_LIB_PATH` | 三方库缓存路径 | `<repo>/third_party/` |
-| `GYM_SOC` | pytest aclnn 模式默认桥目录使用的 soc | `ascend950` |
+| 变量                   | 用途                                  | 默认值                     |
+| ---------------------- | ------------------------------------- | -------------------------- |
+| `ASCEND_HOME_PATH`   | CANN 包路径                           | `/usr/local/Ascend/cann` |
+| `Python3_EXECUTABLE` | Python 解释器                         | 系统 python3               |
+| `CANN_3RD_LIB_PATH`  | 三方库缓存路径                        | `<repo>/third_party/`    |
+| `GYM_SOC`            | pytest aclnn 模式默认桥目录使用的 soc | `ascend950`              |
 
 ### 1.3.9 FAQ
 
@@ -187,10 +224,10 @@ A: JIT 模式依赖 `torch + torch_npu`，需先 source CANN 环境并安装 tor
 
 算子测试支持同一组用例、同一组 golden 在两种模式下执行，通过 `pytest --mode` 切换：
 
-| 模式 | 调用链 | 依赖 | 适用 |
-| --- | --- | --- | --- |
-| `jit`（默认） | `op_caller.get_op_caller("<op>")` → import `op_kernel/<op>.py` 宿主入口 → 首次调用 JIT 编译 kernel | 源码树 + CANN + pypto_pro | 开发调试、改 kernel 后快速验证 |
-| `aclnn` | `op_caller.get_op_caller("<op>")` → import `aclnn_bridge_<op>.so` → `dlopen` `libcust_opapi.so` → 调 C++ aclnn 接口 | 预编译桥 + 已安装的 run 包 | 验证 run 包安装后的二进制复用链路 |
+| 模式            | 调用链                                                                                                                         | 依赖                       | 适用                              |
+| --------------- | ------------------------------------------------------------------------------------------------------------------------------ | -------------------------- | --------------------------------- |
+| `jit`（默认） | `op_caller.get_op_caller("<op>")` → import `op_kernel/<op>.py` 宿主入口 → 首次调用 JIT 编译 kernel                       | 源码树 + CANN + pypto_pro  | 开发调试、改 kernel 后快速验证    |
+| `aclnn`       | `op_caller.get_op_caller("<op>")` → import `aclnn_bridge_<op>.so` → `dlopen` `libcust_opapi.so` → 调 C++ aclnn 接口 | 预编译桥 + 已安装的 run 包 | 验证 run 包安装后的二进制复用链路 |
 
 两种模式共用：
 
@@ -216,7 +253,7 @@ pytest ops/pro/experimental/flex_attention/tests --mode jit -q
 
 ### 2.3. 构建 aclnn 测试桥
 
-测试桥只在 `ENABLE_TESTS=ON` 时构建（`build_ci.py` 暂未暴露该开关，使用手工 cmake 重配）：
+测试桥只在 `ENABLE_TESTS=ON` 时构建。使用 `build_ci.py --pkg-type run --ops flex_attention --no-torch-bindings --stest` 会自动开启该选项并完成构建、安装和测试；也可以手工配置后只构建测试桥：
 
 ```bash
 cmake -S . -B build/ascend950 \
@@ -225,6 +262,7 @@ cmake -S . -B build/ascend950 \
       -DPACKAGE_TYPE=run \
       -DASCEND_OP_NAME=flex_attention \
       -DCMAKE_INSTALL_PREFIX=$PWD/build_out/run/ascend950 \
+      -DENABLE_TORCH_BINDINGS=OFF \
       -DENABLE_TESTS=ON
 
 cmake --build build/ascend950 --target aclnn_bridge_flex_attention -j 32
@@ -234,7 +272,7 @@ cmake --build build/ascend950 --target aclnn_bridge_flex_attention -j 32
 
 说明：
 
-- `ENABLE_TESTS=ON` 时 `cmake/config.cmake` 才会查找 torch；`OFF` 时 run/kernel 构建不依赖 torch。
+- `ENABLE_TESTS=ON` 或 `ENABLE_TORCH_BINDINGS=ON` 时需要 torch；两者均关闭时 run/kernel 构建不依赖 torch。
 - 桥的源文件/target/产物/模块名统一为 `aclnn_bridge_<op>`，由 `gym_add_aclnn_bridge(<op>)` 生成。
 - 新增算子时，在算子 `tests/aclnn_bridge/CMakeLists.txt` 调用 `gym_add_aclnn_bridge(<op>)` 并放置 `aclnn_bridge_<op>.cpp` 即可；算子 `tests/CMakeLists.txt` 会自动派发。
 
@@ -289,20 +327,24 @@ ops/<...>/<op>/tests/
 python3 build_ci.py --pkg-type whl --stest
 
 # aclnn：构建 run → 隔离安装到 build_out/run/<soc> → pytest --mode aclnn
-python3 build_ci.py --pkg-type run --ops flex_attention --soc ascend950 --stest
+python3 build_ci.py --pkg-type run --ops flex_attention --soc ascend950 --no-torch-bindings --stest
+
+# torch：按 YAML 清单构建一个 .run 包，验证其中已接入的正式 Torch 绑定
+python3 build_ci.py --pkg-type run --ops ALL --soc ascend950 --stest
 
 # 用例过滤：--stest 的值作为 pytest -k 表达式（逗号分隔按 or 处理）
 python3 build_ci.py --pkg-type whl --stest=test_fa_mask_info
 python3 build_ci.py --pkg-type run --ops flex_attention \
-        --stest=test_fa_mask_info,test_fa_mask_info_bshd_layout
+        --no-torch-bindings --stest=test_fa_mask_info,test_fa_mask_info_bshd_layout
 ```
 
 行为说明：
 
 - jit 模式测试依赖**安装后的 whl**：`pip install --target build_out/whl/<soc>/site-packages`，并通过 `ops_registry.json` 让 `op_caller` 从安装包内 `pypto_gym.ops...op_kernel.<op>` 导入；
-- run 模式测试安装到 `build_out/run/<soc>`（`--install-path`），只向 pytest 子进程注入 `ASCEND_CUSTOM_OPP_PATH` / `LD_LIBRARY_PATH`，不修改父进程环境、不 source set_env；
+- run 模式测试安装到 `build_out/run/<soc>`（`--install-path`），向 pytest 子进程注入 `ASCEND_CUSTOM_OPP_PATH` / `LD_LIBRARY_PATH`；启用正式 Torch 绑定时还注入 vendor 的 `PYTHONPATH`，不修改父进程环境；
+- `.run` 的 `ALL` 构建和测试均按 `ops/pro/build_ops.yaml` 选择算子；显式 `--ops` 绕过清单。默认启用 Torch 绑定，已提供绑定的算子使用 torch 模式，其余使用 aclnn 模式；传入 `--no-torch-bindings` 可关闭绑定；
 - 测试结束不清理 `site-packages` / `vendors`；下次 stest 前会先 `--uninstall` 再安装，`-c` 可整体清理；
-- run/aclnn 自动追加 `-m "not jit_only"`，排除 matrix/perf/prefill 等 JIT-only 用例；
+- run 的 aclnn、torch 模式自动追加 `-m "not jit_only"`，排除 matrix/perf/prefill 等 JIT-only 用例；
 - `--stest` 只允许单个 soc，多 soc 直接报错；`--utest` 暂未提供。
 
 产物布局：

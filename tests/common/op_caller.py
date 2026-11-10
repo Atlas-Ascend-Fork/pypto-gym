@@ -10,9 +10,10 @@
 # -----------------------------------------------------------------------------------------------------------
 """算子调用入口适配(仓级测试公共层).
 
-按 pytest --mode 选择 jit / aclnn 路径:
+按 pytest --mode 选择 jit / aclnn / torch 路径:
     jit   -> import <op_kernel>/<op>.py 的宿主入口(默认与算子同名)
     aclnn -> import 预编译桥 aclnn_bridge_<op> 的 <op> 接口(签名与 jit 入口一致)
+    torch -> 已安装 .run 中 pypto_gym.<op> 的正式 Torch 绑定
 
 路径由根 conftest.py / pytest.ini 统一注入, 本模块不做 sys.path 操作.
 算子入口名不合约定时, 用 jit_module/jit_attr 显式指定。
@@ -124,7 +125,7 @@ def _file_caller(op, path, attribute):
 
 
 def get_mode() -> str:
-    """返回当前测试模式(jit/aclnn), 由根 conftest 的 --mode 写入 GYM_TEST_MODE."""
+    """返回当前测试模式(jit/aclnn/torch), 由根 conftest 的 --mode 写入 GYM_TEST_MODE."""
     return os.environ.get("GYM_TEST_MODE", "jit")
 
 
@@ -164,4 +165,6 @@ def get_op_caller(
     if mode == "aclnn":
         module = importlib.import_module(aclnn_module or f"aclnn_bridge_{op}")
         return getattr(module, aclnn_attr or op)
-    raise ValueError(f"unsupported test mode: {mode} (expected jit/aclnn)")
+    if mode == "torch":
+        return getattr(importlib.import_module("pypto_gym"), op)
+    raise ValueError(f"unsupported test mode: {mode} (expected jit/aclnn/torch)")

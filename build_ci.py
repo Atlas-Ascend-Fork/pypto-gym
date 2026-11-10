@@ -15,7 +15,7 @@ This file provides a unified build entry point for PyPTO-GYM project, supporting
     whl: jit direct-call mode, python -m build -> build_out/whl/<soc>/*.whl
     run: built-in mode, CMake full chain -> build_out/run/<soc>/ producing custom run packages
          configure -> build -> package (.run)
-    stest: -s/--stest runs on-board system tests (whl -> jit / run -> aclnn)
+    stest: -s/--stest runs on-board system tests (whl -> jit / run -> aclnn or torch)
 
 Multi-soc semantics: --soc accepts a comma-separated list; each soc runs a FULL
 build round in its own binary dir (build/<soc>), producing one .run per soc
@@ -35,7 +35,10 @@ Usage:
 
     Common options:
         --pkg-type: Specify product type (whl/run)
-        --ops: Specify operators to build (comma separated, default ALL)
+        --ops: Specify operators to build (comma separated, default ALL;
+               run ALL reads ops/pro/build_ops.yaml)
+        --torch-bindings / --no-torch-bindings: Include/omit precompiled Torch bindings
+                                               (enabled by default for run)
         --soc: Specify soc version (currently ascend950 only;
                comma-separated multi-value activates when whitelist expands)
         --build_type: Specify build type (Debug/Release/MinSizeRel/RelWithDebInfo, run mode)
@@ -51,7 +54,7 @@ Examples:
     python build_ci.py --pkg-type whl
 
     # Build run package for flex_attention on ascend950
-    python build_ci.py --pkg-type run --ops flex_attention --soc ascend950
+    python build_ci.py --pkg-type run --ops flex_attention --soc ascend950 --no-torch-bindings
 
     # Debug build with AddressSanitizer on host side
     python build_ci.py --pkg-type run --build_type Debug --asan
@@ -125,6 +128,12 @@ class FeatureParam(CMakeParam):
         self.ops: str = args.ops or "ALL"  # Operators to build (comma separated)
         self.soc: str = args.soc or "ascend950"  # Soc versions (comma separated)
         self.whl_isolation: bool = args.isolation  # Compile whl package in isolation mode
+        self.torch_bindings_explicit: bool = args.torch_bindings is not None
+        self.torch_bindings: bool = (
+            self.pkg_type == "run" if args.torch_bindings is None else args.torch_bindings
+        )
+        if self.torch_bindings and self.pkg_type != "run":
+            raise ValueError("--torch-bindings requires --pkg-type run")
 
     def __str__(self) -> str:
         """Return string representation of feature parameters
@@ -138,6 +147,7 @@ class FeatureParam(CMakeParam):
         run_count = len(self.soc_list)
         desc += f"\n    Soc                     : {self.soc} ({run_count} run{'s' if run_count > 1 else ''})"
         desc += f"\n    Isolation               : {self.whl_isolation}"
+        desc += f"\n    TorchBindings           : {self.torch_bindings}"
         return desc
 
     @property
@@ -168,6 +178,13 @@ class FeatureParam(CMakeParam):
     @staticmethod
     def reg_args(parser):
         parser.add_argument(
+            "--torch-bindings", action=argparse.BooleanOptionalAction, default=None,
+            help="include precompiled Torch bindings (default: enabled for run when at least one "
+                 "selected operator provides one, disabled for whl; requires torch and torch_npu). "
+                 "Use --no-torch-bindings for an ACLNN-only .run; explicit --torch-bindings fails "
+                 "when no selected operator provides a binding.",
+        )
+        parser.add_argument(
             "--pkg-type",
             choices=["whl", "run"],
             default="whl",
@@ -178,7 +195,7 @@ class FeatureParam(CMakeParam):
             nargs="?",
             type=str,
             default="ALL",
-            help="operators to build (comma separated), e.g. flex_attention. Default ALL.",
+            help="operators to build (comma separated); run ALL uses ops/pro/build_ops.yaml. Default ALL.",
         )
         parser.add_argument(
             "--soc",
@@ -207,6 +224,7 @@ class FeatureParam(CMakeParam):
         """
         cmd = f" -DPACKAGE_TYPE={self.pkg_type}"  # Control the type of product package, such as run/rpm/deb
         cmd += f" -DASCEND_OP_NAME={self.ops}"  # Control the scope of compilation operators
+        cmd += f" -DENABLE_TORCH_BINDINGS={'ON' if self.torch_bindings else 'OFF'}"
         return cmd
 
 
@@ -350,6 +368,7 @@ class BuildCtrl(CMakeParam):
         self.third_party_path: Optional[Path] = Path(third_party_path).resolve() if third_party_path else None
         # Others
         self.feature: FeatureParam = FeatureParam(args=args)
+        self.resolve_torch_bindings()
         self.build: BuildParam = BuildParam(args=args)
         self.tests: TestParam = TestParam(args=args)
         self.jobs: Optional[int] = args.jobs
@@ -693,10 +712,20 @@ class BuildCtrl(CMakeParam):
                 found[op_dir.name] = op_dir
         return found
 
-    def _selected_op_dirs(self) -> List[Path]:
+    def selected_op_dirs(self) -> List[Path]:
         """Resolve --ops into operator dirs for stest."""
         found = self._discover_op_dirs()
         if self.feature.ops.strip().upper() == "ALL":
+            if self.feature.pkg_type_run:
+                scope = subprocess.run(
+                    [sys.executable, str(self.src_root / "cmake/scripts/select_run_ops.py"),
+                     "--source-root", str(self.src_root), "--ops", "ALL", "--format", "paths"],
+                    check=True, capture_output=True, text=True)
+                selected = [self.src_root / path for path in scope.stdout.splitlines()]
+                missing = [str(op) for op in selected if not (op / "tests").is_dir()]
+                if missing:
+                    raise RuntimeError(f"listed run operator tests not found for {missing}")
+                return selected
             selected = sorted(found.values(), key=lambda p: p.name)
             if not selected:
                 raise RuntimeError("no operator tests found under ops/{pro,tensor}/**/tests")
@@ -720,6 +749,7 @@ class BuildCtrl(CMakeParam):
         args += ["--mode", mode, "--rootdir", str(self.src_root), "-q"]
         if mode == "aclnn":
             args += ["--aclnn-lib-dir", str(self._build_dir(soc) / "tests")]
+        if mode in ("aclnn", "torch"):
             args += ["-m", "not jit_only"]
         args += self._pytest_filter_args()
         cmd = " ".join(shlex.quote(a) for a in args)
@@ -782,18 +812,56 @@ class BuildCtrl(CMakeParam):
             "ASCEND_CUSTOM_OPP_PATH": self._prepend_env("ASCEND_CUSTOM_OPP_PATH", str(vendor)),
             "LD_LIBRARY_PATH": self._prepend_env("LD_LIBRARY_PATH", str(vendor / "op_api" / "lib")),
         }
-        self._run_pytest(op_dirs, mode="aclnn", soc=soc, update_env=update_env)
+        manifest = vendor / "python" / "pypto_gym" / "operators.json"
+        bound_names = (set(json.loads(manifest.read_text(encoding="utf-8")))
+                       if self.feature.torch_bindings and manifest.is_file() else set())
+        if bound_names:
+            update_env["PYTHONPATH"] = self._prepend_env("PYTHONPATH", str(vendor / "python"))
+        bound = [op for op in op_dirs if op.name in bound_names]
+        unbound = [op for op in op_dirs if op.name not in bound_names]
+        if bound:
+            self._run_pytest(bound, mode="torch", soc=soc, update_env=update_env)
+        if unbound:
+            self._run_pytest(unbound, mode="aclnn", soc=soc, update_env=update_env)
 
     def run_stest(self) -> None:
         """Execute system tests for the selected operators."""
         if not self.tests.enabled:
             return
-        op_dirs = self._selected_op_dirs()
+        op_dirs = self.selected_op_dirs()
         logging.info("STest operators: %s", [d.name for d in op_dirs])
         if self.feature.pkg_type_run:
             self._run_stest_aclnn(op_dirs, self.feature.soc_list[0])
         else:
             self._run_stest_jit(op_dirs)
+
+    def resolve_torch_bindings(self) -> None:
+        """Default run builds fall back to ACLNN-only when no selected op has a binding.
+
+        Keeps the pre-binding behaviour for operators that never adapted Torch, while
+        an explicit --torch-bindings request still fails loudly in CMake.
+        """
+        if not self.feature.pkg_type_run or not self.feature.torch_bindings:
+            return
+        if self.feature.torch_bindings_explicit:
+            return
+        try:
+            op_dirs = self._selected_build_dirs()
+        except (OSError, subprocess.CalledProcessError):
+            return  # Leave the error to CMake's own scope resolution.
+        if op_dirs and not any((d / "torch_extension" / "CMakeLists.txt").is_file() for d in op_dirs):
+            logging.warning(
+                "No selected operator provides a Torch binding; building an ACLNN-only .run "
+                "(pass --torch-bindings to require bindings)")
+            self.feature.torch_bindings = False
+
+    def _selected_build_dirs(self) -> List[Path]:
+        """Resolve --ops into binary-buildable operator dirs (no tests required)."""
+        scope = subprocess.run(
+            [sys.executable, str(self.src_root / "cmake/scripts/select_run_ops.py"),
+             "--source-root", str(self.src_root), "--ops", self.feature.ops, "--format", "paths"],
+            check=True, capture_output=True, text=True)
+        return [self.src_root / path for path in scope.stdout.splitlines()]
 
     def _duration(self, ts: datetime) -> str:
         """Calculate stage duration and update remaining timeout

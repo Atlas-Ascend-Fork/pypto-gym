@@ -38,6 +38,7 @@ option(ENABLE_OPS_HOST            "Build ops host."                 ON)
 option(ENABLE_OPS_KERNEL          "Build ops kernel."               ON)
 option(ENABLE_ASAN                "Enable AddressSanitizer (host side)." OFF)
 option(ENABLE_UBSAN               "Enable UndefinedBehaviorSanitizer (host side)." OFF)
+option(ENABLE_TORCH_BINDINGS      "Include precompiled Torch bindings in the run package." ON)
 
 # 公开编译开关(tests)
 option(ENABLE_TESTS "Enable tests" OFF)  # 算子级 dispatcher 据此派发 tests/ 目录; 亦为 config.cmake 预留 XSAN 块的激活条件
@@ -58,6 +59,9 @@ include(cmake/obj_func.cmake)
 if (ENABLE_TESTS)
     add_subdirectory(tests)
 endif()
+if (ENABLE_TORCH_BINDINGS AND NOT PREPARE_BUILD)
+    add_subdirectory(torch_extension)
+endif()
 
 # 算子接入: 发现 ops/{pro,tensor} 树, add 算子级目录(dispatcher 派发 op_host/tests).
 # 算子侧只做"申报"(宏登记源到全局属性), 目标创建在接入后的 custom_build.cmake 读回完成.
@@ -65,6 +69,9 @@ gym_op_discovery(OP_LIST OP_DIR_LIST)
 foreach(_op_dir ${OP_DIR_LIST})
     add_subdirectory(${_op_dir})
 endforeach()
+if (ENABLE_TORCH_BINDINGS AND NOT PREPARE_BUILD)
+    gym_finalize_torch_bindings()
+endif()
 
 # 读回算子登记, 创建 host 侧目标(三 .so/核对程序)与 kernel 编译链
 include(cmake/custom_build.cmake)       # TODO 看看能不能去掉

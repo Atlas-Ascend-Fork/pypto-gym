@@ -11,6 +11,7 @@
 
 # 二次构建入口: 主 configure 期由 cmake/config.cmake 调用,
 # 以 PREPARE_BUILD=ON 再跑一次 cmake 并 make prepare_build, 产出 autogen 与 impl.
+# 准备阶段不编译 Torch 绑定，显式关闭以避免使用主构建的默认开启值。
 
 CPU_NUM=$(($(grep -c "^processor" /proc/cpuinfo)*2))
 JOB_NUM="-j${CPU_NUM}"
@@ -43,6 +44,7 @@ cd "${PATH_TO_BUILD}"
 cmake ${PATH_TO_SOURCE} \
     -DBUILD_OPEN_PROJECT=ON \
     -DPREPARE_BUILD=ON \
+    -DENABLE_TORCH_BINDINGS=OFF \
     -DCUSTOM_ASCEND_CANN_PACKAGE_PATH=${ASCEND_CANN_PACKAGE_PATH} \
     -DASCEND_AUTOGEN_DIR=${ASCEND_AUTOGEN_DIR} \
     -DASCEND_BINARY_OUT_DIR=${ASCEND_BINARY_OUT_DIR} \

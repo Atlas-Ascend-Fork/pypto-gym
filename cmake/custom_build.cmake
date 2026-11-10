@@ -61,6 +61,7 @@ if (generate_aclnn_srcs)
             ${OP_BUILD_TOOL}
             $<TARGET_FILE:op_host_aclnn>
             ${base_aclnn_binary_dir}
+            DEPENDS op_host_aclnn
     )
 endif ()
 add_custom_target(opbuild_gen_default
@@ -77,6 +78,7 @@ if (generate_aclnn_inner_srcs)
             ${OP_BUILD_TOOL}
             $<TARGET_FILE:op_host_aclnnInner>
             ${base_aclnn_binary_dir}/inner
+            DEPENDS op_host_aclnnInner
     )
 endif ()
 add_custom_target(opbuild_gen_inner
@@ -93,6 +95,7 @@ if (generate_exclude_proto_srcs)
             ${OP_BUILD_TOOL}
             $<TARGET_FILE:op_host_aclnnExc>
             ${base_aclnn_binary_dir}/exc
+            DEPENDS op_host_aclnnExc
     )
 endif ()
 add_custom_target(opbuild_gen_exc
@@ -151,10 +154,14 @@ if (ENABLE_OPS_HOST AND NOT PREPARE_BUILD)
     get_property(_infer_srcs GLOBAL PROPERTY GYM_INFER_SRCS)
     get_property(_tiling_srcs GLOBAL PROPERTY GYM_TILING_SRCS)
     get_property(_opapi_srcs GLOBAL PROPERTY GYM_OPAPI_SRCS)
+    # Collect generated headers for kernel rebuild dependencies; force-includes
+    # below still use the per-source mapping to keep operators isolated.
+    get_property(_pypto_gen_dirs GLOBAL PROPERTY GYM_PYPTO_GEN_DIRS)
     get_property(_tiling_check_srcs GLOBAL PROPERTY GYM_TILING_CHECK_SRCS)
     list(REMOVE_DUPLICATES _infer_srcs)
     list(REMOVE_DUPLICATES _tiling_srcs)
     list(REMOVE_DUPLICATES _opapi_srcs)
+    list(REMOVE_DUPLICATES _pypto_gen_dirs)
     list(REMOVE_DUPLICATES _tiling_check_srcs)
 
     # autogen 源清单
@@ -347,14 +354,18 @@ if (ENABLE_OPS_HOST AND NOT PREPARE_BUILD)
     # ---------- ops-info.json (三 ini 合成) ----------
     foreach (compute_unit ${ASCEND_COMPUTE_UNIT})
         set(_ops_info_json ${ASCEND_AUTOGEN_DIR}/aic-${compute_unit}-ops-info.json)
-        add_custom_command(OUTPUT ${_ops_info_json}
+        # 名单可能在单算子与 ALL 之间切换；每次按本次 op_build 的 ini 重建清单，
+        # 避免沿用构建目录中旧的单算子 JSON。
+        add_custom_target(generate_ops_info_${compute_unit} ALL
                 COMMAND ${Python3_EXECUTABLE} ${GYM_UTIL_SCRIPT_DIR}/parse_ini_to_json.py
                 ${base_aclnn_binary_dir}/aic-${compute_unit}-ops-info.ini
                 ${base_aclnn_binary_dir}/inner/aic-${compute_unit}-ops-info.ini
                 ${base_aclnn_binary_dir}/exc/aic-${compute_unit}-ops-info.ini
-                ${_ops_info_json}
+                ${_ops_info_json}.tmp.json
+                COMMAND ${CMAKE_COMMAND} -E copy_if_different ${_ops_info_json}.tmp.json ${_ops_info_json}
+                COMMAND ${CMAKE_COMMAND} -E rm -f ${_ops_info_json}.tmp.json
+                BYPRODUCTS ${_ops_info_json}
                 DEPENDS opbuild_gen_default opbuild_gen_inner opbuild_gen_exc)
-        add_custom_target(generate_ops_info_${compute_unit} ALL DEPENDS ${_ops_info_json})
         add_dependencies(prepare_build generate_ops_info_${compute_unit})
     endforeach ()
 
@@ -384,6 +395,23 @@ if (ENABLE_OPS_HOST AND NOT PREPARE_BUILD)
     foreach(_kernel_target ${_gym_kernel_targets})
         add_dependencies(${_kernel_target} gym_opstore_stage)
     endforeach ()
+    # 依赖 tiling 的实际输入文件；部分 SDK 的 depfile 会让 host 库反复重链，
+    # 不能仅因 .so 的时间戳变化就重编所有 kernel。
+    set(_kernel_tiling_inputs ${_tiling_srcs})
+    foreach(_tiling_src ${_tiling_srcs})
+        get_filename_component(_tiling_host_dir ${_tiling_src} DIRECTORY)
+        file(GLOB _tiling_host_headers ${_tiling_host_dir}/*.h)
+        list(APPEND _kernel_tiling_inputs ${_tiling_host_headers})
+    endforeach()
+    foreach(_gen_dir ${_pypto_gen_dirs})
+        file(GLOB _gen_headers ${_gen_dir}/*.h)
+        list(APPEND _kernel_tiling_inputs ${_gen_headers})
+    endforeach()
+    get_property(_gym_kernel_outputs GLOBAL PROPERTY GYM_KERNEL_OUTPUTS)
+    foreach(_kernel_output ${_gym_kernel_outputs})
+        add_custom_command(OUTPUT ${_kernel_output} APPEND
+                DEPENDS ${_kernel_tiling_inputs} ${ASCEND_AUTOGEN_DIR}/aic-${ASCEND_COMPUTE_UNIT}-ops-info.json)
+    endforeach()
 
     # ---------- vendors staging install 规则(COMPONENT = 包组件, 供 CPack staging 收集) ----------
     install(TARGETS cust_opapi LIBRARY DESTINATION ${_vendor_dir}/op_api/lib COMPONENT ${VENDOR_NAME})

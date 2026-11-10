@@ -11,11 +11,13 @@
 # 由根 CMakeLists 在 ENABLE_TESTS 时逐级 add_subdirectory 引入;
 # torch 依赖由 cmake/config.cmake 在根作用域统一查找, 此处直接复用其变量与 imported target.
 
+find_package(Python3 REQUIRED COMPONENTS Interpreter Development)
 add_library(aclnn_bridge_common INTERFACE)
 target_include_directories(aclnn_bridge_common
         INTERFACE
                 ${CMAKE_CURRENT_SOURCE_DIR}
                 ${TORCH_INCLUDE_DIRS}
+                ${Python3_INCLUDE_DIRS}
                 ${ASCEND_CANN_PACKAGE_PATH}/include
 )
 target_link_libraries(aclnn_bridge_common

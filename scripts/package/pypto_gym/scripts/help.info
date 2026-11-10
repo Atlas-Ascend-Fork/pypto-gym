@@ -7,5 +7,6 @@
   --quiet                           Quiet mode
 
   Post-install:
-    source <opp>/vendors/pypto_gym/bin/set_env.bash       Set runtime environment
+    Standard CANN install: import pypto_gym directly with the CANN base environment loaded.
+    Custom location: source <opp>/vendors/pypto_gym/bin/set_env.bash
     bash <opp>/vendors/pypto_gym/scripts/uninstall.sh    Uninstall (when .run is deleted)

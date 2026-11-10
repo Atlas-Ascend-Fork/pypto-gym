@@ -23,6 +23,7 @@ readonly TMP_PKG_VERSION_FILE="${TMP_PKG_INFO_PATH}/version.info"
 unset tmp_cfd
 
 readonly VENDOR_NAME="pypto_gym"
+source "${TMP_PKG_SCRIPTS_PATH}/python_registration.sh"
 
 ########################################################################################################################
 # 日志
@@ -168,6 +169,29 @@ do_install() {
     [ -d "${TMP_PKG_ROOT_PATH}/packages/vendors/${VENDOR_NAME}" ] \
         || exit_log 1 "vendor payload missing in package: ${TMP_PKG_ROOT_PATH}/packages/vendors/${VENDOR_NAME}"
 
+    local has_bindings=n register_python=n check_rc=0
+    if [ -f "${TMP_PKG_ROOT_PATH}/packages/vendors/${VENDOR_NAME}/python/pypto_gym/operators.json" ]; then
+        has_bindings=y
+        gym_python_check_links "${targetdir}"
+        check_rc=$?
+        case "${check_rc}" in
+            0) register_python=y ;;
+            2) gym_python_warn_degraded "${targetdir}" "CANN site-packages is not writable" ;;
+            *) exit_log 1 "cannot register Python bindings" ;;
+        esac
+    fi
+
+    # Always drop links left by a previous version; only a writable standard
+    # CANN layout can recreate them.
+    if ! gym_python_remove_links "${targetdir}"; then
+        if [ "${has_bindings}" = y ]; then
+            gym_python_warn_degraded "${targetdir}" "cannot remove stale Python binding links"
+            register_python=n
+        else
+            exit_log 1 "cannot remove old Python binding registration"
+        fi
+    fi
+
     if [ -d "${targetdir}/${vendordir}" ]; then
         log "[INFO] ${targetdir}/${vendordir} already exists, old version will be replaced"
         chmod -R +w "${targetdir}/${vendordir}" >/dev/null 2>&1
@@ -179,12 +203,6 @@ do_install() {
     if ! cp -rf "${TMP_PKG_ROOT_PATH}/packages/vendors/${VENDOR_NAME}/." "${targetdir}/${vendordir}/"; then
         exit_log 1 "copy vendor files failed"
     fi
-    chmod -R 550 "${targetdir}/${vendordir}" >/dev/null 2>&1
-    if [ "${ARG_INSTALL_FOR_ALL}" = "y" ]; then
-        # multi-user scenario: world-readable vendor tree + config.ini
-        chmod -R 555 "${targetdir}/${vendordir}" >/dev/null 2>&1
-    fi
-
     update_load_priority
     if [ "${ARG_INSTALL_FOR_ALL}" = "y" ] && [ -f "${config_file}" ]; then
         chmod 755 "${config_file}" 2>/dev/null
@@ -201,23 +219,50 @@ do_install() {
 #!/bin/bash
 export ASCEND_CUSTOM_OPP_PATH=${targetdir}/${vendordir}:\${ASCEND_CUSTOM_OPP_PATH}
 export LD_LIBRARY_PATH=${targetdir}/${vendordir}/op_api/lib/:\${LD_LIBRARY_PATH}
+if [ -d "${targetdir}/${vendordir}/python" ]; then
+    export PYTHONPATH=${targetdir}/${vendordir}/python:\${PYTHONPATH}
+fi
 EOF
     chmod 550 "${targetdir}/${vendordir}/bin/set_env.bash"
 
-    # uninstall.sh 落到 vendor scripts/ 目录(供 .run 包已删除、仅存安装结果时直接 bash uninstall.sh)
+    if [ "${register_python}" = y ]; then
+        gym_python_install_links "${targetdir}" || {
+            gym_python_warn_degraded "${targetdir}" "cannot create Python binding links"
+            register_python=n
+        }
+    fi
+
+    # 独立卸载入口和共享登记逻辑一起交付。
     mkdir -p "${targetdir}/${vendordir}/scripts"
-    if [ -f "${TMP_PKG_SCRIPTS_PATH}/uninstall.sh" ]; then
-        cp -f "${TMP_PKG_SCRIPTS_PATH}/uninstall.sh" "${targetdir}/${vendordir}/scripts/uninstall.sh"
-        chmod 550 "${targetdir}/${vendordir}/scripts/uninstall.sh"
+    for script_name in uninstall.sh python_registration.sh; do
+        cp -f "${TMP_PKG_SCRIPTS_PATH}/${script_name}" "${targetdir}/${vendordir}/scripts/${script_name}" \
+            || exit_log 1 "cannot install ${script_name}"
+        chmod 550 "${targetdir}/${vendordir}/scripts/${script_name}"
+    done
+
+    # Freeze permissions only after every vendor-side write is complete, so a
+    # non-root owner can finish the installation before the tree becomes 550.
+    chmod -R 550 "${targetdir}/${vendordir}" >/dev/null 2>&1
+    if [ "${ARG_INSTALL_FOR_ALL}" = "y" ]; then
+        # multi-user scenario: world-readable vendor tree + config.ini
+        chmod -R 555 "${targetdir}/${vendordir}" >/dev/null 2>&1
     fi
 
     log "[INFO] install success. vendor: ${VENDOR_NAME} -> ${targetdir}/${vendordir}"
     log "[INFO] verify: grep load_priority ${config_file}"
-    log "[INFO] using requirements: source ${targetdir}/${vendordir}/bin/set_env.bash"
+    public_python_dir=$(gym_python_public_dir "${targetdir}")
+    if [ -n "${public_python_dir}" ] && [ -f "${public_python_dir}/operators.json" ]; then
+        log "[INFO] Python bindings registered: ${public_python_dir}; no vendor source required with CANN environment loaded"
+    elif [ "${has_bindings}" = y ]; then
+        log "[WARN] Python bindings not registered; source ${targetdir}/${vendordir}/bin/set_env.bash to use pypto_gym"
+    else
+        log "[INFO] custom-location environment: source ${targetdir}/${vendordir}/bin/set_env.bash"
+    fi
     log "[INFO] uninstall: bash ${targetdir}/${vendordir}/scripts/uninstall.sh"
 }
 
 do_uninstall() {
+    gym_python_remove_links "${targetdir}" || exit_log 1 "cannot remove Python binding registration"
     if [ ! -d "${targetdir}/${vendordir}" ]; then
         log "[INFO] ${targetdir}/${vendordir} not exist, no need to uninstall"
         remove_load_priority

@@ -245,12 +245,14 @@ def gen_ops_config(json_file, soc, binary_info_config, config):
 
 
 def check_single_op_is_void(root_dir):
+    candidates = [root_dir]
     for root, dirs, _ in os.walk(root_dir):
         for sub_dir in dirs:
-            dir_path = os.path.join(root, sub_dir)
-            if len(os.listdir(dir_path)) == 0:
-                print(f"[ERROR] op {sub_dir}: not any obj compile success")
-                sys.exit(1)
+            candidates.append(os.path.join(root, sub_dir))
+    for dir_path in candidates:
+        if os.path.isdir(dir_path) and not os.listdir(dir_path):
+            raise RuntimeError(
+                f"[ERROR] op {os.path.basename(dir_path)}: not any obj compile success")
 
 
 def write_jsons(out_dir, file_list, config):
@@ -288,11 +290,15 @@ def generate_operator_cfg_file(
     write_jsons(out_dir, file_list, config)
 
 
-def gen_all_config(root_dir, soc, out_dir, skip_binary_info_config, op_range="all"):
+def gen_all_config(root_dir, soc, out_dir, skip_binary_info_config, op_range="all", op_names=None):
+    roots = [os.path.join(root_dir, name) for name in op_names] if op_names else [root_dir]
     if op_range != "relocatable":
-        check_single_op_is_void(root_dir)
-    all_json_files = get_specified_suffix_file(root_dir, ".json")
-    relocatable_json_files = get_specified_suffix_file(root_dir, "_relocatable.json")
+        # Validate only the operators selected for this build. Empty directories
+        # left by earlier/unrelated builds must not fail a filtered build.
+        for root in roots:
+            check_single_op_is_void(root)
+    all_json_files = [path for root in roots for path in get_specified_suffix_file(root, ".json")]
+    relocatable_json_files = [path for path in all_json_files if path.endswith("_relocatable.json")]
     normal_json_files = list(set(all_json_files) - set(relocatable_json_files))
     os.makedirs(out_dir, exist_ok=True)
 
@@ -362,6 +368,7 @@ def args_prase():
     )
 
     parser.add_argument("-o", "--out", nargs="?", help="Output directory.")
+    parser.add_argument("--ops", nargs="+", help="Only include these operator directories.")
 
     parser.add_argument(
         "--skip-binary-info-config",
@@ -387,9 +394,13 @@ def main():
     else:
         out_dir = args.out
 
-    gen_all_config(
-        args.path, args.soc, out_dir, args.skip_binary_info_config, args.op_range
-    )
+    try:
+        gen_all_config(
+            args.path, args.soc, out_dir, args.skip_binary_info_config, args.op_range, args.ops
+        )
+    except RuntimeError as error:
+        print(error)
+        sys.exit(1)
 
 
 if __name__ == "__main__":

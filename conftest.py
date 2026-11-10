@@ -115,8 +115,8 @@ def pytest_addoption(parser: pytest.Parser):
         help="Number of cards required for each test case. Default is 1 (single-card cases)."
     )
     parser.addoption(
-        "--mode", choices=["jit", "aclnn"], default="jit",
-        help="Test execution mode: jit (Python host wrapper) / aclnn (C++ aclnn via pybind11 bridge)"
+        "--mode", choices=["jit", "aclnn", "torch"], default="jit",
+        help="Test execution mode: jit / aclnn (test bridge) / torch (installed binary Torch binding)"
     )
     parser.addoption(
         "--aclnn-lib-dir", default="",
@@ -293,13 +293,24 @@ def _is_case_match_soc(item, target_soc):
     return target_tag in supported_socs
 
 
+def _is_host_only(item) -> bool:
+    """Host-only unit tests live under tests/unit and must bypass device filtering."""
+    path = Path(str(item.fspath)).resolve()
+    return (Path(__file__).resolve().parent / "tests" / "unit") in path.parents
+
+
 @pytest.hookimpl(trylast=True)
 def pytest_collection_modifyitems(config, items):
     if not items:
         return
 
-    target_soc = _get_soc_version()
-    filtered_items = [item for item in items if _is_case_match_soc(item, target_soc)]
+    # tests/unit do not require an NPU, so never query the SoC version for them.
+    host_items = [item for item in items if _is_host_only(item)]
+    device_items = [item for item in items if not _is_host_only(item)]
+    filtered_items = list(host_items)
+    if device_items:
+        target_soc = _get_soc_version()
+        filtered_items += [item for item in device_items if _is_case_match_soc(item, target_soc)]
 
     cards_per_case = config.getoption("--cards-per-case", 1)
     card_filtered_items = [item for item in filtered_items

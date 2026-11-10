@@ -12,14 +12,41 @@
 
 # 发现 ops/{pro,tensor} 下的算子目录(锚定算子级 CMakeLists.txt);
 # 算子契约: <op>/CMakeLists.txt(dispatcher) + <op>/op_host/(算子身份判定, 过滤中间层目录);
-# 显式 --ops 时仅编名单内算子, 否则全量
+# ALL 使用 ops/pro/build_ops.yaml；显式 --ops 使用命令行名单。
 function(gym_op_discovery OP_LIST OP_DIR_LIST)
     set(_OP_LIST)
     set(_OP_DIR_LIST)
 
+    if(NOT Python3_EXECUTABLE)
+        find_package(Python3 REQUIRED COMPONENTS Interpreter)
+    endif()
+    set(_requested_ops "ALL")
+    if(DEFINED ASCEND_OP_NAME AND NOT "${ASCEND_OP_NAME}" STREQUAL "")
+        set(_requested_ops "${ASCEND_OP_NAME}")
+    endif()
+    set(_scope_script "${CMAKE_CURRENT_FUNCTION_LIST_DIR}/scripts/select_run_ops.py")
+    execute_process(
+        COMMAND "${Python3_EXECUTABLE}" "${_scope_script}"
+            --source-root "${CMAKE_CURRENT_SOURCE_DIR}" --ops "${_requested_ops}" --format paths
+        RESULT_VARIABLE _scope_rc OUTPUT_VARIABLE _scope_names ERROR_VARIABLE _scope_error
+        OUTPUT_STRIP_TRAILING_WHITESPACE)
+    if(NOT _scope_rc EQUAL 0)
+        message(FATAL_ERROR "run operator selection failed: ${_scope_error}")
+    endif()
+    string(REPLACE "\n" ";" _scope_paths "${_scope_names}")
+    set(_selected_dirs)
     set(_explicit_ops)
-    if(DEFINED ASCEND_OP_NAME AND NOT "${ASCEND_OP_NAME}" STREQUAL "ALL")
-        set(_explicit_ops ${ASCEND_OP_NAME})
+    foreach(_scope_path ${_scope_paths})
+        list(APPEND _selected_dirs "${CMAKE_CURRENT_SOURCE_DIR}/${_scope_path}")
+        get_filename_component(_scope_name "${_scope_path}" NAME)
+        list(APPEND _explicit_ops "${_scope_name}")
+    endforeach()
+    set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS "${_scope_script}")
+    string(TOUPPER "${_requested_ops}" _scope_mode)
+    if(_scope_mode STREQUAL "ALL")
+        set(_scope_file "${CMAKE_CURRENT_SOURCE_DIR}/ops/pro/build_ops.yaml")
+        set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS "${_scope_file}")
+        message(STATUS "gym ALL scope: ${_scope_file} -> ${_scope_paths}")
     endif()
 
     # gym 树形: ops/<paradigm>/<network|experimental|common>/<op>/ (实测本 cmake GLOB 的
@@ -42,7 +69,7 @@ function(gym_op_discovery OP_LIST OP_DIR_LIST)
         get_filename_component(_op_name "${_op_dir}" NAME)
 
         # 白名单过滤 (与 setup.py _PARADIGM_DIRS 语义对账: 仅 pro/tensor 两棵树被 glob, 历史目录天然不参与)
-        if(_explicit_ops AND NOT _op_name IN_LIST _explicit_ops)
+        if(NOT _op_dir IN_LIST _selected_dirs)
             continue()
         endif()
 
@@ -50,31 +77,9 @@ function(gym_op_discovery OP_LIST OP_DIR_LIST)
         list(APPEND _OP_DIR_LIST ${_op_dir})
     endforeach()
 
-    # 孤儿检测: 有 op_host 但缺算子级 CMakeLists(dispatcher)的算子不可见, 违约即报错
-    file(GLOB _orphan_op_host_files
-        "${CMAKE_CURRENT_SOURCE_DIR}/ops/pro/*/op_host/CMakeLists.txt"
-        "${CMAKE_CURRENT_SOURCE_DIR}/ops/pro/*/*/op_host/CMakeLists.txt"
-        "${CMAKE_CURRENT_SOURCE_DIR}/ops/pro/*/*/*/op_host/CMakeLists.txt"
-        "${CMAKE_CURRENT_SOURCE_DIR}/ops/tensor/*/op_host/CMakeLists.txt"
-        "${CMAKE_CURRENT_SOURCE_DIR}/ops/tensor/*/*/op_host/CMakeLists.txt"
-        "${CMAKE_CURRENT_SOURCE_DIR}/ops/tensor/*/*/*/op_host/CMakeLists.txt")
-    foreach(_orphan_file ${_orphan_op_host_files})
-        get_filename_component(_orphan_op_host_dir "${_orphan_file}" DIRECTORY)
-        get_filename_component(_orphan_op_dir "${_orphan_op_host_dir}" DIRECTORY)
-        if(NOT EXISTS "${_orphan_op_dir}/CMakeLists.txt")
-            get_filename_component(_orphan_op_name "${_orphan_op_dir}" NAME)
-            if(NOT _explicit_ops OR _orphan_op_name IN_LIST _explicit_ops)
-                message(FATAL_ERROR "operator '${_orphan_op_name}' has op_host but is missing "
-                        "${_orphan_op_dir}/CMakeLists.txt (op-level dispatcher required; "
-                        "see flex_attention/CMakeLists.txt for the template)")
-            endif()
-        endif()
-    endforeach()
+    # 算子目录缺少 op-level CMakeLists 的情况已由 select_run_ops.py 在返回前拒绝
+    # （no binary build directory），此处不再重复检测。
 
-    list(REMOVE_DUPLICATES _OP_LIST)
-    list(REMOVE_DUPLICATES _OP_DIR_LIST)
-    list(SORT _OP_LIST)
-    list(SORT _OP_DIR_LIST)
     if(NOT _OP_LIST)
         message(FATAL_ERROR "gym_op_discovery: no operator found under ops/{pro,tensor} (explicit ops: '${_explicit_ops}')")
     endif()
@@ -220,10 +225,14 @@ endfunction()
 function(add_ops_src_copy)
     cmake_parse_arguments(SRC_COPY "" "TARGET_NAME;SRC;DST;COMPUTE_UNIT" "" ${ARGN})
     set(_stamp ${SRC_COPY_DST}/.${SRC_COPY_TARGET_NAME}.done)
+    file(GLOB_RECURSE _copy_sources CONFIGURE_DEPENDS
+        "${SRC_COPY_SRC}/*.py" "${SRC_COPY_SRC}/*.cpp" "${SRC_COPY_SRC}/*.h"
+        "${SRC_COPY_SRC}/*.cmake" "${SRC_COPY_SRC}/*.json" "${SRC_COPY_SRC}/*.ini"
+        "${SRC_COPY_SRC}/CMakeLists.txt")
     add_custom_command(OUTPUT ${_stamp}
         COMMAND ${CMAKE_COMMAND} -E copy_directory ${SRC_COPY_SRC} ${SRC_COPY_DST}
         COMMAND ${CMAKE_COMMAND} -E touch ${_stamp}
-        DEPENDS ${SRC_COPY_SRC}
+        DEPENDS ${SRC_COPY_SRC} ${_copy_sources}
         VERBATIM)
     add_custom_target(${SRC_COPY_TARGET_NAME} ALL DEPENDS ${_stamp})
 endfunction()
@@ -246,6 +255,7 @@ function(add_bin_compile_target)
     endforeach()
 
     set(_ops_target_list)
+    set(_kernel_op_names)
     file(GLOB compile_scripts ${GEN_OUT_DIR}/*.sh)
 
     foreach(bin_script ${compile_scripts})
@@ -270,6 +280,7 @@ function(add_bin_compile_target)
             add_custom_target(${OP_TARGET_NAME})
             add_dependencies(ops_gym_kernel ${OP_TARGET_NAME})
             list(APPEND _ops_target_list ${OP_TARGET_NAME})
+            list(APPEND _kernel_op_names ${op_file})
             set_property(GLOBAL APPEND PROPERTY GYM_KERNEL_TARGETS ${OP_TARGET_NAME})
 
             set(OP_SRC_OUT_DIR ${SRC_OUT_DIR}/${op_file})
@@ -292,10 +303,12 @@ function(add_bin_compile_target)
                 COMPUTE_UNIT ${BINARY_COMPUTE_UNIT})
 
             set(_pypto_install_stamp ${OP_SRC_OUT_DIR}/op_kernel/.pypto_install.done)
+            file(GLOB _pypto_install_headers ${${op_file}_pypto_gen_dir}/*.h)
             add_custom_command(OUTPUT ${_pypto_install_stamp}
                     COMMAND ${CMAKE_COMMAND} -E copy_directory ${${op_file}_pypto_gen_dir} ${OP_SRC_OUT_DIR}/op_kernel
                     COMMAND ${CMAKE_COMMAND} -E touch ${_pypto_install_stamp}
                     DEPENDS ${OP_TARGET_NAME}_src_copy
+                        ${OP_SRC_OUT_DIR}/.${OP_TARGET_NAME}_src_copy.done ${_pypto_install_headers}
                     VERBATIM)
             add_custom_target(${OP_TARGET_NAME}_pypto_install DEPENDS ${_pypto_install_stamp})
 
@@ -315,6 +328,7 @@ function(add_bin_compile_target)
         endif ()
 
         set(_BUILD_FLAG ${GEN_OUT_DIR}/${OP_TARGET_NAME}_${op_index}.done)
+        set_property(GLOBAL APPEND PROPERTY GYM_KERNEL_OUTPUTS ${_BUILD_FLAG})
         # TILINGKEY_PAR_COMPILE/BIN_FILENAME_HASHED 由 CANN 编译工具链消费
         # (BIN_FILENAME_HASHED=1 即 <OpType>_<md5>.o 哈希文件名来源, ascendc_common_utility.py)
         set(_BUILD_COMMAND export TILINGKEY_PAR_COMPILE=1 &&)
@@ -331,6 +345,8 @@ function(add_bin_compile_target)
         add_custom_command(OUTPUT ${_BUILD_FLAG}
                 COMMAND ${_BUILD_COMMAND}
                 COMMAND touch ${_BUILD_FLAG}
+                DEPENDS ${bin_script} ${SRC_OUT_DIR}/${op_file}/${op_type}.py
+                    ${SRC_OUT_DIR}/${op_file}/op_kernel/.pypto_install.done
                 WORKING_DIRECTORY ${GEN_OUT_DIR})
         add_custom_target(${OP_TARGET_NAME}_${op_index} DEPENDS ${_BUILD_FLAG})
         add_dependencies(${OP_TARGET_NAME}_${op_index}
@@ -342,9 +358,13 @@ function(add_bin_compile_target)
     if (_ops_target_list)
         set(OPS_CONFIG_TARGET ops_config_${BINARY_COMPUTE_UNIT})
         set(BINARY_INFO_CONFIG_FILE ${BIN_OUT_DIR}/binary_info_config.json)
-        add_custom_command(OUTPUT ${BINARY_INFO_CONFIG_FILE}
-                COMMAND ${Python3_EXECUTABLE} ${GYM_UTIL_SCRIPT_DIR}/ascendc_ops_config.py -p ${BIN_OUT_DIR} -s ${BINARY_COMPUTE_UNIT})
-        add_custom_target(${OPS_CONFIG_TARGET} DEPENDS ${BINARY_INFO_CONFIG_FILE})
+        # 生成本次所选全部算子的汇总，每次在 kernel 完成后刷新；输出文件存在
+        # 不代表其内容已经覆盖新增算子，也不能把旧目录内未选择的算子带入包。
+        add_custom_target(${OPS_CONFIG_TARGET}
+                COMMAND ${Python3_EXECUTABLE} ${GYM_UTIL_SCRIPT_DIR}/ascendc_ops_config.py
+                    -p ${BIN_OUT_DIR} -s ${BINARY_COMPUTE_UNIT} --ops ${_kernel_op_names}
+                BYPRODUCTS ${BINARY_INFO_CONFIG_FILE}
+                VERBATIM)
         add_dependencies(ops_gym_config ${OPS_CONFIG_TARGET})
         foreach(_op_target ${_ops_target_list})
             add_dependencies(${OPS_CONFIG_TARGET} ${_op_target})

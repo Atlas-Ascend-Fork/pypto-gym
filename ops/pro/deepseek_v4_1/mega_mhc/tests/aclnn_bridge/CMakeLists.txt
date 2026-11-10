@@ -1,0 +1,3 @@
+find_package(Python3 REQUIRED COMPONENTS Interpreter Development)
+gym_add_aclnn_bridge(mega_mhc)
+target_include_directories(aclnn_bridge_mega_mhc PRIVATE ${Python3_INCLUDE_DIRS})

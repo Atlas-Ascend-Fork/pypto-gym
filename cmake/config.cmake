@@ -96,11 +96,11 @@ if (NOT PREPARE_BUILD)
     endforeach()
 endif()
 
-# 测试 aclnn_bridge 依赖(仅 ENABLE_TESTS):
-# 1. torch 仅供 pybind11 测试 bridge 使用, 非 run/kernel 构建依赖.
+# Torch 依赖（测试桥或正式 Torch 绑定按需启用）:
+# 1. 未启用 ENABLE_TESTS/ENABLE_TORCH_BINDINGS 时，run/kernel 构建不依赖 torch.
 # 2. 必须在本文件(根作用域 include)中查找: imported target 为目录作用域, 根作用域创建后
 #    才能被后续 add_subdirectory 引入的算子 tests 子目录链接.
-if (ENABLE_TESTS)
+if (ENABLE_TESTS OR ENABLE_TORCH_BINDINGS)
     execute_process(
             COMMAND ${Python3_EXECUTABLE} -c "import torch.utils; print(torch.utils.cmake_prefix_path)"
             OUTPUT_VARIABLE _gym_torch_cmake_prefix
@@ -152,8 +152,8 @@ endif ()
 
 # 构建阶段(Build)
 #   可执行文件运行时库文件搜索路径 RPATH
-#       在 UTest 及 STest 场景不略去 RPATH (预留: ENABLE_TESTS 选项落地时生效)
-if (ENABLE_TESTS)
+#       测试与预编译 Torch 绑定保留运行时搜索路径。
+if (ENABLE_TESTS OR ENABLE_TORCH_BINDINGS)
     set(CMAKE_SKIP_RPATH FALSE)
 else ()
     set(CMAKE_SKIP_RPATH TRUE)

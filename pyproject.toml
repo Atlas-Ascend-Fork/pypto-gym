@@ -51,6 +51,7 @@ Repository = "https://gitcode.com/cann/pypto-gym"
 
 [project.optional-dependencies]
 dev = [
+    "PyYAML>=6.0",
     "setuptools>=70.3.0",
     "pip",
     "build",
@@ -60,6 +61,7 @@ dev = [
     "pytest-xdist",
 ]
 tests = [
+    "PyYAML>=6.0",
     "pytest>=7",
     "pytest-forked",
     "pytest-xdist",

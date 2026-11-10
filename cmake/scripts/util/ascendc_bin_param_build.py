@@ -615,6 +615,12 @@ check_stop
             f">> {self.op_file}-{str(index)}.txt\n"
         )
         build_cmd_var += f'echo "[{self.soc}] Generating {bin_file} Done"\n'
+        # These scripts are kernel build dependencies. Preserve their timestamps
+        # when only rerunning command generation (for example during packaging).
+        if os.path.isfile(compile_file):
+            with open(compile_file, encoding="utf-8") as existing:
+                if existing.read() == build_cmd_var:
+                    return
         with os.fdopen(
             os.open(compile_file, const_var.WFLAGS, const_var.WMODES), "w"
         ) as fd:
