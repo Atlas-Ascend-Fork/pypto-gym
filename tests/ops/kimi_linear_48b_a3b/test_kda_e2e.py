@@ -141,9 +141,7 @@ def test_dispatch_source_matches():
 
 
 def main():
-    pypto.set_host_options(compile_monitor_enable=1, compile_timeout=10,
-                           compile_timeout_stage=5,
-                           compile_monitor_print_interval=2)
+    pypto.set_host_options(compile_monitor_enable=1, compile_timeout=10)
     test_dispatch_source_matches()
     if not _HAS_NPU:
         logging.info("skip NPU cases: no NPU")

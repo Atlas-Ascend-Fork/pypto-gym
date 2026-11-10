@@ -108,9 +108,7 @@ def test_llada2_moe_grouped_gemm():
 
 
 def main():
-    pypto.set_host_options(compile_monitor_enable=1, compile_timeout=10,
-                            compile_timeout_stage=5,
-                            compile_monitor_print_interval=2)
+    pypto.set_host_options(compile_monitor_enable=1, compile_timeout=10)
     test_llada2_moe_grouped_gemm()
     print("\nAll grouped GEMM tests passed.")
 

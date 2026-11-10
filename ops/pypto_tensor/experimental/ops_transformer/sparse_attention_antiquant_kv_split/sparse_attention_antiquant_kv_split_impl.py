@@ -216,9 +216,7 @@ def sparse_attention_antiquant_compute(query_nope, query_rope, kn_quant, kr,
 @pypto.frontend.jit(
     host_options={
         "compile_monitor_enable": 0,
-        "compile_timeout": 10,
-        "compile_timeout_stage": 5,
-        "compile_monitor_print_interval": 2},
+        "compile_timeout": 10},
     pass_options={
         "vec_nbuffer_setting": {-1: 2, 0: 4},
         "cube_l1_reuse_setting": {-1: 2},
@@ -280,9 +278,7 @@ def sparse_attention_antiquant_kv_split_d(
 @pypto.frontend.jit(
     host_options={
         "compile_monitor_enable": 0,
-        "compile_timeout": 10,
-        "compile_timeout_stage": 5,
-        "compile_monitor_print_interval": 2},
+        "compile_timeout": 10},
     pass_options={
         "vec_nbuffer_setting": {-1: 4, 0: 4},
         "cube_l1_reuse_setting": {-1: 4},

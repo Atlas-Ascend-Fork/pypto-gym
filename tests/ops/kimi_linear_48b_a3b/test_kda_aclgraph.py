@@ -119,9 +119,7 @@ def test_aclgraph_capture(npu_device):
 
 
 def main():
-    pypto.set_host_options(compile_monitor_enable=1, compile_timeout=10,
-                           compile_timeout_stage=5,
-                           compile_monitor_print_interval=2)
+    pypto.set_host_options(compile_monitor_enable=1, compile_timeout=10)
     test_meta_shape_inference()
     if not _HAS_NPU:
         logging.info("skip NPU op-equality check: no NPU")
