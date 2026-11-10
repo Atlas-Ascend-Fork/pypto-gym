@@ -37,6 +37,7 @@
 
 #include <cstdint>
 #include <initializer_list>
+#include <limits>
 
 #ifndef OP_LOGE
 #include <cstdio>
@@ -104,13 +105,12 @@ public:
 private:
     ge::graphStatus ValidateInputs();
     ge::graphStatus ValidateOutput();
-    uint32_t ComputeTilingKey() const;
+    uint64_t ComputeTilingKey() const;
 
     static bool CheckShape(const gert::StorageShape *shape, std::initializer_list<int64_t> dims);
     static ge::DataType GetInputDtype(gert::TilingContext *context, size_t index);
 
     gert::TilingContext *tiling_context_ = nullptr;
-    EpilogueTilingData tiling_data_;
     int64_t t_ = 0;
     int64_t padded_ = 0;
     uint32_t aicCoreNum_ = 0;
@@ -231,38 +231,47 @@ ge::graphStatus TilingAttenEpilogueFunc::ValidateOutput()
     return ge::GRAPH_SUCCESS;
 }
 
-uint32_t TilingAttenEpilogueFunc::ComputeTilingKey() const
+uint64_t TilingAttenEpilogueFunc::ComputeTilingKey() const
 {
-    // Byte-for-byte port of tiling_key_for(t, cube_cores) + TilingKeySchema.pack:
-    // fields are laid out LSB-first in EpilogueKey declaration order and each
-    // contributes the INDEX of its value in the candidate list.
-    //   BM(bits=2)@0 [64,128,256]  BK@2 [256,512]      VSlots@3 [1,2]
-    //   K0@4 [128,256]             BN1@5 [160,256]     BN@6 [160,192]
+    // Keep this selector equivalent to tiling_key_for(T, actual Cube core count).
+    // Pass actual candidate values in the generated schema's declaration order.
     const bool wide = aicCoreNum_ == WIDE_CUBE_CORES;
-    uint32_t bm;
-    uint32_t bk;
-    uint32_t vSlots;
-    if (t_ <= 64) {
-        bm = 0;          // BM = 64
-        bk = 1;          // BK = 512
-        vSlots = 1;      // VSlots = 2
-    } else if (t_ <= 128) {
-        bm = 1;          // BM = 128
-        bk = 0;          // BK = 256
-        vSlots = 1;      // VSlots = 2
-    } else {
-        bm = 2;          // BM = 256
-        bk = 0;          // BK = 256
-        vSlots = 0;      // VSlots = 1
+    uint32_t bm = t_ <= 64 ? 64 : (t_ <= 128 ? 128 : 256);
+    uint32_t bk = t_ <= 64 ? 512 : 256;
+    uint32_t slots = (wide || t_ > 128) ? 1 : 2;
+    uint32_t k0 = wide && bm >= 128 ? 128 : 256;
+    uint32_t bn1 = wide ? 256 : 160;
+    uint32_t bn = wide ? 160 : 192;
+    uint32_t algo = 0;
+    uint32_t mcap = 16;
+    if (wide) {
+        if (t_ <= 64) {
+            algo = 1;
+            mcap = static_cast<uint32_t>(CeilDiv(t_, PAD_MULTIPLE) * PAD_MULTIPLE);
+        } else if (t_ <= 256) {
+            algo = 3;
+        } else if (t_ <= 384) {
+            algo = 2;
+        } else if (t_ <= 1024) {
+            algo = 4;
+        }
+    } else if (aicCoreNum_ == 28 && t_ <= 64) {
+        bn1 = 128;
+        algo = 1;
+        mcap = static_cast<uint32_t>(CeilDiv(t_, PAD_MULTIPLE) * PAD_MULTIPLE);
+    } else if (aicCoreNum_ == 28 && t_ <= 1024) {
+        k0 = 128;
+        bn1 = t_ <= 256 ? 160 : 256;
+        algo = 4;
     }
-    const uint32_t k0 = (wide && bm >= 1) ? 0 : 1;   // 128 when wide && BM >= 128, else 256
-    const uint32_t bn1 = wide ? 1 : 0;               // 256 when wide, else 160
-    const uint32_t bn = wide ? 0 : 1;                // 160 when wide, else 192
-    return bm | (bk << 2) | (vSlots << 3) | (k0 << 4) | (bn1 << 5) | (bn << 6);
+    return GET_TPL_TILING_KEY(bm, bk, slots, k0, bn1, bn, algo, mcap);
 }
 
 ge::graphStatus TilingAttenEpilogueFunc::RunTiling()
 {
+    if (tiling_context_->GetPlatformInfo() == nullptr) {
+        return ge::GRAPH_FAILED;
+    }
     auto platform_info = platform_ascendc::PlatformAscendC(tiling_context_->GetPlatformInfo());
     aicCoreNum_ = platform_info.GetCoreNumAic();
     if (aicCoreNum_ == 0) {
@@ -279,18 +288,24 @@ ge::graphStatus TilingAttenEpilogueFunc::RunTiling()
         return ret;
     }
 
+    // Guard the rounding and workspace products before any signed arithmetic.
+    const int64_t maxRows = std::numeric_limits<int64_t>::max() / WORKSPACE_BYTES_PER_ROW;
+    const int64_t maxPaddedRows = (maxRows / PAD_MULTIPLE) * PAD_MULTIPLE;
+    if (t_ > maxPaddedRows) {
+        OP_LOGE(tiling_context_->GetNodeName(), "atten_epilogue: workspace size overflows.");
+        return ge::GRAPH_FAILED;
+    }
     padded_ = CeilDiv(t_, PAD_MULTIPLE) * PAD_MULTIPLE;
-    tiling_data_.set_t(t_);
-    tiling_data_.set_padded(padded_);
-
-    // Single flat workspace the kernel slices into aq/asc/yq/ys.
+    auto *data = tiling_context_->GetTilingData<EpilogueTiling>();
     size_t *workspace = tiling_context_->GetWorkspaceSizes(1);
+    if (data == nullptr || workspace == nullptr) {
+        OP_LOGE(tiling_context_->GetNodeName(), "atten_epilogue: tiling/workspace buffer is null or too small.");
+        return ge::GRAPH_FAILED;
+    }
+    data->t = t_;
+    data->padded = padded_;
     workspace[0] = static_cast<size_t>(WORKSPACE_BYTES_PER_ROW * padded_);
-
     tiling_context_->SetTilingKey(ComputeTilingKey());
-    tiling_data_.SaveToBuffer(tiling_context_->GetRawTilingData()->GetData(),
-                              tiling_context_->GetRawTilingData()->GetCapacity());
-    tiling_context_->GetRawTilingData()->SetDataSize(tiling_data_.GetDataSize());
 
     tiling_context_->SetBlockDim(aicCoreNum_);
     return ge::GRAPH_SUCCESS;
@@ -298,6 +313,9 @@ ge::graphStatus TilingAttenEpilogueFunc::RunTiling()
 
 static ge::graphStatus TilingFunc(gert::TilingContext *context)
 {
+    if (context == nullptr) {
+        return ge::GRAPH_FAILED;
+    }
     TilingAttenEpilogueFunc tilingObject(context);
     auto ret = tilingObject.RunTiling();
     if (ret != ge::GRAPH_SUCCESS) {
@@ -307,7 +325,13 @@ static ge::graphStatus TilingFunc(gert::TilingContext *context)
     return ge::GRAPH_SUCCESS;
 }
 
+static ge::graphStatus TilingParse(gert::TilingParseContext *context)
+{
+    return context == nullptr ? ge::GRAPH_FAILED : ge::GRAPH_SUCCESS;
+}
+
 IMPL_OP_OPTILING(AttenEpilogue)
-    .Tiling(TilingFunc);
+    .Tiling(TilingFunc)
+    .TilingParse<AttenEpilogueCompileInfo>(TilingParse);
 
 } // namespace optiling

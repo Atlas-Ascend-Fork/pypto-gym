@@ -11,13 +11,17 @@
 
 """The 12 functional cases plus contract boundaries; CPU scheduling is test setup.
 
+Cases run against the precompiled Torch bindings (the .run package installed
+into the active CANN environment); ``_load_operators()`` alternates between the
+two formal entries ``pypto_gym.quant_sparse_lightning_indexer`` and
+``torch.ops.pypto_gym.quant_sparse_lightning_indexer`` so the suite watches
+both. The entries are not controlled by ``--mode``.
+
 The 22 benchmark points (11 device scenarios x return_value False/True) are
 listed in the table above ``_benchmark_cases()``; use ``--benchmark`` to run
 them and see that table for the measurement protocol.
 """
 
-import ast
-import importlib.util
 import inspect
 import itertools
 import logging
@@ -47,6 +51,11 @@ for _path in (_OP_DIR / "op_kernel", _HERE / "assets", _HERE):
 
 from quant_sparse_lightning_indexer_golden_cpu import _scores_reference, _visible_tokens
 import quant_sparse_lightning_indexer_precision as _precision
+
+import pypto_gym
+
+# pypto_gym is lazy; register torch.ops before calling it directly.
+pypto_gym.load()
 
 _check_topk = _precision._check_topk
 pytestmark = pytest.mark.soc("950")
@@ -225,19 +234,20 @@ def _make_metadata(
     return torch.from_numpy(blob).to(lengths.device)
 
 
+_ENTRY_CYCLE = itertools.cycle(("python", "torch"))
+
+
 def _load_operators():
-    """Return (public-signature callable, metadata builder) for the running mode.
+    """Return (public-signature callable, metadata builder) on the formal Torch entries.
 
-    Both modes expose the same entry signature -- 15 inputs, then the two
-    caller-allocated outputs, then the 9 attributes -- because that is exactly the
-    op_host registration order the kernel ABI requires. The adapter below presents
-    the public calling convention the cases are written against (keyword-only
-    attributes, outputs allocated internally, ``(indices, values)`` returned), so
-    every case runs unchanged under ``--mode jit`` and ``--mode aclnn``.
+    Cases are written against the public calling convention (keyword-only
+    attributes, outputs allocated internally, ``(indices, values)`` returned),
+    which is exactly what the precompiled binding provides. Successive callers
+    alternate between ``pypto_gym.quant_sparse_lightning_indexer`` and
+    ``torch.ops.pypto_gym.quant_sparse_lightning_indexer`` so the whole suite
+    watches both formal entries.
     """
-    from op_caller import get_op_caller
-
-    raw = get_op_caller("quant_sparse_lightning_indexer")
+    api = next(_ENTRY_CYCLE)
 
     def entry(
         q,
@@ -266,17 +276,28 @@ def _load_operators():
         layout_k="TND",
         return_value=False,
     ):
-        total_q = int(q.shape[0])
-        indices = torch.empty((total_q, 1, int(topk)), dtype=torch.int32, device=q.device)
-        values = torch.empty((total_q, 1, int(topk)), dtype=torch.bfloat16, device=q.device)
-        return raw(
-            q, k, w, descale_q, descale_k,
-            candidate_block_indices, candidate_block_length,
-            cu_seqlens_q, cu_seqlens_k, seqused_q, seqused_k, cmp_residual_k,
-            block_table, output_idx_offset, metadata,
-            indices, values,
-            int(topk), int(candidate_block_size), int(quant_mode), int(max_seqlen_q),
-            int(mask_mode), int(cmp_ratio), layout_q, layout_k, bool(return_value),
+        attrs = dict(
+            topk=int(topk),
+            candidate_block_size=int(candidate_block_size),
+            quant_mode=int(quant_mode),
+            max_seqlen_q=int(max_seqlen_q),
+            mask_mode=int(mask_mode),
+            cmp_ratio=int(cmp_ratio),
+            layout_q=layout_q,
+            layout_k=layout_k,
+            return_value=bool(return_value),
+        )
+        if api == "python":
+            return pypto_gym.quant_sparse_lightning_indexer(
+                q, k, w, descale_q, candidate_block_indices, candidate_block_length,
+                cu_seqlens_q, cu_seqlens_k, seqused_q, seqused_k, cmp_residual_k,
+                block_table, output_idx_offset, metadata, descale_k=descale_k, **attrs,
+            )
+        return torch.ops.pypto_gym.quant_sparse_lightning_indexer(
+            q, k, w, descale_q, descale_k, candidate_block_indices,
+            candidate_block_length, cu_seqlens_q, cu_seqlens_k, seqused_q,
+            seqused_k, cmp_residual_k, block_table, output_idx_offset, metadata,
+            **attrs,
         )
 
     return entry, _make_metadata
@@ -714,7 +735,13 @@ def _check_data(data):
 
 @pytest.mark.parametrize("layout", ["PA_BBND", "TND"])
 @pytest.mark.parametrize("topk", [1, 17, 511, 512, 513, 4097])
-def test_strides_scale_dtype_and_guards(layout, topk, monkeypatch):
+def test_strides_and_scale_dtypes(layout, topk):
+    """Axis-0-padded k/descale_k strides and E8M0 scale views reach the kernel intact.
+
+    The binding allocates both outputs internally (C++ ``at::empty``), so the
+    historical Python-side ``torch.empty`` guard bands are not observable here;
+    every selected row is validated numerically by ``_check_data`` instead.
+    """
     data = _make_inputs(layout, 128, 0, sparse=True, key_lengths=(19, 73), topk=topk)
     for name in ("k", "descale_k"):
         value = data[name]
@@ -733,33 +760,7 @@ def test_strides_scale_dtype_and_guards(layout, topk, monkeypatch):
         data["descale_k"] = data["descale_k"].view(torch.float8_e8m0fnu)
     else:
         data["candidate_lengths"] = data["candidate_lengths"].reshape(-1)
-    original_empty = torch.empty
-    guards = []
-    output_size = len(data["reference"]) * data["attributes"]["topk"]
-
-    def guarded_empty(*args, **kwargs):
-        value = original_empty(*args, **kwargs)
-        if value.device.type != "npu":
-            return value
-        value.view(torch.uint8).fill_(0xA5)
-        if value.numel() == output_size and value.dtype in (
-            torch.int32,
-            torch.bfloat16,
-        ):
-            backing = original_empty(
-                (output_size + 64,), dtype=value.dtype, device=value.device
-            )
-            backing.fill_(-37)
-            guards.append(backing)
-            return backing[32:-32].reshape(value.shape)
-        return value
-
-    monkeypatch.setattr(torch, "empty", guarded_empty)
     _check_data(data)
-    for backing in guards:
-        assert (backing[:32].cpu() == -37).all()
-        assert (backing[-32:].cpu() == -37).all()
-    assert guards
 
 
 @pytest.mark.parametrize("factor", [0.0, -1.0, 2.0**-20, 2.0**20])
@@ -780,24 +781,6 @@ def test_independent_tnd_strides(name):
     data[name] = storage[::2]
     data[name].copy_(value)
     _check_data(data)
-
-
-@pytest.mark.jit_only
-@pytest.mark.parametrize("page_size", [48, 128])
-@pytest.mark.parametrize("single_dma", [False, True])
-def test_pa_address_and_dma_dispatch(page_size, single_dma, monkeypatch):
-    import quant_sparse_lightning_indexer as impl
-
-    monkeypatch.setattr(impl, "MAX_ADDRESS32_BYTES", 0)
-    monkeypatch.setattr(impl, "_batch_consistency_enabled", lambda: single_dma)
-    _check_kernel(
-        "PA_BBND",
-        page_size,
-        3,
-        sparse=True,
-        key_lengths=(257, 515),
-        signed_weights=True,
-    )
 
 
 def test_candidate_tile_boundaries_and_ignored_suffix():
@@ -823,81 +806,6 @@ def test_candidate_tile_boundaries_and_ignored_suffix():
     _check_data(data)
 
 
-@pytest.mark.jit_only
-def test_dynamic_shape_reuse(monkeypatch):
-    import quant_sparse_lightning_indexer as impl
-
-    cache = getattr(impl.quant_sparse_lightning_indexer_kernel, "_compiled_by_signature", None)
-    launches = _record_keys(impl, monkeypatch)
-    first = _make_inputs(
-        "PA_BBND", 128, 0, sparse=True, key_lengths=(513, 777), query_lengths=(2, 3)
-    )
-    _check_data(first)
-    signatures = len(cache) if isinstance(cache, dict) else None
-    second = _make_inputs(
-        "PA_BBND", 128, 0, sparse=True, key_lengths=(1025, 1537), query_lengths=(3, 5)
-    )
-    _check_data(second)
-    assert launches[:2] == launches[2:]
-    for queries, keys in (((7,), (1027,)), ((1, 2, 4), (121, 457, 979))):
-        _check_data(
-            _make_inputs(
-                "PA_BBND", 128, 0, sparse=True, query_lengths=queries, key_lengths=keys
-            )
-        )
-        assert launches[-2:] == launches[:2]
-    if signatures is not None:
-        assert len(cache) == signatures, (
-            "Runtime axes introduced a new compiled specialization"
-        )
-
-
-def _record_keys(impl, monkeypatch):
-    launches = []
-    original = type(impl.quant_sparse_lightning_indexer_kernel).__getitem__
-
-    def record(kernel, config):
-        if kernel is impl.quant_sparse_lightning_indexer_kernel:
-            launches.append(dict(config[2]))
-        return original(kernel, config)
-
-    monkeypatch.setattr(type(impl.quant_sparse_lightning_indexer_kernel), "__getitem__", record)
-    return launches
-
-
-@pytest.mark.jit_only
-@pytest.mark.parametrize("layout", ["PA_BBND", "TND"])
-def test_runtime_attributes_reuse(layout, monkeypatch):
-    import quant_sparse_lightning_indexer as impl
-
-    launches = _record_keys(impl, monkeypatch)
-    cache = getattr(impl.quant_sparse_lightning_indexer_kernel, "_compiled_by_signature", None)
-    signatures = None
-    for index, (page, ratio, topk) in enumerate(
-        ((16, 2, 257), (48, 3, 383), (256, 5, 511), (1024, 128, 512))
-    ):
-        data = _make_inputs(
-            layout,
-            page,
-            3,
-            sparse=True,
-            key_lengths=(263 + index, 533 + index),
-            compression_ratio=ratio,
-            topk=topk,
-        )
-        _check_data(data)
-        assert launches[-2:] == launches[:2], (
-            "Runtime attributes changed the tiling key"
-        )
-        if isinstance(cache, dict):
-            if signatures is None:
-                signatures = len(cache)
-            else:
-                assert len(cache) == signatures, (
-                    "Runtime attributes recompiled the kernel"
-                )
-
-
 @pytest.mark.parametrize("topk", [31, 33, 127, 129, 255, 257, 1023, 1025, 2047, 2049])
 def test_topk_capacity_tails(topk):
     _check_kernel(
@@ -910,30 +818,6 @@ def test_topk_capacity_tails(topk):
         query_lengths=(1,),
         signed_weights=True,
     )
-
-
-@pytest.mark.jit_only
-def test_no_sugar_dependency(monkeypatch):
-    import pypto_pro.language as pl
-    import quant_sparse_lightning_indexer as impl
-
-    source = Path(impl.__file__).read_text()
-    forbidden = {"gemm", "gemm_mx", "mem_space"}
-    assert not any(
-        isinstance(node, ast.Attribute) and node.attr in forbidden
-        for node in ast.walk(ast.parse(source))
-    )
-    for name in forbidden:
-        monkeypatch.delattr(pl, name, raising=False)
-    spec = importlib.util.spec_from_file_location("_qsli_without_sugar", impl.__file__)
-    module = importlib.util.module_from_spec(spec)
-    monkeypatch.setitem(sys.modules, spec.name, module)
-    spec.loader.exec_module(module)
-    monkeypatch.setitem(sys.modules, "quant_sparse_lightning_indexer", module)
-    for layout in ("PA_BBND", "TND"):
-        _check_data(
-            _make_inputs(layout, 48, 3, sparse=True, topk=23, key_lengths=(19, 73))
-        )
 
 
 @pytest.mark.parametrize("layout", ["PA_BBND", "TND"])

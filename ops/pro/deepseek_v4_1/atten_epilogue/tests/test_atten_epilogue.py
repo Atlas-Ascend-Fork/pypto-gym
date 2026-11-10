@@ -8,55 +8,73 @@
 # INCLUDING BUT NOT LIMITED TO NON-INFRINGEMENT, MERCHANTABILITY, OR FITNESS FOR A PARTICULAR PURPOSE.
 # See LICENSE in the root of the software repository for the full text of the License.
 # -----------------------------------------------------------------------------------------------------------
-"""AttenEpilogue delivery-form test (kernel: atten_epilogue/op_kernel).
+"""AttenEpilogue precompiled-Torch-binding tests (kernel: atten_epilogue/op_kernel).
 
-Same acceptance criterion as the source operator it was ported from: bit-exact
-equality (rtol=0, atol=0) against the torch_npu native reference, plus an
-independent CPU oracle.  Runs unchanged in both modes:
+Same acceptance criterion as the binary it exercises: bit-exact equality
+(rtol=0, atol=0) against the torch_npu native reference, plus an independent
+CPU oracle.  Cases are split across the two formal entries
+(``pypto_gym.atten_epilogue`` and ``torch.ops.pypto_gym.atten_epilogue``);
+every case performs exactly one operator call per invocation and the output is
+allocated inside the binding.  The entries are not controlled by ``--mode``.
 
-    pytest ops/pro/deepseek_v4_1/atten_epilogue/tests/test_atten_epilogue.py --mode jit
-    pytest ops/pro/deepseek_v4_1/atten_epilogue/tests/test_atten_epilogue.py --mode aclnn
+Requires the .run package with precompiled Torch bindings installed into the
+active CANN environment (``build_ci.py --pkg-type run --stest`` does this
+automatically):
 
-The aclnn mode exercises the built-in binary path (host tiling -> pre-compiled
-kernel .o -> framework workspace); jit-only cases additionally inspect the GM
-payloads inside that workspace and the Python host contract.
+    pytest ops/pro/deepseek_v4_1/atten_epilogue/tests -q
 """
 
-import ast
-import inspect
 import logging
+import math
 import os
 
 import pytest
 import torch
 
-from op_caller import get_mode, get_op_caller
-from atten_epilogue_call import make_output, run_epilogue
 from atten_epilogue_golden_cpu import atten_epilogue_golden_cpu, inverse_rope, quantize_mx
 from atten_epilogue_kernel_consts import (
-    GEMM1_K, GEMM2_K, GROUPS, GROUP_N, HEADS, HEAD_DIM, OUT_FEATURES, PROFILE_COUNT,
-    WORKSPACE_BYTES_PER_ROW, WIDE_CUBE_CORES, padded_tokens, workspace_bytes,
+    GEMM1_K, GEMM2_K, GROUPS, GROUP_N, HEADS, HEAD_DIM, OUT_FEATURES,
+    WORKSPACE_BYTES_PER_ROW, padded_tokens, workspace_bytes,
 )
 from atten_epilogue_precision import assert_exact, assert_payload
 
-atten_epilogue = get_op_caller("atten_epilogue")
+import pypto_gym
+
+# pypto_gym is lazy; register torch.ops before calling it directly.
+pypto_gym.load()
 
 pytestmark = pytest.mark.soc("950")
 
 ST_DEVICE_ID = int(os.environ.get("TILE_FWK_DEVICE_ID", 0))
 ST_DEVICE = f"npu:{ST_DEVICE_ID}"
 
-# T values covering the three capacity profiles (T<=64 / <=128 / >128), the 16-row
-# padding granularity and the scale factors that drive the MX saturating path.
-SUPPLIED_CASES = [(1, 1.0), (33, 1.0), (72, 1.0), (129, 1.0), (193, 1.0),
-                  (255, 1.0), (72, 0.0), (256, 1e-37)]
-# Full boundary sweep of the source operator (ops/pypto_pro/deepseek_v4_1/attn_epilogue)
-# plus 129: 16-row padding edges, the three profile switch points (64/128) and the
-# large-T tail where the flat GM workspace grows to 42240 * padded bytes.
+
+def entry(api):
+    """Return the formal entry selected for one case."""
+    if api == "python":
+        return pypto_gym.atten_epilogue
+    return torch.ops.pypto_gym.atten_epilogue
+
+
+# T values covering the three capacity profiles (T<=64 / <=128 / >128), the
+# 16-row padding granularity and the scale factors that drive the MX saturating
+# path.  `api` alternates between the two formal Torch entries.
+SUPPLIED_CASES = [(1, 1.0, "python"), (33, 1.0, "torch"), (72, 1.0, "python"),
+                  (129, 1.0, "torch"), (193, 1.0, "python"), (255, 1.0, "torch"),
+                  (72, 0.0, "python"), (256, 1e-37, "torch")]
+# Deployment scenarios as (batch, seq) pairs: T = B * S. B=16/S=6 (T=96) is a
+# mid-profile point (64 < T <= 128, already 16-row aligned) that none of the
+# token lists names explicitly.
+BATCH_SEQ_CASES = [(16, 6, "torch")]
+# Full boundary sweep of the source operator plus 129: 16-row padding edges,
+# the three profile switch points (64/128) and the large-T tail where the flat
+# GM workspace grows to 42240 * padded bytes.
 BOUNDARY_TOKENS = [2, 15, 16, 17, 31, 32, 63, 64, 65, 127, 128, 129, 192, 256,
-                   257, 272, 511, 512, 513, 769, 1024, 1793, 2048, 2049, 4096, 16384]
+                   257, 272, 383, 384, 385, 511, 512, 513, 769, 1023, 1024, 1793, 2048, 2049, 4096, 16384]
+BOUNDARY_CASES = [(t, "python" if i % 2 == 0 else "torch")
+                  for i, t in enumerate(BOUNDARY_TOKENS)]
 # Repeat-call sweep (the source operator's test_public_tp1 token list).
-REPEAT_TOKENS = [1, 72, 256, 257, 2048]
+REPEAT_CASES = [(1, "python"), (72, "torch"), (256, "python"), (257, "torch"), (2048, "python")]
 
 
 def input_fixture(t, scale=1.0):
@@ -117,6 +135,22 @@ def arguments(weights, t, scale=1.0):
     return (x.to(ST_DEVICE), *weights, sin.to(ST_DEVICE), cos.to(ST_DEVICE))
 
 
+def guarded(value):
+    """Place one input inside sentinel-padded storage to catch stray writes."""
+    shape = tuple(value.shape)
+    base = torch.full((math.prod(shape) + 256,), 37, dtype=value.dtype,
+                      device=value.device)
+    view = base[128:-128].view(shape)
+    view.copy_(value)
+    return view, base
+
+
+def check_guards(bases):
+    for base in bases:
+        assert bool((base[:128] == 37).all()), "prefix guard overwritten"
+        assert bool((base[-128:] == 37).all()), "suffix guard overwritten"
+
+
 def test_comparator_rejects_corruption():
     """CPU-only: the exact comparator must not silently accept a perturbed result."""
     a = torch.ones((2, 3), dtype=torch.bfloat16)
@@ -145,71 +179,83 @@ def test_workspace_budget_covers_payloads():
             assert offset * padded % 512 == 0
 
 
-@pytest.mark.parametrize("t,scale", SUPPLIED_CASES)
-def test_supplied_native_exact(weights, t, scale):
+@pytest.mark.parametrize("t,scale,api", SUPPLIED_CASES)
+def test_supplied_native_exact(weights, t, scale, api):
     """Bit-exact parity with the torch_npu native reference (upstream acceptance).
 
-    The output is a T-row slice of a sentinel-filled padded storage with 32-element
-    guard bands on both sides, so the same case also proves the kernel writes
-    exactly the T valid rows: no overrun into the guards, no write into the
-    16-row padding tail (the delivery form derives every GM address from the
-    framework workspace, so a wrong pl.addptr offset would show up here).
+    Exactly one formal-entry call per case; the binding allocates the output.
+    The per-token inputs sit inside sentinel-guarded storage, so the same case
+    proves the kernel leaves every input untouched (no overrun into the guards).
     """
     torch.npu.set_device(ST_DEVICE_ID)
     args = arguments(weights, t, scale)
     expected = native_reference(*args)[0]
-    padded = padded_tokens(t)
-    storage = torch.full((padded * OUT_FEATURES + 64,), 19.0, dtype=torch.bfloat16,
-                         device=args[0].device)
-    full = storage[32:-32].view(padded, OUT_FEATURES)
-    out = run_epilogue(atten_epilogue, args, out=full[:t])
+    guarded_pairs = [guarded(value) for value in (args[0], args[5], args[6])]
+    call_args = (guarded_pairs[0][0], *args[1:5],
+                 guarded_pairs[1][0], guarded_pairs[2][0])
+    out = entry(api)(*call_args)
     torch.npu.synchronize()
     assert out.shape == (t, OUT_FEATURES) and out.dtype == torch.bfloat16
     assert out.is_contiguous()
-    assert_exact(out, expected, f"native T={t} scale={scale}")
-    assert bool((storage[:32] == 19).all()) and bool((storage[-32:] == 19).all()), \
-        "guard band overwritten"
-    assert bool((full[t:] == 19).all()), "padded rows were written"
-    logging.info("  [PASS] native exact T=%d scale=%g", t, scale)
+    assert_exact(out, expected, f"native T={t} scale={scale} api={api}")
+    for (value, _), original in zip(guarded_pairs, (args[0], args[5], args[6])):
+        torch.testing.assert_close(value.cpu(), original.cpu(), rtol=0, atol=0)
+    check_guards([base for _, base in guarded_pairs])
+    logging.info("  [PASS] native exact T=%d scale=%g api=%s", t, scale, api)
 
 
-@pytest.mark.parametrize("t", REPEAT_TOKENS)
-def test_repeat_call_exact(weights, t):
+@pytest.mark.parametrize("b,s,api", BATCH_SEQ_CASES)
+def test_batch_seq_scenario(weights, b, s, api):
+    """B=16/S=6 (T=96) deployment scenario stays bit-exact on a formal entry."""
+    torch.npu.set_device(ST_DEVICE_ID)
+    t = b * s
+    args = arguments(weights, t)
+    expected = native_reference(*args)[0]
+    out = entry(api)(*args)
+    torch.npu.synchronize()
+    assert out.shape == (t, OUT_FEATURES) and out.dtype == torch.bfloat16
+    assert_exact(out, expected, f"scenario B={b} S={s} T={t} api={api}")
+
+
+@pytest.mark.parametrize("t,api", REPEAT_CASES)
+def test_repeat_call_exact(weights, t, api):
     """Two back-to-back calls (second on a negated activation) are both bit-exact.
 
-    Exercises workspace/payload reuse across launches: the aq/asc/yq/ys slices are
-    fully rewritten every call, so a stale-payload leak would break the second one.
+    Exercises binding/workspace reuse across launches: every call allocates a
+    fresh output and fully rewrites the internal payloads, so a stale-payload
+    leak would break the second call.
     """
     torch.npu.set_device(ST_DEVICE_ID)
     args = arguments(weights, t)
     expected = [native_reference(*args)[0], native_reference(-args[0], *args[1:])[0]]
-    first = run_epilogue(atten_epilogue, args)
+    run = entry(api)
+    first = run(*args)
     torch.npu.synchronize()
     assert_exact(first, expected[0], f"repeat T={t} call#1")
     args[0].neg_()
-    second = run_epilogue(atten_epilogue, args)
+    second = run(*args)
     torch.npu.synchronize()
     assert second.data_ptr() != first.data_ptr()
     assert_exact(second, expected[1], f"repeat T={t} call#2")
     assert_exact(first, expected[0], f"repeat T={t} call#1 clobbered")
 
 
-@pytest.mark.parametrize("t", BOUNDARY_TOKENS)
-def test_token_boundaries(weights, t):
+@pytest.mark.parametrize("t,api", BOUNDARY_CASES)
+def test_token_boundaries(weights, t, api):
     """Row-padding and profile-switch boundaries stay bit-exact."""
     torch.npu.set_device(ST_DEVICE_ID)
     args = arguments(weights, t)
-    assert_exact(run_epilogue(atten_epilogue, args), native_reference(*args)[0],
-                 f"boundary T={t}")
+    assert_exact(entry(api)(*args), native_reference(*args)[0],
+                 f"boundary T={t} api={api}")
 
 
 def test_dynamic_token_range(weights):
     """Every T in [1, 256] is bit-exact: the full sweep across all three profiles."""
     torch.npu.set_device(ST_DEVICE_ID)
+    run = entry("python")
     for t in range(1, 257):
         args = arguments(weights, t)
-        assert_exact(run_epilogue(atten_epilogue, args), native_reference(*args)[0],
-                     f"runtime T={t}")
+        assert_exact(run(*args), native_reference(*args)[0], f"runtime T={t}")
 
 
 def test_independent_cpu_projection():
@@ -235,7 +281,7 @@ def test_independent_cpu_projection():
     cpu_args = (x, wa, wb, sa, sb, sin, cos)
     expected = atten_epilogue_golden_cpu(*cpu_args)
     npu_args = tuple(v.to(ST_DEVICE) for v in cpu_args)
-    assert_exact(run_epilogue(atten_epilogue, npu_args), expected, "independent CPU projection")
+    assert_exact(entry("torch")(*npu_args), expected, "independent CPU projection")
 
 
 def test_cpu_quantization_matches_native():
@@ -250,131 +296,26 @@ def test_cpu_quantization_matches_native():
         assert_payload(s, ns.cpu())
 
 
-@pytest.mark.jit_only
-@pytest.mark.parametrize("t,scale", SUPPLIED_CASES)
-def test_gm_payloads_exact(weights, t, scale):
-    """jit only: the workspace payloads (aq/asc/yq/ys) are byte-exact vs the native reference.
-
-    The built-in path hides the workspace inside the framework allocation, so this
-    intermediate check drives launch_kernel() with a caller-owned buffer instead.
-    It is the strongest guard on the pl.addptr carve-out: a wrong offset or size
-    shows up as a payload mismatch even when `out` still looks plausible.
-    """
-    import atten_epilogue as op
-    torch.npu.set_device(ST_DEVICE_ID)
-    args = arguments(weights, t, scale)
-    expected = native_reference(*args)
-    padded = padded_tokens(t)
-    workspace = torch.full((workspace_bytes(t),), 7, dtype=torch.uint8, device=args[0].device)
-    out = make_output(args[0])
-    op.launch_kernel(*args, workspace, out)
-    torch.npu.synchronize()
-    assert_exact(out, expected[0], f"payloads T={t} scale={scale} output")
-    aq = workspace[:op.ASC_OFFSET_PER_ROW * padded].view(GROUPS, padded, GEMM1_K)[:, :t]
-    asc = workspace[op.ASC_OFFSET_PER_ROW * padded:op.YQ_OFFSET_PER_ROW * padded].view(
-        GROUPS, padded, GEMM1_K // 32)[:, :t]
-    yq = workspace[op.YQ_OFFSET_PER_ROW * padded:op.YS_OFFSET_PER_ROW * padded].view(
-        padded, GEMM2_K)[:t]
-    ys = workspace[op.YS_OFFSET_PER_ROW * padded:].view(padded, GEMM2_K // 32)[:t]
-    assert_payload(aq, expected[1].permute(1, 0, 2), f"T={t} activation bytes")
-    assert_payload(asc, expected[2].permute(1, 0, 2), f"T={t} activation scales")
-    assert_payload(yq, expected[3], f"T={t} Y bytes")
-    assert_payload(ys, expected[4], f"T={t} Y scales")
-
-
-@pytest.mark.jit_only
-def test_workspace_cache_reuse(weights):
-    """jit only: repeated calls reuse one cached workspace and stay bit-exact.
-
-    Note on graph capture: the delivery form passes a tiling *struct*, and the
-    PyPTO jit launcher serializes it into a fresh device buffer per launch
-    (_pack_tiling_arg).  That H2D copy is rejected inside a GLOBAL-mode capture,
-    so jit-mode graph capture is not available for tiling-struct kernels (same as
-    flex_attention).  The built-in aclnn path builds the tiling buffer in the
-    framework and has no such copy.
-    """
-    import atten_epilogue as op
+def test_binding_rejects_invalid_inputs(weights):
+    """The binding validates contract faults on the caller thread, before ACLNN work."""
+    import torch_npu
     torch.npu.set_device(ST_DEVICE_ID)
     t = 72
     args = arguments(weights, t)
-    expected = [native_reference(*args)[0], native_reference(-args[0], *args[1:])[0]]
-    out = make_output(args[0])
-    op.atten_epilogue(*args, out)
-    torch.npu.synchronize()
-    assert_exact(out, expected[0])
-    cache_ids = {key: value.data_ptr() for key, value in op.WORKSPACE_CACHE.items()}
-    args[0].neg_()
-    other = make_output(args[0])
-    op.atten_epilogue(*args, other)
-    torch.npu.synchronize()
-    assert other.data_ptr() != out.data_ptr()
-    assert_exact(other, expected[1], "second call")
-    assert cache_ids == {key: value.data_ptr() for key, value in op.WORKSPACE_CACHE.items()}
-
-
-@pytest.mark.jit_only
-def test_bounded_tiling_profiles():
-    """jit only: the tiling key schema stays enumerable and the selector stays inside it."""
-    from pypto_pro.runtime.tilingkey import TilingKeySchema
-    import atten_epilogue as op
-    schema = TilingKeySchema(op.EpilogueKey)
-    profiles = set(schema.enumerate_valid())
-    assert len(profiles) == PROFILE_COUNT
-    combined = set()
-    for cores in (28, WIDE_CUBE_CORES):
-        selected = {tuple(op.tiling_key_for(t, cores)[name] for name in schema.field_names())
-                    for t in [*range(1, 257), *BOUNDARY_TOKENS]}
-        assert len(selected) == PROFILE_COUNT // 2
-        assert selected <= profiles
-        combined.update(selected)
-    assert combined == profiles
-
-
-@pytest.mark.jit_only
-def test_host_contract_validation(weights):
-    """jit only: the Python host entry rejects shape/dtype/device/contiguity faults."""
-    import torch_npu
-    import atten_epilogue as op
-    torch.npu.set_device(ST_DEVICE_ID)
-    args = arguments(weights, 72)
-    full = list(args) + [make_output(args[0])]
-    faults = [(0, args[0].reshape(72 * HEADS, HEAD_DIM)),
-              (1, weights[0].reshape(GROUPS * GROUP_N, GEMM1_K)),
-              (3, weights[2].view(torch.uint8)),
-              (6, args[6].cpu()),
-              (6, args[6][:, ::2]),
-              (6, args[6].to(torch.float16)),
-              (7, make_output(args[0], rows=64)),
-              (2, torch_npu.npu_format_cast(weights[1], 29))]
+    run = torch.ops.pypto_gym.atten_epilogue
+    faults = [
+        (0, args[0].reshape(t * HEADS, HEAD_DIM)),          # wrong rank/shape
+        (0, args[0].cpu()),                                  # host tensor
+        (0, torch.empty((0, HEADS, HEAD_DIM), dtype=torch.bfloat16, device=ST_DEVICE)),
+        (1, weights[0].reshape(GROUPS * GROUP_N, GEMM1_K)),  # wrong weight shape
+        (3, weights[2].view(torch.uint8)),                   # wrong scale dtype
+        (6, args[6][:, ::2]),                                # non-contiguous
+        (6, args[6].to(torch.float16)),                      # wrong table dtype
+        (2, torch_npu.npu_format_cast(weights[1], 29)),      # private NZ storage
+    ]
     for index, value in faults:
-        bad = list(full)
+        bad = list(args)
         bad[index] = value
-        with pytest.raises((ValueError, TypeError)):
-            op.atten_epilogue(*bad)
-    empty_o = torch.empty((0, HEADS, HEAD_DIM), dtype=torch.bfloat16, device=args[0].device)
-    with pytest.raises(ValueError):
-        op.atten_epilogue(empty_o, *args[1:], make_output(empty_o))
-
-
-def _pl_attribute(node):
-    """Return True for a `pl.<attr>` access in the kernel source AST."""
-    if not isinstance(node, ast.Attribute):
-        return False
-    if not isinstance(node.value, ast.Name):
-        return False
-    return node.value.id == "pl"
-
-
-@pytest.mark.jit_only
-def test_primitive_only_implementation():
-    """jit only: the kernel goes through the tile/primitive API only."""
-    import atten_epilogue as op
-    tree = ast.parse(inspect.getsource(op))
-    accesses = {node.attr for node in ast.walk(tree) if _pl_attribute(node)}
-    assert not accesses.intersection({"gemm", "gemm_mx", "mem_space", "allocate_tile_group"})
-    assert {"make_tile_group", "matmul_mx", "matmul_mx_acc"} <= accesses
-
-
-def test_mode_is_dual():
-    """Sanity: the shared entry resolved for the running mode (informational)."""
-    logging.info("  [INFO] test mode = %s, entry = %r", get_mode(), atten_epilogue)
+        with pytest.raises(RuntimeError):
+            run(*bad)
+        torch.npu.synchronize()

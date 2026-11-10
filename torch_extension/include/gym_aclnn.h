@@ -76,6 +76,21 @@ inline void CheckNDStorage(const at::Tensor &tensor, const char *name) {
               " must use ND storage format; got NPU format ", format);
 }
 
+// Plain-storage check for operators whose public inputs may be 4-D: torch_npu
+// tags host-copied 4-D tensors as NCHW by default even though the physical
+// layout is contiguous row-major, so a strict ACL_FORMAT_ND comparison would
+// reject legitimate inputs. Private formats (FRACTAL_*, NC1HWC0, ...) are still
+// rejected; the caller-side contiguity/stride checks keep the ACL_FORMAT_ND
+// descriptor built from sizes/strides truthful.
+inline void CheckPlainStorage(const at::Tensor &tensor, const char *name) {
+  TORCH_CHECK(tensor.device().is_privateuseone(), name, " must be an NPU tensor");
+  const auto format = at_npu::native::get_npu_format(tensor);
+  TORCH_CHECK(format == ACL_FORMAT_ND || format == ACL_FORMAT_NCHW ||
+                  format == ACL_FORMAT_NHWC,
+              name, " must use plain ND storage format; got NPU format ",
+              format);
+}
+
 inline aclDataType DataType(at::ScalarType type) {
   switch (type) {
   case at::kBFloat16:
@@ -90,6 +105,13 @@ inline aclDataType DataType(at::ScalarType type) {
     return ACL_INT64;
   case at::kByte:
     return ACL_UINT8;
+  case at::kFloat8_e4m3fn:
+    // ACL_FLOAT8_E4M3FN (acl/acl_base_rt.h); the enum name is not exported by
+    // every CANN header set, so use the ABI value, matching the test bridges.
+    return static_cast<aclDataType>(36);
+  case at::kFloat8_e8m0fnu:
+    // ACL_FLOAT8_E8M0, same reasoning as above.
+    return static_cast<aclDataType>(37);
   default:
     TORCH_CHECK(false, "Unsupported ACL tensor dtype: ", type);
   }

@@ -34,9 +34,9 @@ YQ_OFFSET_PER_ROW = ASC_OFFSET_PER_ROW + ASC_BYTES_PER_ROW
 YS_OFFSET_PER_ROW = YQ_OFFSET_PER_ROW + YQ_BYTES_PER_ROW
 WORKSPACE_BYTES_PER_ROW = YS_OFFSET_PER_ROW + YS_BYTES_PER_ROW   # 42240
 
-# 32-AIC 布局(wide)与少数核布局各三档, 共 6 个合法 tiling key profile.
+# 32 核、28 核和通用回退共用有限的19个合法 profile，T 本身仍为运行时数据。
 WIDE_CUBE_CORES = 32
-PROFILE_COUNT = 6
+PROFILE_COUNT = 19
 
 
 def padded_tokens(t):

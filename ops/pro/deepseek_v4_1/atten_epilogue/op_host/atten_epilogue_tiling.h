@@ -29,6 +29,8 @@
 
 namespace optiling {
 
+struct AttenEpilogueCompileInfo {};
+
 BEGIN_TILING_DATA_DEF(EpilogueTilingData)
 TILING_DATA_FIELD_DEF(int64_t, t)
 TILING_DATA_FIELD_DEF(int64_t, padded)

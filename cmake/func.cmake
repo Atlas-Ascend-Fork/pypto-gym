@@ -349,6 +349,9 @@ function(add_bin_compile_target)
                     ${SRC_OUT_DIR}/${op_file}/op_kernel/.pypto_install.done
                 WORKING_DIRECTORY ${GEN_OUT_DIR})
         add_custom_target(${OP_TARGET_NAME}_${op_index} DEPENDS ${_BUILD_FLAG})
+        # The command itself reads the staged tiling registry; ordering only
+        # its aggregate parent allows these prerequisites to run in parallel.
+        set_property(GLOBAL APPEND PROPERTY GYM_KERNEL_TARGETS ${OP_TARGET_NAME}_${op_index})
         add_dependencies(${OP_TARGET_NAME}_${op_index}
                 ${OP_TARGET_NAME}_src_copy ${OP_TARGET_NAME}_py_copy ${OP_TARGET_NAME}_mkdir
                 ${OP_TARGET_NAME}_pypto_install generate_compile_cmd)

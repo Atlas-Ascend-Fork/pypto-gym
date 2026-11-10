@@ -80,6 +80,9 @@ public:
             .PrecisionReduceFlag(true)
             .ExtendCfgInfo("opFile.value", "atten_epilogue")
             .ExtendCfgInfo("aclnnSupport.value", "support_aclnn");
+        // Keep host shape validation active for empty outputs: T must be positive.
+        // Otherwise the ACLNN executor skips tiling and silently returns success.
+        this->AICore().LaunchWithZeroEleOutputTensors(true);
         this->AICore().AddConfig("ascend950", aicore_config);
     }
 };

@@ -2,7 +2,8 @@
 
 Torch 绑定使用已安装的 ACLNN 算子库，在当前 NPU stream 上执行预编译 kernel。
 C++ 绑定也在构建期编译并随 `.run` 交付；运行时加载 `.so`，无需编译器或
-PyPTO Python 包。当前已接入 `mega_mhc`。
+PyPTO Python 包。当前已接入 `mega_mhc`、`atten_epilogue` 和
+`quant_sparse_lightning_indexer`。
 
 ## 构建和安装
 
@@ -120,7 +121,8 @@ python3 build_ci.py --pkg-type run --soc ascend950 \
 
 - 所选算子的 host、ACLNN 和 kernel 产物一起打包。
 - 其中已接入 `torch_extension/` 的算子，额外打包各自的绑定 `.so` 和 Python 前端。
-- 当前 `mega_mhc` 已接入绑定，提供 `pypto_gym.mega_mhc` 和对应的 `torch.ops` 入口。
+- 当前 `mega_mhc`、`atten_epilogue`、`quant_sparse_lightning_indexer` 已接入绑定，
+  各自提供 `pypto_gym.<op>` 和对应的 `torch.ops` 入口。
   新增算子仍需完成绑定接入，构建不会从 kernel 源码自动生成 Torch 参数接口。
 - `run` 默认尝试启用绑定；若所选算子都没有接入绑定，会自动降级为 ACLNN-only 包并打印
   WARNING，原有 ACLNN 调用/测试方式不受影响。显式传 `--torch-bindings` 时，所选算子中

@@ -10,3 +10,5 @@
 # Comment out an entry to exclude it, e.g. # - deepseek_v4_1/mega_mhc
 # Explicit --ops op_a,op_b still selects operator directory names.
 - deepseek_v4_1/mega_mhc
+- deepseek_v4_1/atten_epilogue
+- deepseek_v4_1/quant_sparse_lightning_indexer
