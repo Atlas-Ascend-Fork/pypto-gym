@@ -9,7 +9,7 @@
 
 """quant_mla_prolog 精度判据。
 
-判据限值与 DSL 参考实现的验收契约一致。本文件不 import NPU 实现，
+判据限值即本算子的精度验收契约。本文件不 import NPU 实现，
 两个参考文件都能脱离实现使用。
 
 __all__ = ["check_precision", "REL_L2_LIMIT", "Q_COSINE_MIN"]
