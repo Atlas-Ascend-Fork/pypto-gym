@@ -192,6 +192,25 @@ run_gym_tests() {
         return 1
     fi
 
+    # 通过 export GYM_SMOKE_SOC 控制冒烟用例执行(默认 910):
+    #   GYM_SMOKE_SOC=950   当前 test_targets 均为 910 用例, 950 卡上直接跳过;
+    #                       否则 conftest 会按 soc 过滤把 910 用例全部剔除,
+    #                       pytest 收集 0 条用例以 exit 5 误报失败
+    #   GYM_SMOKE_SOC=910   按原列表执行(不设置时默认)
+    local smoke_soc="${GYM_SMOKE_SOC:-910}"
+    case "${smoke_soc}" in
+        910|ascend910)
+            ;;
+        950|ascend950|950pr|950PR)
+            LOG_INFO "GYM_SMOKE_SOC=${smoke_soc}: skip 910 smoke pytest cases"
+            return 0
+            ;;
+        *)
+            LOG_ERROR "invalid GYM_SMOKE_SOC=${smoke_soc} (expected 910/ascend910 or 950/ascend950)"
+            return 1
+            ;;
+    esac
+
     LOG_HEAD "[BGN] Run pypto-gym tests/ops"
     pushd "$gym_repo" > /dev/null || return 1
     if ASCEND_VISIBLE_DEVICES="$device_ids" \
