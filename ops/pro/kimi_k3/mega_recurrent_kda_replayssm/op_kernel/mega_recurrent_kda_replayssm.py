@@ -541,9 +541,14 @@ def rec_token_vf2(state, decay_t, key_t, query_t, value_t, o_t, kv_row, delta_ro
 def rec_pair_vf(state, decay_t, key_t, query_t, value_t, o_t,
                 kv0, kv1, op0, op1, delta0, delta1, sc,
                 tb: pl.DT_INT64, beta0: pl.DT_FP32, beta1: pl.DT_FP32, scale: pl.DT_FP32):
-    """Two consecutive delta-rule steps sharing one state load/store per pass."""
+    """Two consecutive delta-rule steps sharing one state load/store per pass.
+
+    ``beta0`` / ``beta1`` are the raw ``beta_logit`` values (``ws_beta_logit``); the
+    sigmoid is applied here, exactly as ``rec_token_vf2`` does for the single-token path.
+    """
     preg = vf.create_mask(pattern=pl.MaskPattern.ALL, dtype=pl.DT_FP32)
     m1 = vf.update_mask(1, dtype=pl.DT_FP32)
+    one = vf.full(1.0, preg, dtype=pl.DT_FP32)
     d0a = vf.load_align(decay_t, tb)
     d0b = vf.load_align(decay_t, tb + DH)
     d1a = vf.load_align(decay_t, tb + D)
@@ -620,8 +625,16 @@ def rec_pair_vf(state, decay_t, key_t, query_t, value_t, o_t,
     sq0v = vf.load_align(sc, 1, dist=pl.LoadDist.BRC_B32)
     sq1v = vf.load_align(sc, 2, dist=pl.LoadDist.BRC_B32)
     sq2v = vf.load_align(sc, 3, dist=pl.LoadDist.BRC_B32)
-    b0 = vf.full(beta0, preg, dtype=pl.DT_FP32)
-    b1 = vf.full(beta1, preg, dtype=pl.DT_FP32)
+    bl0 = vf.full(beta0, preg, dtype=pl.DT_FP32)
+    nb0 = vf.neg(bl0, preg)
+    eb0 = vf.exp(nb0, preg)
+    db0 = vf.adds(eb0, 1.0, preg)
+    b0 = vf.div(one, db0, preg)
+    bl1 = vf.full(beta1, preg, dtype=pl.DT_FP32)
+    nb1 = vf.neg(bl1, preg)
+    eb1 = vf.exp(nb1, preg)
+    db1 = vf.adds(eb1, 1.0, preg)
+    b1 = vf.div(one, db1, preg)
     v0a = vf.load_align(value_t, tb)
     v0b = vf.load_align(value_t, tb + DH)
     v1a = vf.load_align(value_t, tb + D)

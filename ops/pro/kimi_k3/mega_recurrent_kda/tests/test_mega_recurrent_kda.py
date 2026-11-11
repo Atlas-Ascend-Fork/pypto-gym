@@ -112,7 +112,7 @@ def _run_case(name):
     actual = mega_recurrent_kda_wrapper(*npu_arguments, _SCALE, _LOWER, _RMS_EPS)
     torch.npu.synchronize()
 
-    # SPEC §5: elementwise atol = rtol = 5e-3 on output, conv_state and recurrent_state.
+    # Elementwise atol = rtol = 5e-3 on output, conv_state and recurrent_state.
     for label, got, want in (
         ("output", actual.cpu().float(), expected.output.float()),
         ("conv_state", npu_arguments[9].cpu().float(), expected.conv_state.float()),
@@ -121,7 +121,7 @@ def _run_case(name):
         max_diff = (got - want).abs().max().item()
         _LOG.info("[%s] %-16s max_diff=%.3e", name, label, max_diff)
         torch.testing.assert_close(got, want, atol=5e-3, rtol=5e-3,
-                                   msg=f"{name}: {label} exceeds SPEC tolerance")
+                                   msg=f"{name}: {label} exceeds tolerance")
 
     # The immutable null slot 0 must stay bit-exact.
     assert torch.equal(npu_arguments[9].cpu()[0], initial_conv[0]), "conv_state null slot changed"

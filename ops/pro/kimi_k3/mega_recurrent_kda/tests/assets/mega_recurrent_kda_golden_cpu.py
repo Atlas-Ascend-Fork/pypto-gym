@@ -10,14 +10,15 @@
 # -----------------------------------------------------------------------------------------------------------
 """Independent CPU golden for the fused ``mega_recurrent_kda`` operator.
 
-Pure-torch CPU reference implementing the SPEC math (``SPEC_ANALYSIS.md`` §8):
+Pure-torch CPU reference implementing the operator math:
 
     projections -> causal Conv1D(K=4)+SiLU -> Q/K RMS norm -> decay/beta
     activation -> KDA delta-rule recurrence -> RMSNorm + sigmoid gate
     -> output projection
 
-All arithmetic runs in FP32 except where the SPEC fixes a BF16 rounding point
-(``decay_a`` intermediate, ``convolved`` result, ``gated`` result).  The returned
+All arithmetic runs in FP32 except where the operator contract fixes a BF16
+rounding point (``decay_a`` intermediate, ``convolved`` result, ``gated``
+result).  The returned
 tuple contains the public output plus the two in-place state buffers and the
 intermediate workspace regions used by the precision test.
 """

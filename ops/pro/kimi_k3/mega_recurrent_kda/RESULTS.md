@@ -59,7 +59,7 @@ pytest ops/pro/kimi_k3/mega_recurrent_kda/tests/test_mega_recurrent_kda.py -q
 |actual − golden| <= 5e-3 + 5e-3 · |golden|
 ```
 
-这个阈值来自 SPEC，比 `tests/assets/mega_recurrent_kda_precision.py`（方案 A 混合容差）对
+这个阈值比 `tests/assets/mega_recurrent_kda_precision.py`（方案 A 混合容差）对
 BF16 的默认阈值（`rtol = atol = 2⁻⁶ ≈ 1.56e-2`）更严。除了逐元素容差，还要求两个状态池的
 槽 0 **逐位不变**（`torch.equal`）。
 

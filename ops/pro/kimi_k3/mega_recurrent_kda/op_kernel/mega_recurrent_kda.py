@@ -11,7 +11,7 @@
 """Fused ``mega_recurrent_kda`` PyPTO-Pro operator.
 
 Host wrapper plus a single mixed AIC/AIV ``@pl.jit`` kernel implementing the
-full SPEC math (``SPEC_ANALYSIS.md`` §8): QKV / decay / beta / output-gate
+full operator math: QKV / decay / beta / output-gate
 projections, causal Conv1D+SiLU, Q/K RMS normalisation, KDA delta-rule
 recurrence, RMSNorm + output gate and the output projection.
 
