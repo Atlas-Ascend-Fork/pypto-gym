@@ -12,13 +12,13 @@
 
 Backward of the Liger-Kernel fused cross-entropy loss, float32 logits.
 
-The forward already left dloss/dx in `_input`, so the backward is only the chain
-rule applied to it:
+The forward already left dloss/dx in `saved_input`, so the backward is only the
+chain rule applied to it:
 
     dx[r, c] = saved_input[r, c] * grad_output[r]
 
 `grad_output` arrives in one of three forms and upstream treats each
-differently: exactly 1.0 skips the multiply and returns `_input` untouched; a
+differently: exactly 1.0 skips the multiply and returns `saved_input` untouched; a
 0-dim tensor (`reduction` of "mean" or "sum") scales every row by that one
 value, in place; a [BT] vector (`reduction="none"`) scales row r by
 `grad_output[r]`.
