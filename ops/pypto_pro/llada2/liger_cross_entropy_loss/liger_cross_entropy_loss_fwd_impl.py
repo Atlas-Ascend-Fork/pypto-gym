@@ -1182,7 +1182,7 @@ def liger_cross_entropy_loss_fwd_kernel(
 # The kernel's private scratch. `split_workspace` is kernel-internal on the
 # AscendC path; PyPTO Pro has no equivalent, so the emitted signature appends
 # one tensor per workspace after the public tensors. All eight are float32
-# [1, BT] and carry per-row statistics across the rendezvous.
+# [1, BT] and carry per-row values across the rendezvous.
 _FWD_WORKSPACES = 8
 
 
