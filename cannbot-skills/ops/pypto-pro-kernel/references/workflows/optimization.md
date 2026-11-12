@@ -25,6 +25,8 @@ When a change adds native calls or wrapper work, report the task count and compa
 
 Before selecting the first implementation experiment, collect [task-level pipe counters](../verification/native-timing.md#collect-pipe-counters-for-diagnosis) for the correct baseline. Use source, generated CCE (`kernel.cpp`) and, when needed, transformed IR to inspect work counts, buffer lifetimes and dependencies. Compare per-worker work with actual per-core counters when averages can hide a long tail. Record one observed cost, its source/core/pipe, the proposed change and the expected effect; [performance diagnosis](../diagnostics/performance.md) owns interpretation. Missing collector support is an explicit limitation, not a reason to abandon a valid native candidate or spend the whole budget on setup. Revisit diagnostics after a mapping change or unexplained regression; do not collect every expensive trace for every tuning point.
 
+Use the [Active card index](../knowledge-cards/index.md) to find a mechanism that fits the observed cost. Read the whole card, check its target/API gate against the current authoring policy, and use its rejection case when designing the comparison. For CLI/MCP lookup and relation types see [optimization tools](../tooling/optimization.md).
+
 Development and optimization use code inspection and focused native experiments. Select each experiment for a named uncertainty and a bounded diagnostic budget.
 
 ## Budget and candidate identity

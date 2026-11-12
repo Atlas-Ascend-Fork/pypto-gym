@@ -8,13 +8,8 @@
 # See LICENSE in the root of the software repository for the full text of the License.
 """The chip envelope, DERIVED from the platform ini rather than transcribed.
 
-The repository's own rule, from `ops/pypto-pro-op-perf-tune/references/
-a5-roofline-and-levers.md`:
-
-    Read the cube, HBM, UB, L1 and L0 figures out of the platform ini that ships
-    with the runtime you are measuring, so no constant lives in this page and
-    detaches from the installed version. Resolve <SKU> from the detected device
-    rather than assuming it, and record which ini you read alongside the number.
+See `cannbot-skills/ops/pypto-pro-kernel/references/diagnostics/a5-roofline.md`.
+Derive the envelope from the matching installed SKU file and record its identity.
 
 PANKO transcribed six constants instead, taken from one SKU. Checking them back
 against that SKU's ini says only that the transcription was faithful; it says
@@ -262,17 +257,14 @@ def _config_dirs_under(root):
 
 
 def platform_config_dirs():
-    """Every `data/platform_config` reachable from the CANN environment.
+    """Installed CANN `data/platform_config` directories.
 
     The arch directory (aarch64-linux / x86_64-linux) is globbed rather than
-    guessed. NOTE: this is the CANN location, and it is the one to read.
-    a5-roofline-and-levers.md names `<pypto root>/framework/src/platform/parser/
-    simulation_platform/platform_config/`, which exists only in a pypto SOURCE
-    checkout -- the installed package ships no `framework/` -- and even there it
-    holds family-level inis rather than per-SKU ones. A family-level ini reports
-    one member's `SoC_version` and that member's core count, so it cannot answer
-    what a sibling SKU in the same family has. The CANN directory carries the
-    SKU-level inis -- dozens of them on the box this was checked against.
+    guessed. Use the exact SoC configuration from the installed toolchain.
+    The A5 calibration guide referenced above also describes matching framework
+    source configurations; a source-tree simulation configuration alone does not
+    establish the installed device's limits. Check `SoC_version` and retain the
+    ini path rather than inferring one SKU's parameters from a sibling SKU.
     """
     out = []
     for root in _cann_roots():

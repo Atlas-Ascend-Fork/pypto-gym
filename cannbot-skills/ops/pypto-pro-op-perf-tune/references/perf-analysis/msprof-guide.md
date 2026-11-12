@@ -103,7 +103,7 @@ bash "$PERF_SKILL_ROOT/scripts/msprof_profile_run.sh" --batch --base-dir=./custo
 ## <a id="pypto-io"></a>PyPTO-Pro 输入与输出
 
 采集脚本执行算子目录中已有、已按算子合同通过全量正确性测试的 runner；优化前后必须保留
-wrapper 边界、Golden 语义与精度门槛。独立输入的要求见[主 Skill](../../SKILL.md)，原生交付与给定评估入口按[核心 skill](../../../pypto-pro-kernel/references/workflows/delivery.md)执行，保持用户明确的项目约束。逐 case 输入、Golden 机器合同和输出证据以[证据协议](evidence-protocol.md)为准。不传 manifest 的兼容
+wrapper 边界、Golden 语义与精度门槛。独立输入的要求见[核心 skill](../../../pypto-pro-kernel/SKILL.md)，原生交付与给定评估入口按[核心 skill](../../../pypto-pro-kernel/references/workflows/delivery.md)执行，保持用户明确的项目约束。逐 case 输入、Golden 机器合同和输出证据以[证据协议](evidence-protocol.md)为准。不传 manifest 的兼容
 compare/quick 输出仍按上面的模式说明生成。
 
 ---
@@ -111,12 +111,12 @@ compare/quick 输出仍按上面的模式说明生成。
 ## <a id="platform-tool-selection"></a>平台与工具选择
 
 在加载任何平台专属模型前，先运行
-[`../../pypto-pro-environment-check/scripts/get_npu_arch.py`](../../../pypto-pro-environment-check/scripts/get_npu_arch.py)
+[`../../../pypto-pro-environment-check/scripts/get_npu_arch.py`](../../../pypto-pro-environment-check/scripts/get_npu_arch.py)
 或读取构建配置，记录设备型号、`NpuArch`、CANN/PyPTO 版本和 `pypto_pro.__file__`：
 
 - 仅当结果确认 raw 输出 `3510`（`NpuArch` 值）、helper 输出 `dav-3510`、runtime 输出 `DAV_3510`
   或构建目标 `dav-c310` 时，加载
-  [A5 roofline 与杠杆](../general-knowledge/a5-roofline-and-levers.md)；
+  [A5 roofline 与杠杆](../../../pypto-pro-kernel/references/diagnostics/a5-roofline.md)；
 - 对未知平台或非 A5 平台，不应用 A5 核数、容量、带宽、频率或经验结论，直接使用该平台的
   官方资料与本次 profiler 数据；
 - 平台探测失败时，将平台模型标记为不可用，但仍可继续做不依赖硬编码常量的实测瓶颈分析。
@@ -256,8 +256,7 @@ ops/{算子名}/docs/perf/
 
 ## <a id="analysis-discipline"></a>通用分析纪律
 
-本节只提供分析证据；调优项的来源、建项时机和登记要求以[主 Skill](../../SKILL.md)及
-[优化项实验闭环](../optimization-playbook.md)为准，不能仅凭本节文字建立优化项。
+本节只提供分析证据；候选选择、实验预算和停止条件以[核心 skill 的优化工作流](../../../pypto-pro-kernel/references/workflows/optimization.md)为准。
 
 - **kernel 总耗时不是 DMA floor。** 要估计纯搬运下界，单独运行只含合同 load+store 的 sweep；
   完整 kernel 时间同时包含计算、依赖和固定开销，不能反过来当搬运下界。
@@ -271,7 +270,7 @@ ops/{算子名}/docs/perf/
   形态；推断平台或框架限制必须有独立 probe、平台资料和其它实现的可复核证据。
 - **串行依赖、历史估算和旧二进制都需排除。** 依赖链要用生成物/trace/受控 A-B 证明；结构
   改变后重新推导估计；body 修改后验证生成物身份。实验细则见
-  [优化项实验闭环](../optimization-playbook.md)。
+  [优化实验工作流](../../../pypto-pro-kernel/references/workflows/optimization.md)。
 
 更完整的 sibling/floor/证伪纪律见
 [current source-bound mechanism evidence](../../../pypto-pro-kernel/references/diagnostics/performance.md#test-a-mechanism-with-source-bound-evidence) 与 [optimization exit criteria](../../../pypto-pro-kernel/references/workflows/optimization.md#exit-criteria)。

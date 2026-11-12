@@ -5,11 +5,11 @@ optimization keeps the diagnostic-first flow in [optimization.md](optimization.m
 Audited evidence is a separate target: this mode records closure, but it does not by
 itself make a measurement reproducible.
 
-Enumeration needs an explicit card library. Supply its root through the checker's
-`--cards-root` option (see [tooling/optimization.md](../tooling/optimization.md)); the
-plugin does not install a card library and does not resolve a sibling directory. When no
-library is provided, coverage mode cannot enumerate and must report the coverage as
-incomplete instead of claiming closure.
+Enumeration needs an explicitly selected card library. From this skill's root, select
+the bundled library with `--cards-root references/knowledge-cards`, or pass another
+library's path (see [tooling/optimization.md](../tooling/optimization.md)). The tools do
+not discover a sibling directory. When no library is selected, coverage mode cannot
+enumerate and must report coverage as incomplete instead of claiming closure.
 
 ## 1. Before enumerating
 
@@ -32,12 +32,8 @@ round-trip, a redundant conversion), record it as a source-derived candidate wit
 source evidence. Profiler evidence is preferred but not required for a source-level
 candidate.
 
-This skill has no project-level knowledge-base selection contract. The explicitly
-supplied card library is the enumeration source; providing one is the caller's choice and
-creates no obligation by itself. The source repository keeps its own card library for
-repository checks, at `pypto-pro-op-perf-tune/references/knowledge-cards/` relative to the
-repository root; that sibling path is not part of an installed workspace and must not be
-used as an implicit default.
+The explicitly selected card library is the enumeration source. Selecting a library
+alone does not request coverage mode; the bundled library follows the same rule.
 
 Cost control: if the user did not ask for coverage, do not run this mode.
 

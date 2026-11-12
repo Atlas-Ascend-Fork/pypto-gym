@@ -12,12 +12,12 @@ okf_version: "0.2"
 实际卡片按稳定类别放入子目录。首批内置 1 张 shape 卡片，位于 `shape/`，编号 `shape-01`，
 以 `status=stable` 登记到 Active 表。
 
-贡献流程、卡片字段与模板约定与 [pypto-pro-op-perf-tune 知识卡片库](../../../pypto-pro-op-perf-tune/references/knowledge-cards/index.md)
+贡献流程、卡片字段与模板约定与 [pypto-pro-kernel 知识卡片库](../../../pypto-pro-kernel/references/knowledge-cards/index.md)
 保持同一套规则（事实包 → Agent 整理 → 专业人员评审），使用时将其中的 PyPTO-Pro
 表述对应替换为 PyPTO 前端（`pypto.*` API、`@pypto.frontend.jit`）即可；见
-[贡献指南](../../../pypto-pro-op-perf-tune/references/knowledge-cards/CONTRIBUTING.md)、
-[OKF 格式约定](../../../pypto-pro-op-perf-tune/references/knowledge-cards/PROFILE.md)与
-[卡片模板](../../../pypto-pro-op-perf-tune/references/knowledge-cards/CARD_TEMPLATE.md)。
+[贡献指南](../../../pypto-pro-kernel/references/knowledge-cards/CONTRIBUTING.md)、
+[OKF 格式约定](../../../pypto-pro-kernel/references/knowledge-cards/PROFILE.md)与
+[卡片模板](../../../pypto-pro-kernel/references/knowledge-cards/CARD_TEMPLATE.md)。
 
 ## Active items
 
@@ -38,17 +38,17 @@ okf_version: "0.2"
   有条目时列出对应分组。退役卡保留稳定 ID、历史链接和退役原因，编号不复用。
 - 调优时按现有账本记录卡片 ID、文件位置和本轮结论；Draft、Retired 不作为候选。
 
-字段、来源和状态说明见 [OKF 格式约定](../../../pypto-pro-op-perf-tune/references/knowledge-cards/PROFILE.md)。
+字段、来源和状态说明见 [OKF 格式约定](../../../pypto-pro-kernel/references/knowledge-cards/PROFILE.md)。
 
 ## 贡献入口
 
-第一次贡献先按[贡献指南](../../../pypto-pro-op-perf-tune/references/knowledge-cards/CONTRIBUTING.md)准备事实包，
+第一次贡献先按[贡献指南](../../../pypto-pro-kernel/references/knowledge-cards/CONTRIBUTING.md)准备事实包，
 并使用其中的提示词让 Agent 生成卡片，默认以 Active 提交。采用卡片调优的执行流程见
 [本 Skill](../../SKILL.md)。
 
 ## Bundle resources
 
-- [贡献指南（共用自 pypto-pro-op-perf-tune）](../../../pypto-pro-op-perf-tune/references/knowledge-cards/CONTRIBUTING.md) - 事实包要求与 Agent 生成卡片的流程。
-- [OKF 格式约定（共用自 pypto-pro-op-perf-tune）](../../../pypto-pro-op-perf-tune/references/knowledge-cards/PROFILE.md) - 字段、来源与状态规则。
-- [卡片模板（共用自 pypto-pro-op-perf-tune）](../../../pypto-pro-op-perf-tune/references/knowledge-cards/CARD_TEMPLATE.md) - 新卡结构与默认字段。
-- [PyPTO-Pro 知识卡片库](../../../pypto-pro-op-perf-tune/references/knowledge-cards/index.md) - 平行的 pypto_pro 前端卡片库（`pl.*`/`vf.*` API），与本库分别计数。
+- [贡献指南（共用自 pypto-pro-kernel）](../../../pypto-pro-kernel/references/knowledge-cards/CONTRIBUTING.md) - 事实包要求与 Agent 生成卡片的流程。
+- [OKF 格式约定（共用自 pypto-pro-kernel）](../../../pypto-pro-kernel/references/knowledge-cards/PROFILE.md) - 字段、来源与状态规则。
+- [卡片模板（共用自 pypto-pro-kernel）](../../../pypto-pro-kernel/references/knowledge-cards/CARD_TEMPLATE.md) - 新卡结构与默认字段。
+- [PyPTO-Pro 知识卡片库](../../../pypto-pro-kernel/references/knowledge-cards/index.md) - 平行的 pypto_pro 前端卡片库（`pl.*`/`vf.*` API），与本库分别计数。

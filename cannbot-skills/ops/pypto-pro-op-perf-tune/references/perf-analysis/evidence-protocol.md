@@ -2,7 +2,7 @@
 
 > 本文件定义 PyPTO-Pro 性能调优的采集与证据要求。
 > [msprof 采集指南](msprof-guide.md)、[msprof op 补充指南](msprof-op-guide.md)、
-> [CSV 字段参考](csv_fields_reference.md)、[A5 Roofline 与杠杆](../general-knowledge/a5-roofline-and-levers.md)
+> [CSV 字段参考](csv_fields_reference.md)、[A5 Roofline 与杠杆](../../../pypto-pro-kernel/references/diagnostics/a5-roofline.md)
 > 按需提供分析方法；本协议在显式传入 `--case-manifest`（或使用逐 case Golden
 > 采集器/时间线入口）时生效。不传 manifest 时，compare/quick/batch
 > 保持既有的 Markdown Golden 流程不变。

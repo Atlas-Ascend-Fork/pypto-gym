@@ -73,6 +73,8 @@ def locator(text, selected_roots):
         raise ValueError(
             "Document IDs require a selected scope and a relative Markdown path, with an optional fragment"
         )
+    if scope == "skill" and parts.parts[0] == "knowledge-cards":
+        raise ValueError("Select the card root and use document:perf-cards/ for Active cards")
     path = (selected_roots[scope] / relative).resolve()
     if not path.is_relative_to(selected_roots[scope]):
         raise ValueError("Document locator escapes its selected source root")
@@ -142,6 +144,8 @@ def collect(
                 )
             )
             for parent, directories, names in walker:
+                if scope == "skill" and Path(parent) == root and "knowledge-cards" in directories:
+                    directories.remove("knowledge-cards")  # Only the Active index admits cards.
                 directories.sort()
                 for name in sorted(names):
                     if not name.lower().endswith(".md"):

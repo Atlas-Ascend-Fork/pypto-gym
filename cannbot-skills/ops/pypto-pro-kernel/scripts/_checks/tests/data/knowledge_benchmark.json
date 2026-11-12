@@ -627,13 +627,13 @@
         ]
       },
       "relevant_ids": [
-        "document:pro-api/SIMD-API/reg_computation/basic_arithmetic/addc.md",
+        "document:pro-api/SIMD-API/Reg-API/basic_arithmetic/addc.md",
         "docstring:vf.addc"
       ],
       "expected_lookup": "matched",
       "rationale": "Source owner identifies this operation or example; applicability still requires its original conditions.",
       "required_ids": [
-        "document:pro-api/SIMD-API/reg_computation/basic_arithmetic/addc.md"
+        "document:pro-api/SIMD-API/Reg-API/basic_arithmetic/addc.md"
       ],
       "resolve": true
     },
@@ -862,7 +862,7 @@
         ]
       },
       "relevant_ids": [
-        "document:pro-api/SIMD-API/reg_computation/basic_arithmetic/addc.md"
+        "document:pro-api/SIMD-API/Reg-API/basic_arithmetic/addc.md"
       ],
       "expected_lookup": "matched",
       "rationale": "Source owner identifies this operation or example; applicability still requires its original conditions.",
@@ -1457,7 +1457,7 @@
         ]
       },
       "relevant_ids": [
-        "document:pro-api/SIMD-API/reg_computation/basic_arithmetic/addc.md"
+        "document:pro-api/SIMD-API/Reg-API/basic_arithmetic/addc.md"
       ],
       "expected_lookup": "matched",
       "rationale": "Original source ownership and typed scope determine relevance; no native or numerical acceptance is implied."

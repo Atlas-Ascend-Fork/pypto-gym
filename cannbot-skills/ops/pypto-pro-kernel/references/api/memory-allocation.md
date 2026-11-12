@@ -51,6 +51,8 @@ Independent buffers need disjoint byte ranges. Copying `mutex_ids=[0]` into ever
 
 For independent chunks in a load→VF→store loop, compare a single slot with a ring of disjoint slots when capacity permits. The last store must finish before its slot is overwritten; VF completion alone does not release an updated tile. Advance related groups consistently and prove that GM chunks are independent too. In-place neighboring chunks may need additional ordering.
 
+Keep long-lived reduction state separate from rotating input slots when an in-place aggregate holds an input slot past its last input consumer and blocks the next prefetch. A distinct state tile or legal register state can shorten that input slot's lifetime; compare the added storage or copy cost rather than inserting an unconditional UB copy. The aggregate's dependent updates remain ordered.
+
 Local slot rotation is not a proof of a GM read-after-write dependency. If a later pass reloads GM bytes written through another local slot, establish completion on that actual producer/consumer path; different local addresses and mutex IDs do not describe the shared GM bytes. Verify the supported cross-pipe completion edge for a same-core path, the [GM handover protocol](crosscore-sync.md) for cross-core work, or an ordered native-call boundary when the dataflow uses separate launches.
 
 Tune transfer width and depth together, accounting for every operand, padding and slot. A larger ring may require smaller transfers or add control work. Test tails, short runs and enough iterations to wrap the ring, then compare complete calls. Register lane count does not set the DMA block size.

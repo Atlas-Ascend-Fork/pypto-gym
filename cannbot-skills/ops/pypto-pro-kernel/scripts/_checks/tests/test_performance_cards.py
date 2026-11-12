@@ -18,6 +18,7 @@ import pytest
 yaml = pytest.importorskip("yaml", reason="Card acceptance uses requirements-cards.txt")
 
 from _checks import (
+    documents,
     feedback,
     knowledge,
     knowledge_admission,
@@ -463,12 +464,23 @@ def test_contract_use_does_not_deduplicate_different_transport_interventions(tmp
     assert result["coverage"]["cards"]["complete"]
 
 
-REAL_CARDS = SKILL_ROOT.parent / "pypto-pro-op-perf-tune/references/knowledge-cards"
+def test_bundled_cards_only_enter_through_the_active_table(bundle):
+    corpus, _, _ = bundle
+    root = corpus.references / "knowledge-cards"
+    library(root, links=[relation()])
+    write(root / "draft.md", "# Quarantined example\nNot an Active card.\n")
+    kwargs = {"pypto_root": corpus.framework, "examples_root": corpus.examples}
+    ordinary = query.report("Quarantined example", kinds=["document"], **kwargs)
+    assert all("knowledge-cards/" not in item["id"] for item in ordinary["knowledge"]["items"])
+    admitted = query.report("cube-01", kinds=["document"], cards_root=root, **kwargs)
+    assert any(item.get("card", {}).get("item_id") == "cube-01" for item in admitted["knowledge"]["items"])
+    with pytest.raises(ValueError, match="Active cards"):
+        documents.locator("document:skill/knowledge-cards/draft.md", {"skill": corpus.references})
 
 
-@pytest.mark.skipif(
-    not REAL_CARDS.is_dir(), reason="Optional monorepo card source is not installed"
-)
+REAL_CARDS = SKILL_ROOT / "references/knowledge-cards"
+
+
 @pytest.mark.parametrize(
     "chain",
     [
@@ -505,9 +517,6 @@ def test_card_contract_example_chain_retains_source_roles_and_evidence_boundarie
         assert entry["sha256"] == feedback.file_identity(Path(entry["path"]))["sha256"]
 
 
-@pytest.mark.skipif(
-    not REAL_CARDS.is_dir(), reason="Optional monorepo card source is not installed"
-)
 def test_owner_library_resolves_all_current_cards_and_preserves_relation_boundaries():
     rows, coverage = performance_cards.collect(
         REAL_CARDS,

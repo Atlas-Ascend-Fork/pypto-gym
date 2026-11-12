@@ -185,7 +185,7 @@ def knowledge_bundle(tmp_path):
         (
             "kernel_query",
             {
-                "text": "document:pro-api/SIMD-API/reg_computation/basic_arithmetic/addc.md#调用示例"
+                "text": "document:pro-api/SIMD-API/Reg-API/basic_arithmetic/addc.md#调用示例"
             },
         ),
         (

@@ -22,7 +22,7 @@
 1. **平台探测**：先运行
    [`../../../pypto-pro-environment-check/scripts/get_npu_arch.py`](../../../pypto-pro-environment-check/scripts/get_npu_arch.py)，
    仅当确认 A5（`3510`/`dav-3510`/`DAV_3510`/`dav-c310`）才加载
-   [A5 roofline 与杠杆](../general-knowledge/a5-roofline-and-levers.md)；未知平台不套用 A5 常量。
+   [A5 roofline 与杠杆](../../../pypto-pro-kernel/references/diagnostics/a5-roofline.md)；未知平台不套用 A5 常量。
 2. **用户指定** `msprof` 走 [msprof 指南](msprof-guide.md)；指定 `msprof op` / msopprof 走
    [msprof op 指南](msprof-op-guide.md)。
 3. **未指定时探测环境**：仅 `msopprof` 可用走 msprof op 指南；仅 `msprof` 可用走 msprof 指南；

@@ -195,9 +195,7 @@ class ReadIniTest(unittest.TestCase):
         self.assertEqual(chip_profile.find_ini("AscendNope", self.dirs), "")
 
     def test_the_source_path_is_carried_out(self):
-        """a5-roofline-and-levers.md: record which ini was read alongside the
-        number.
-        """
+        """Keep the ini source path with values for SKU and version calibration."""
         self.assertTrue(self._env(SOC_A)["source"].endswith(f"{SOC_A}.ini"))
 
     def _env(self, soc):

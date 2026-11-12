@@ -56,10 +56,9 @@ Choose the current workflow from [SKILL.md](../SKILL.md), then consult the match
 | Coverage closure | [Coverage mode](workflows/optimization-coverage.md) |
 | Forced structural review and reachable target | [Structural review](workflows/structural-review.md) |
 
-> The card library must be supplied explicitly through `--cards-root`; the installation
-> bundle does not include one and never falls back to a sibling directory. The card library
-> kept in the source repository is for repository checks only and is not part of the
-> installed scope.
+> Select the bundled library explicitly with `--cards-root references/knowledge-cards`
+> from this skill's root, or select another library by its path. The tools do not
+> discover a sibling directory or enable a card source implicitly.
 
 ## API topics
 
@@ -87,6 +86,7 @@ Choose the current workflow from [SKILL.md](../SKILL.md), then consult the match
 | Missing warnings, inaccurate locations or broken error matching | [Diagnostic messages and locations](diagnostics/messages.md) |
 | Unmatched frontend/lowering errors, upstream ST or combined regression failures | [Regression leads](diagnostics/regressions.md); historical behavior is not a skip whitelist |
 | Task durations are known but the bottleneck needs explanation | [Performance diagnosis](diagnostics/performance.md): pipe counters, timelines, bandwidth and critical paths; collect per-core and 7-group evidence through [performance collection](tooling/performance-collection.md) |
+| Calibrating an A5 compute or memory ceiling | [A5 roofline calibration](diagnostics/a5-roofline.md): installed SKU configuration, rate units and matched bandwidth calibration |
 | A specific framework defect is suspected | [Defect references](diagnostics/defects/); start Fixpipe cases at the [disposition overview](diagnostics/defects/fixpipe-overview.md) |
 
 ## Verification methods
@@ -109,6 +109,7 @@ Choose the current workflow from [SKILL.md](../SKILL.md), then consult the match
 | The same CLI tools through an agent host | [CLI/MCP modes and fallback](tooling/checks.md#cli-and-mcp-modes); [MCP setup](tooling/mcp.md), output budgets and execution lifecycle |
 | Source-pattern candidates, measured-cost ranking and recoverable best/current state | [Optimization tools](tooling/optimization.md); verifier inputs, evidence gates and bounded scratch state |
 | Discovering complete programs, reading independent references/tests, and admitting examples | [Shared program query](tooling/checks.md#complete-example-programs); [example catalog and conventions](tooling/examples.md) |
+| Find performance knowledge | Browse the [card index in Chinese](knowledge-cards/index.md) or use [card retrieval and relationships](knowledge-cards/agent/KERNEL_INTEGRATION.md). |
 | Maintaining example coverage and VF assignments | [Coverage contract](tooling/example-coverage.md), consumed by `check.py coverage` |
 | External profiler collection (`msprof`, `msprof op` / `msopprof`) | [Performance collection](tooling/performance-collection.md), `python scripts/perf_collect.py` |
 | Profiler CSV and per-core field meanings | [Performance fields](tooling/performance-fields.md) |

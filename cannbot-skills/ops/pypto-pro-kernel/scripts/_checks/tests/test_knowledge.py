@@ -103,7 +103,7 @@ def test_bare_vf_name_in_a_question_delivers_separate_public_sources(text):
     view = query.report(text, limit=3)["knowledge"]
     assert [row["id"] for row in view["items"]] == [
         "symbol:vf.addc",
-        "document:pro-api/SIMD-API/reg_computation/basic_arithmetic/addc.md",
+        "document:pro-api/SIMD-API/Reg-API/basic_arithmetic/addc.md",
         "docstring:vf.addc",
     ]
     assert all(row["match"]["reason"] == "public_name_hint" for row in view["items"])

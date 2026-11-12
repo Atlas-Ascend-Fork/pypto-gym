@@ -197,6 +197,8 @@ def collect(root):
             exc.filename, "source_unavailable", type(exc).__name__
         ),
     ):
+        if Path(parent) == root and "knowledge-cards" in directories:
+            directories.remove("knowledge-cards")  # Card examples cannot declare kernel contracts.
         directories.sort()
         for name in sorted(names):
             if not name.lower().endswith(".md"):

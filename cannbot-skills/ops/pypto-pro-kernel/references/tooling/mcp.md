@@ -4,7 +4,7 @@ The local stdio server exposes the existing CLI and maintained reference section
 
 ## Start on the execution host
 
-An optional performance-card library is selected once at startup with `--cards-root /path/to/knowledge-cards` before `mcp`; relative paths resolve from the startup working directory. Install `scripts/requirements-cards.txt` into the same interpreter when using it. `kernel_query` and `kernel_suggest` then share the CLI's [card source and relation semantics](optimization.md#optional-performance-card-source), without per-call root overrides or automatic sibling discovery.
+An optional performance-card library is selected once at startup with `--cards-root /path/to/pypto-pro-kernel/references/knowledge-cards` before `mcp`; relative paths resolve from the startup working directory. Install `scripts/requirements-cards.txt` into the same interpreter when using it. `kernel_query` and `kernel_suggest` then share the CLI's [card source and relation semantics](optimization.md#optional-performance-card-source), without per-call root overrides or automatic sibling discovery.
 
 The server uses Python 3.10+ and the pinned [MCP dependencies](../../scripts/requirements-mcp.txt). Other CLI commands retain their existing Python/dependency requirements and do not import the MCP SDK. Use an isolated environment for the server; the interpreter selected by `--python` needs [requirements-checks.txt](../../scripts/requirements-checks.txt) and, for native work, the matching PyPTO installation.
 

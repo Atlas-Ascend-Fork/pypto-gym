@@ -565,7 +565,7 @@ def test_invalid_locators_do_not_turn_into_arbitrary_file_reads(corpus, text):
 
 def test_real_official_addc_example_is_distinct_from_the_source_docstring():
     official = query.report(
-        "document:pro-api/SIMD-API/reg_computation/basic_arithmetic/addc.md#调用示例"
+        "document:pro-api/SIMD-API/Reg-API/basic_arithmetic/addc.md#调用示例"
     )
     source = query.report("docstring:vf.addc")
     assert "carry = vf.create_mask(" in content(official)

@@ -223,11 +223,16 @@ the matching PyPTO source checkout owns collector metric and output-file descrip
 - Whether a change is faster is still decided by the paired AB/BA comparison in
   [native-task timing](../verification/native-timing.md), not by one msprof capture.
 
-## Not bundled here
+## Optional analysis resources
 
-Seed injection, physical-device selection, multi-device batches, cross-round compare,
-Golden references, case manifests, instruction timelines, `PipeTimeline`, Occupancy and
-Roofline digests remain in `pypto-pro-op-perf-tune` and its optional `ops-profiling`
-companion.
-Use them when a formal evidence chain is required; this page only owns collection and
-field interpretation.
+Case manifests, seeded inputs, multi-device batches, cross-round comparisons and
+diagnostic digests are documented in the repository's
+[performance-analysis resources](https://gitcode.com/cann/pypto-gym/tree/master/cannbot-skills/ops/pypto-pro-op-perf-tune/references/perf-analysis/).
+Those resources and their companion scripts are separate from this plugin's installation.
+Timeline, Occupancy and Roofline block capture additionally use the optional external
+[`ops-profiling` skill](https://gitcode.com/cann/cannbot-skills/blob/master/ops/ops-profiling/SKILL.md);
+follow the resource guide for its dependencies and explicit paths.
+
+For A5 SKU, units and nominal-rate calibration, use the bundled
+[A5 roofline guide](../diagnostics/a5-roofline.md). A diagnostic digest does not establish
+a hardware ceiling or a measured optimization benefit.

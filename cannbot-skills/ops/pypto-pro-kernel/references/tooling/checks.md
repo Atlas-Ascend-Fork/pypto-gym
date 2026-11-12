@@ -232,7 +232,7 @@ The shared [`documents.py`](../../scripts/_checks/documents.py) adapter discover
 ```bash
 python scripts/check.py query pl.insert --kind document --format json
 python scripts/check.py query '跨核中间数据传递' --kind document --format json
-python scripts/check.py query 'document:pro-api/SIMD-API/reg_computation/basic_arithmetic/addc.md#调用示例' --format json
+python scripts/check.py query 'document:pro-api/SIMD-API/Reg-API/basic_arithmetic/addc.md#调用示例' --format json
 python scripts/check.py query docstring:vf.addc --format json
 python scripts/check.py query 'document:skill/api/datamove.md#ub-to-l1-handover' --reference-sha256 SOURCE_SHA --format json
 ```

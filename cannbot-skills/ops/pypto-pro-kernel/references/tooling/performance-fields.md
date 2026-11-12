@@ -93,8 +93,8 @@ and `sub_block_id` identify the core position. Frequency comes from
 ## Compact diagnostic tiers
 
 These tiers are a reading aid for ordering follow-up work. They are not an acceptance
-gate or a completion criterion. The fuller action table lives in the separate
-`pypto-pro-op-perf-tune` skill, which this plugin does not install.
+gate or a completion criterion. Use the [optimization workflow](../workflows/optimization.md)
+to choose comparisons and assess the stopping evidence.
 
 | Reading | Low | Medium | High | Next check |
 | --- | --- | --- | --- | --- |

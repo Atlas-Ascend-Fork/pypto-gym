@@ -40,13 +40,13 @@ Replace `profile` with the unchanged result of [`measure_pipes` or `measure_nati
 
 ## Optional performance-card source
 
-Pass `--cards-root /path/to/knowledge-cards` before the command to read an explicitly selected card library containing its owner's `index.md`. Install `scripts/requirements-cards.txt` into the checker interpreter only when this optional source is used. There is no default sibling lookup, copied card catalog or persistent index.
+Pass `--cards-root references/knowledge-cards` before the command to search the [bundled Active cards](../knowledge-cards/index.md) from the skill directory (use an absolute path from elsewhere). Install `scripts/requirements-cards.txt` into the checker interpreter only when this optional source is used. The CLI and MCP keep this source opt-in; ordinary document search does not admit unregistered cards or contributor examples.
 
 ```bash
-python scripts/check.py --cards-root /path/to/knowledge-cards query cube-06 --kind document --format json
-python scripts/check.py --cards-root /path/to/knowledge-cards query 'document:perf-cards/cube/cube-06-grouped-continuous-core-assign.md' --format json
-python scripts/check.py --cards-root /path/to/knowledge-cards query --validate --format json
-python scripts/check.py --cards-root /path/to/knowledge-cards suggest --source candidate.py
+python scripts/check.py --cards-root references/knowledge-cards query cube-06 --kind document --format json
+python scripts/check.py --cards-root references/knowledge-cards query 'document:perf-cards/cube/cube-06-grouped-continuous-core-assign.md' --format json
+python scripts/check.py --cards-root references/knowledge-cards query --validate --format json
+python scripts/check.py --cards-root references/knowledge-cards suggest --source candidate.py
 ```
 
 Only files registered as stable in the Active table are collected. The provider returns `document_role=performance_card`, the original card and index identities, `card.item_id`, original applicability/API gates, exact document reads and declared relationships. `knowledge_links` uses `pypto-knowledge-links/1` with `same_mechanism`, `overlaps_with`, `uses_contract` or `alternative_to`, a target skill/object ID, and explicit `scope`/`boundary`. Relationships remain local to their declared scope and are not transitive. They do not copy applicability facets or acceptance evidence. Unconfigured cards leave the base skill independent; an explicitly configured unavailable/invalid library reports `unverified` with coverage errors and quarantines invalid cards. Full admission still requires the matching framework source.

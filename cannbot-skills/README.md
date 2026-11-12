@@ -36,7 +36,7 @@ opencode
 
 ### 独立 PyPTO-Pro Kernel Skill
 
-实验性、非正式的 [pypto-pro-kernel](ops/pypto-pro-kernel/SKILL.md) 提供原生 PyPTO-Pro kernel 开发、验证、调试和优化流程，目录内包含 `references/`、`scripts/` 与 `examples/`。可按 [PyPTO-Pro quickstart](plugins-official/pypto-pro-op-orchestrator/quickstart.md) 初始化插件，或在提示词中指定其 `SKILL.md`。功能、精度和性能均达标后，Python/JIT 源码整理默认采用 [pypto-pro-op-standard](ops/pypto-pro-op-standard/SKILL.md)。选择顺序为“用户明确要求 > 项目交付规则 > 默认策略”；用户或项目规则可关闭整理、保留现有组织，或指定替代规范处理目录、命名、接口包装和文档。关闭或替代均不降低原技术验收要求，最终公开入口仍须验证，整理影响实现、调用路径或性能时复验受影响项。
+实验性、非正式的 [pypto-pro-kernel](ops/pypto-pro-kernel/SKILL.md) 提供原生 PyPTO-Pro kernel 开发、验证、调试和优化流程，目录内包含[性能知识卡片](ops/pypto-pro-kernel/references/knowledge-cards/index.md)、检查脚本和可运行样例。可按 [PyPTO-Pro quickstart](plugins-official/pypto-pro-op-orchestrator/quickstart.md) 初始化插件，或在提示词中指定其 `SKILL.md`。功能、精度和性能均达标后，Python/JIT 源码整理默认采用 [pypto-pro-op-standard](ops/pypto-pro-op-standard/SKILL.md)。选择顺序为“用户明确要求 > 项目交付规则 > 默认策略”；用户或项目规则可关闭整理、保留现有组织，或指定替代规范处理目录、命名、接口包装和文档。关闭或替代均不降低原技术验收要求，最终公开入口仍须验证，整理影响实现、调用路径或性能时复验受影响项。
 
 例如：“关闭交付整理，保留现有目录、入口和文档，沿用原验收方案”；或“交付整理采用 `./docs/delivery-policy.md`，仅使用其中规定的布局和文档格式，保留原技术验收要求”。CANN 离线安装包使用独立的 [pypto-pro-cann-delivery](ops/pypto-pro-cann-delivery/SKILL.md) 完成离线编译、注册、安装和 ACLNN/GEIR 验收，不强制先转成默认源码包。
 
@@ -71,7 +71,7 @@ python scripts/check.py
 
 ### 技能清单
 
-**算子开发**（ops/，共 30 个顶层技能）
+**算子开发**（ops/，共 29 个顶层技能）
 
 | 类别 | 技能 | 说明 |
 |------|------|------|
@@ -87,7 +87,7 @@ python scripts/check.py
 | 监控与调试 | `pypto-op-monitor`、`pypto-general-debug` | 任务进度监控与通用问题诊断 |
 | 断裂点分析 | `pypto-benchmark-fracture-aggregator`、`pypto-fracture-point-detector` | Session 断裂点批量聚合、检测、复现取证与 Issue 文档产出 |
 | 报告与可视化 | `pypto-session-dfx-report` | Session DFX 报告（端到端耗时、token 消耗、执行轨迹） |
-| **Pro 专属** | `pypto-pro-op-perf-tune`、`pypto-pro-golden-generate`、`pypto-pro-environment-check`、`pypto-pro-precision-debug`、`pypto-pro-cann-delivery`、[pypto-pro-op-standard](ops/pypto-pro-op-standard/SKILL.md)、`pypto-pro-docs-search` | PyPTO-Pro 开发、精度诊断、CANN 交付、算子产物规范与文档检索 |
+| **Pro 专属** | `pypto-pro-golden-generate`、`pypto-pro-environment-check`、`pypto-pro-precision-debug`、`pypto-pro-cann-delivery`、[pypto-pro-op-standard](ops/pypto-pro-op-standard/SKILL.md)、`pypto-pro-docs-search` | PyPTO-Pro 开发、精度诊断、CANN 交付、算子产物规范与文档检索 |
 | **Pro 核心技能** | [pypto-pro-kernel](ops/pypto-pro-kernel/SKILL.md) | 原生 kernel 开发、验证、调试与优化，内含参考资料、检查工具和样例 |
 
 **模型适配**（model/，共 3 个）
