@@ -9,7 +9,7 @@
 | Ascend 950DT | 本轮未实测 |
 | Atlas A2、A3 系列 | 不支持本实现使用的 A5 MXFP8 指令 |
 
-同一份 kernel 源码根据设备实际 Cube 核数选择分块。28 核环境使用 CANN 9.2.0；32 核环境的 Toolkit 安装信息为 9.3.0，compiler 与 OPP 组件元数据为 9.2.0。两者均使用 PyPTO 0.3.0；二进制包应在对应环境工具链下构建。
+同一份 kernel 源码根据设备实际 Cube 核数选择分块。28 核环境使用 CANN 9.2.0；32 核环境的 Toolkit 安装信息为 9.3.0，compiler 与 OPP 组件元数据为 9.2.0。两者均使用 PyPTO 0.3.0；二进制包应在对应环境工具链下构建；本算子的局部构建接入需要 CMake 3.19 或更新版本。
 
 ## 功能说明
 
@@ -31,13 +31,15 @@ rotated[t,h,448+r] = BF16(
 ## 函数原型
 
 ```python
-def atten_epilogue(
-    o, woa, wob, descale_woa, descale_wob, rope_sin, rope_cos, out
-):
+pypto_gym.atten_epilogue(
+    o, woa, wob, descale_woa, descale_wob, rope_sin, rope_cos
+) -> out
     ...
 ```
 
-Python 入口位于 `op_kernel/atten_epilogue.py`。CANN 交付保留 `AttenEpilogue` 注册名称及 `aclnnAttenEpilogueGetWorkspaceSize`、`aclnnAttenEpilogue` 两阶段接口，参数顺序同下表。ACLNN 的工作区大小以第一阶段实际返回值为准。
+正式 Python 入口为 `pypto_gym.atten_epilogue`，也可通过 `torch.ops.pypto_gym.atten_epilogue` 调用。两个入口均接收 7 个输入并在绑定内分配输出，使用安装包内的同一二进制 kernel。直接使用 `torch.ops` 前调用 `pypto_gym.load()` 注册绑定。
+
+`op_kernel/atten_epilogue.py` 保留原生入口及开发期 JIT 宿主入口；尺寸契约、分块配置、存储、Vector 运算及两层矩阵乘的辅助函数均定义在该单文件内，仍在同一融合任务内展开。CANN 交付保留 `AttenEpilogue` 注册名称及 `aclnnAttenEpilogueGetWorkspaceSize`、`aclnnAttenEpilogue` 两阶段接口，参数顺序同下表。ACLNN 的工作区大小以第一阶段实际返回值为准。
 
 ### 参数说明
 
@@ -52,13 +54,13 @@ Python 入口位于 `op_kernel/atten_epilogue.py`。CANN 交付保留 `AttenEpil
 | `descale_wob` | 输入 | `[5120,128,2]`，第二层权重的每 32 元素缩放 | E8M0 |
 | `rope_sin` | 输入 | `[T,64]`，各 token 的逆旋转 sine 系数 | FP32 |
 | `rope_cos` | 输入 | `[T,64]`，各 token 的逆旋转 cosine 系数 | FP32 |
-| `out` | 输出 | `[T,5120]`，调用方预分配、由算子写入 | BF16 |
+| `out` | 返回值；ACLNN 输出参数 | `[T,5120]`；Torch 绑定内分配，直接 ACLNN 调用时由调用方预分配 | BF16 |
 
 没有可选参数、属性或默认值。`T` 为 token 个数，是唯一可变的形状维度。
 
 ### 返回值说明
 
-Python 接口返回传入的 `out` 对象，结果写入该对象已有存储。接口不返回中间量；输入与输出存储重叠不属于已验收的使用范围。
+两个正式 Torch 入口返回新分配的连续 BF16 输出，形状为 `[T,5120]`。开发期 JIT 宿主函数保留额外的 `out` 参数并返回同一对象；直接 ACLNN 调用也使用调用方分配的输出。接口不返回中间量。
 
 ## 约束说明
 
@@ -70,14 +72,14 @@ Python 接口返回传入的 `out` 对象，结果写入该对象已有存储。
 
 ## 调用示例
 
-在本算子目录下运行。示例使用原生 MX 量化准备调用方权重；该准备过程不属于融合 kernel。
+先安装包含 Torch 绑定的 `.run` 包；独立安装目录需加载 vendor 的 `bin/set_env.bash`。示例使用原生 MX 量化准备权重，该准备过程不属于融合 kernel。
 
 ```python
 import os
 
 import torch
 import torch_npu
-from op_kernel.atten_epilogue import atten_epilogue
+import pypto_gym
 
 torch.set_num_threads(4)
 torch.npu.set_device(int(os.environ.get("TILE_FWK_DEVICE_ID", "0")))
@@ -93,9 +95,8 @@ sa = sa.view(torch.float8_e8m0fnu).reshape(8, 1024, 64, 2)
 sb = sb.view(torch.float8_e8m0fnu)
 rope_sin = torch.zeros(t, 64, dtype=torch.float32).npu()
 rope_cos = torch.ones(t, 64, dtype=torch.float32).npu()
-out = torch.empty(t, 5120, dtype=torch.bfloat16, device=o.device)
-result = atten_epilogue(o, woa, wob, sa, sb, rope_sin, rope_cos, out)
+result = pypto_gym.atten_epilogue(o, woa, wob, sa, sb, rope_sin, rope_cos)
 torch.npu.synchronize()
-assert result is out
-print(out.shape)
+assert result.shape == (t, 5120)
+print(result.shape)
 ```

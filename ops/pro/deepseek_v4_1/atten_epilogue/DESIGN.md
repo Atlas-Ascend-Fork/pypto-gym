@@ -43,7 +43,7 @@ L1 分别保存激活、权重及各自的缩放；L0A、L0B 及其 Scale 区分
 
 ## 接口选择
 
-公开 Python 接口与 ACLNN 均为 7 个输入和 1 个调用方分配的输出。Python 入口负责检查维度、dtype、连续 ND 存储及同设备约束，并按设备和补齐行数复用内部工作区。
+两个正式 Torch 入口接收 7 个输入，在绑定中分配并返回输出；绑定检查形状、dtype、连续 ND 存储及同设备约束。直接 ACLNN 调用由调用方分配输出；开发期 JIT 宿主入口也保留该输出参数，并按设备和补齐行数复用工作区。
 
 离线 kernel 依次接收 7 个输入裸指针、输出裸指针、用户工作区指针和运行时 tiling。TilingData 仅有顺序固定的两个 int64 字段 `t`、`padded`，共 16 字节。host 填写实际注册类型，通过官方生成的 `GET_TPL_TILING_KEY` 取得合法编译配置键，同时设置 blockDim 和工作区大小。
 
@@ -66,12 +66,23 @@ cmake --build build/ascend950 --target package --parallel 2
 安装 `build_out/run/ascend950` 中本次生成的 `.run` 包，使用它的 `--install-path` 参数指定独立安装目录。将该目录的 `vendors/pypto_gym` 加入 `ASCEND_CUSTOM_OPP_PATH`，并将该 vendor 的 `op_api/lib` 加入 `LD_LIBRARY_PATH`。测试从设备环境变量 `TILE_FWK_DEVICE_ID` 选择设备：
 
 ```bash
-python -m pytest ops/pro/deepseek_v4_1/atten_epilogue/tests --mode jit -q
-python -m pytest ops/pro/deepseek_v4_1/atten_epilogue/tests \
-  --mode aclnn --aclnn-lib-dir build/ascend950/tests -m 'not jit_only' -q
+source <安装目录>/vendors/pypto_gym/bin/set_env.bash
+python -m pytest ops/pro/deepseek_v4_1/atten_epilogue/tests -q
 ```
 
-ACLNN 测试通过本次构建的桥接库调用安装目录中的二进制；仅检查 Python JIT 结果不足以证明离线包的实际调用链路。
+正式用例分派到 `pypto_gym.atten_epilogue` 和 `torch.ops.pypto_gym.atten_epilogue`，二者均调用本次安装的 ACLNN 二进制，入口选择与 `--mode` 无关。开发期另行检查 JIT 中间载荷、直接 ACLNN 调用和独立 C++ 调用，并核对实际加载的目标二进制。
+
+`op_kernel/` 仅保留 `atten_epilogue.py`。该文件依次定义固定尺寸与工作区契约、运行时 tiling ABI、19 个配置、存储与同步辅助函数、Vector 运算、共享 MX 条带、两层矩阵乘调度、原生入口和 Python 宿主入口。普通辅助函数由前端展开，设备端仍只有一个融合任务；没有通过拆出独立 kernel 改变原有调度。
+
+跨 Cube/Vector 交接的 Acc、shared 缓冲直接在原生入口声明，保留流水分析所需的来源关系、互斥编号和 fwd/bwd 事件。相关操作数以具名元组传递，计算函数保留重构版实现。
+
+测试常量模块通过 AST 读取该文件中明确列出的整数契约赋值，只支持整数、已读取的常量名和加法、乘法、整除；不执行或导入 kernel，也不加载 PyPTO/NPU 运行时。尺寸契约仅定义一次，golden 的数值计算仍独立。
+
+按文件加载与 Python 命名空间包导入均直接使用同一单文件；构建使用工程原有的主文件依赖跟踪。公开 Torch 绑定和对应正式用例沿用当前 master。
+
+OPC 启动器会优先插入 SDK 的 Python 目录。本算子的 `op_host/CMakeLists.txt` 在构建阶段以 CMake 脚本模式设置 staging 包装器中当前解释器安装目录的优先级，使配置阶段、JIT 与离线编译使用同一套 PyPTO；当前解释器没有安装时才继续查找 SDK 中的版本。该选择只影响编译依赖，不改变 kernel 算法、tiling ABI 或 ACLNN 参数。
+
+该准备步骤在本算子包装器生成完成后、复制到 staging 前执行，不改写共享生成模板；重复构建时内容不变便不重写文件。根目录 `cmake/` 使用仓库原版，其他算子的包装器不经过本步骤。
 
 ## 流水设计
 
