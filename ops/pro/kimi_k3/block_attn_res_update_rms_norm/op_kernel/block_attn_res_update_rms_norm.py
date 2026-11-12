@@ -9,7 +9,7 @@
 # ruff: noqa: F821
 """PyPTO-Pro implementation of block_attn_res_update_rms_norm (Ascend 950PR / dav3510).
 
-Native single-`@pl.jit` vector kernel. Numerics match the AscendC reference:
+Native single-`@pl.jit` vector kernel. Numerics match the upstream reference contract:
 
     p      = partial_block + fp32(delta)                                   (FP32, in-place)
     score  = sum(p*q) / sqrt(mean(p^2) + score_eps)                        (precise div)
@@ -31,8 +31,8 @@ Tiling key (internal specialization, no public-interface change)
     Path = 1  staged row: phase1 VF -> p write-back -> phase2/3 VF, so the p DMA
               overlaps phases 2/3. Better once per-core rows overlap DMA (T >= 3).
 
-UB plan (bytes, 32B aligned, peak 200960 <= 253952):
-    partial 2x28672 | delta 2x14336 | numerator 2x28672 | h/y 14336 (y overwrites h)
+UB plan (bytes, 32B aligned, peak 229632 <= 253952):
+    partial 2x28672 | delta 2x14336 | numerator 2x28672 | h(f32) 28672 | y 14336
     | query 28672 | gamma 14336 | score 256
 
 Ownership: each worker owns whole rows (no cross-core communication, no scratch
@@ -40,7 +40,7 @@ tensor). It writes y[row, :] (BF16) and p into partial_block[row, :] (FP32), so
 launching min(vec_cores, T) workers covers every row exactly once. Transfers are
 full-width (7168 elements); there is no padding, tail or valid-shape bookkeeping.
 
-Numerical range (every division in the VF bodies):
+Numerical range (every division; score runs on the scalar core, the rest in VF bodies):
     den = exp_sum*a + b, a = exp(lmax - m) in (0, 1], b = exp(score - m) in (0, 1]
     with m = max(lmax, score), so den >= b > 0 and alpha = a/den, beta = b/den stay
     in [0, 1]. b underflows to +0 only when score - m < -103, where alpha -> 1 and
@@ -70,7 +70,8 @@ VA_PARTIAL = [0, ROW_F32_BYTES]
 VA_DELTA = [2 * ROW_F32_BYTES, 2 * ROW_F32_BYTES + ROW_B16_BYTES]
 VA_NUMER = [2 * ROW_F32_BYTES + 2 * ROW_B16_BYTES, 3 * ROW_F32_BYTES + 2 * ROW_B16_BYTES]
 VA_H = 4 * ROW_F32_BYTES + 2 * ROW_B16_BYTES
-VA_QUERY = VA_H + ROW_B16_BYTES
+VA_Y = VA_H + ROW_F32_BYTES
+VA_QUERY = VA_Y + ROW_B16_BYTES
 VA_GAMMA = VA_QUERY + ROW_F32_BYTES
 VA_SCORE = VA_GAMMA + ROW_B16_BYTES
 
@@ -136,22 +137,23 @@ def phase1_vf(partial_t, delta_t, query_t, score_t, score_eps: pl.DT_FP32):
     rms = vf.muls(ssq_b, INV_D, preg)
     rms = vf.adds(rms, score_eps, preg)
     rms = vf.sqrt(rms, preg)
-    score_b = vf.div(dot_b, rms, preg, precision=True)
-    vf.store_align(score_t, score_b, preg)
+    vf.store_align(score_t, dot_b, preg)
+    vf.store_align(score_t + 32, rms, preg)
 
 
 @pl.vector_function
 def phase23_vf(
-    partial_t, numer_t, h_t, gamma_t, score_t,
-    lmax_val: pl.DT_FP32, esum_val: pl.DT_FP32, norm_eps: pl.DT_FP32,
+    partial_t, numer_t, h_t, y_t, gamma_t,
+    score_val: pl.DT_FP32, lmax_val: pl.DT_FP32, esum_val: pl.DT_FP32,
+    norm_eps: pl.DT_FP32,
 ):
     """Merge online-softmax state, emit h (bf16) and y (bf16); rstd from rounded h."""
     preg = vf.create_mask(pattern=pl.MaskPattern.ALL, dtype=pl.DT_FP32)
     preg_u16 = vf.create_mask(pattern=pl.MaskPattern.ALL, dtype=pl.DT_BF16)
     one = vf.full(1.0, preg, dtype=pl.DT_FP32)
 
-    vf.mem_bar(mode=pl.MemBarMode.VST_VLD)  # p/score written in phase 1, read here
-    score_b = vf.load_align(score_t, 0, dist=pl.LoadDist.BRC_B32)
+    vf.mem_bar(mode=pl.MemBarMode.VST_VLD)  # p written in phase 1, read here
+    score_b = vf.full(score_val, preg)
     lmax_b = vf.full(lmax_val, preg)
     esum_b = vf.full(esum_val, preg)
     m_b = vf.max(lmax_b, score_b, preg)
@@ -175,17 +177,16 @@ def phase23_vf(
         out_hi = vf.mul(n_hi, alpha, preg)
         out_lo = vf.mul_add_dst(p_lo, beta, preg)
         out_hi = vf.mul_add_dst(p_hi, beta, preg)
-        di0, di1 = vf.de_interleave(out_lo, out_hi)
-        bf_even = vf.astype(di0, preg, dtype=pl.DT_BF16, layout=pl.CastLayout.ZERO,
+        bf_even = vf.astype(out_lo, preg, dtype=pl.DT_BF16, layout=pl.CastLayout.ZERO,
                             round_mode=pl.VFRoundMode.CAST_RINT)
-        bf_odd = vf.astype(di1, preg, dtype=pl.DT_BF16, layout=pl.CastLayout.ONE,
+        bf_odd = vf.astype(out_hi, preg, dtype=pl.DT_BF16, layout=pl.CastLayout.ZERO,
                            round_mode=pl.VFRoundMode.CAST_RINT)
-        packed = vf.or_(bf_even, bf_odd, preg_u16)
-        vf.store_align(h_t + base, packed, preg_u16, dist=pl.StoreDist.NORM_B16)
         h_lo = vf.astype(bf_even, preg_u16, dtype=pl.DT_FP32)
-        h_hi = vf.astype(bf_odd, preg_u16, dtype=pl.DT_FP32, layout=pl.CastLayout.ONE)
+        h_hi = vf.astype(bf_odd, preg_u16, dtype=pl.DT_FP32)
         ssq_h0 = vf.mul_add_dst(h_lo, h_lo, preg)
         ssq_h1 = vf.mul_add_dst(h_hi, h_hi, preg)
+        vf.store_align(h_t + base, h_lo, preg)
+        vf.store_align(h_t + base + 64, h_hi, preg)
 
         p_lo = vf.load_align(partial_t, base + 128)
         p_hi = vf.load_align(partial_t, base + 128 + 64)
@@ -195,17 +196,16 @@ def phase23_vf(
         out_hi = vf.mul(n_hi, alpha, preg)
         out_lo = vf.mul_add_dst(p_lo, beta, preg)
         out_hi = vf.mul_add_dst(p_hi, beta, preg)
-        di0, di1 = vf.de_interleave(out_lo, out_hi)
-        bf_even = vf.astype(di0, preg, dtype=pl.DT_BF16, layout=pl.CastLayout.ZERO,
+        bf_even = vf.astype(out_lo, preg, dtype=pl.DT_BF16, layout=pl.CastLayout.ZERO,
                             round_mode=pl.VFRoundMode.CAST_RINT)
-        bf_odd = vf.astype(di1, preg, dtype=pl.DT_BF16, layout=pl.CastLayout.ONE,
+        bf_odd = vf.astype(out_hi, preg, dtype=pl.DT_BF16, layout=pl.CastLayout.ZERO,
                            round_mode=pl.VFRoundMode.CAST_RINT)
-        packed = vf.or_(bf_even, bf_odd, preg_u16)
-        vf.store_align(h_t + base + 128, packed, preg_u16, dist=pl.StoreDist.NORM_B16)
         h_lo = vf.astype(bf_even, preg_u16, dtype=pl.DT_FP32)
-        h_hi = vf.astype(bf_odd, preg_u16, dtype=pl.DT_FP32, layout=pl.CastLayout.ONE)
+        h_hi = vf.astype(bf_odd, preg_u16, dtype=pl.DT_FP32)
         ssq_h0 = vf.mul_add_dst(h_lo, h_lo, preg)
         ssq_h1 = vf.mul_add_dst(h_hi, h_hi, preg)
+        vf.store_align(h_t + base + 128, h_lo, preg)
+        vf.store_align(h_t + base + 128 + 64, h_hi, preg)
 
     ssq_h_sum = vf.add(ssq_h0, ssq_h1, preg)
     ssq_h_red = vf.reduce_sum(ssq_h_sum, preg)
@@ -218,44 +218,44 @@ def phase23_vf(
     vf.mem_bar(mode=pl.MemBarMode.VST_VLD)  # h written above, re-read below
     for c in pl.range(0, N_CHUNKS // 2):
         base = c * 256
-        h_pk = vf.load_align(h_t, base)
-        g_pk = vf.load_align(gamma_t, base)
-        h_e = vf.astype(h_pk, preg_u16, dtype=pl.DT_FP32, layout=pl.CastLayout.ZERO)
-        h_o = vf.astype(h_pk, preg_u16, dtype=pl.DT_FP32, layout=pl.CastLayout.ONE)
-        g_e = vf.astype(g_pk, preg_u16, dtype=pl.DT_FP32, layout=pl.CastLayout.ZERO)
-        g_o = vf.astype(g_pk, preg_u16, dtype=pl.DT_FP32, layout=pl.CastLayout.ONE)
+        h_e = vf.load_align(h_t, base)
+        h_o = vf.load_align(h_t, base + 64)
+        g_lo_u = vf.load_align(gamma_t, base, dist=pl.LoadDist.UNPK_B16)
+        g_e = vf.astype(g_lo_u, preg_u16, dtype=pl.DT_FP32)
+        g_hi_u = vf.load_align(gamma_t, base + 64, dist=pl.LoadDist.UNPK_B16)
+        g_o = vf.astype(g_hi_u, preg_u16, dtype=pl.DT_FP32)
         y_e = vf.mul(h_e, rstd_b, preg)
         y_o = vf.mul(h_o, rstd_b, preg)
         y_e = vf.mul(y_e, g_e, preg)
         y_o = vf.mul(y_o, g_o, preg)
         yb_even = vf.astype(y_e, preg, dtype=pl.DT_BF16, layout=pl.CastLayout.ZERO,
                             round_mode=pl.VFRoundMode.CAST_RINT)
-        yb_odd = vf.astype(y_o, preg, dtype=pl.DT_BF16, layout=pl.CastLayout.ONE,
+        yb_odd = vf.astype(y_o, preg, dtype=pl.DT_BF16, layout=pl.CastLayout.ZERO,
                            round_mode=pl.VFRoundMode.CAST_RINT)
-        ypacked = vf.or_(yb_even, yb_odd, preg_u16)
-        vf.store_align(h_t + base, ypacked, preg_u16, dist=pl.StoreDist.NORM_B16)
+        vf.store_align(y_t + base, yb_even, preg_u16, dist=pl.StoreDist.PACK_B32)
+        vf.store_align(y_t + base + 64, yb_odd, preg_u16, dist=pl.StoreDist.PACK_B32)
 
-        h_pk = vf.load_align(h_t, base + 128)
-        g_pk = vf.load_align(gamma_t, base + 128)
-        h_e = vf.astype(h_pk, preg_u16, dtype=pl.DT_FP32, layout=pl.CastLayout.ZERO)
-        h_o = vf.astype(h_pk, preg_u16, dtype=pl.DT_FP32, layout=pl.CastLayout.ONE)
-        g_e = vf.astype(g_pk, preg_u16, dtype=pl.DT_FP32, layout=pl.CastLayout.ZERO)
-        g_o = vf.astype(g_pk, preg_u16, dtype=pl.DT_FP32, layout=pl.CastLayout.ONE)
+        h_e = vf.load_align(h_t, base + 128)
+        h_o = vf.load_align(h_t, base + 128 + 64)
+        g_lo_u = vf.load_align(gamma_t, base + 128, dist=pl.LoadDist.UNPK_B16)
+        g_e = vf.astype(g_lo_u, preg_u16, dtype=pl.DT_FP32)
+        g_hi_u = vf.load_align(gamma_t, base + 128 + 64, dist=pl.LoadDist.UNPK_B16)
+        g_o = vf.astype(g_hi_u, preg_u16, dtype=pl.DT_FP32)
         y_e = vf.mul(h_e, rstd_b, preg)
         y_o = vf.mul(h_o, rstd_b, preg)
         y_e = vf.mul(y_e, g_e, preg)
         y_o = vf.mul(y_o, g_o, preg)
         yb_even = vf.astype(y_e, preg, dtype=pl.DT_BF16, layout=pl.CastLayout.ZERO,
                             round_mode=pl.VFRoundMode.CAST_RINT)
-        yb_odd = vf.astype(y_o, preg, dtype=pl.DT_BF16, layout=pl.CastLayout.ONE,
+        yb_odd = vf.astype(y_o, preg, dtype=pl.DT_BF16, layout=pl.CastLayout.ZERO,
                            round_mode=pl.VFRoundMode.CAST_RINT)
-        ypacked = vf.or_(yb_even, yb_odd, preg_u16)
-        vf.store_align(h_t + base + 128, ypacked, preg_u16, dist=pl.StoreDist.NORM_B16)
+        vf.store_align(y_t + base + 128, yb_even, preg_u16, dist=pl.StoreDist.PACK_B32)
+        vf.store_align(y_t + base + 128 + 64, yb_odd, preg_u16, dist=pl.StoreDist.PACK_B32)
 
 
 @pl.vector_function
 def process_row_vf(
-    partial_t, delta_t, numer_t, h_t, query_t, gamma_t,
+    partial_t, delta_t, numer_t, h_t, y_t, query_t, gamma_t,
     lmax_val: pl.DT_FP32, esum_val: pl.DT_FP32,
     score_eps: pl.DT_FP32, norm_eps: pl.DT_FP32,
 ):
@@ -337,17 +337,16 @@ def process_row_vf(
         out_hi = vf.mul(n_hi, alpha, preg)
         out_lo = vf.mul_add_dst(p_lo, beta, preg)
         out_hi = vf.mul_add_dst(p_hi, beta, preg)
-        di0, di1 = vf.de_interleave(out_lo, out_hi)
-        bf_even = vf.astype(di0, preg, dtype=pl.DT_BF16, layout=pl.CastLayout.ZERO,
+        bf_even = vf.astype(out_lo, preg, dtype=pl.DT_BF16, layout=pl.CastLayout.ZERO,
                             round_mode=pl.VFRoundMode.CAST_RINT)
-        bf_odd = vf.astype(di1, preg, dtype=pl.DT_BF16, layout=pl.CastLayout.ONE,
+        bf_odd = vf.astype(out_hi, preg, dtype=pl.DT_BF16, layout=pl.CastLayout.ZERO,
                            round_mode=pl.VFRoundMode.CAST_RINT)
-        packed = vf.or_(bf_even, bf_odd, preg_u16)
-        vf.store_align(h_t + base, packed, preg_u16, dist=pl.StoreDist.NORM_B16)
         h_lo = vf.astype(bf_even, preg_u16, dtype=pl.DT_FP32)
-        h_hi = vf.astype(bf_odd, preg_u16, dtype=pl.DT_FP32, layout=pl.CastLayout.ONE)
+        h_hi = vf.astype(bf_odd, preg_u16, dtype=pl.DT_FP32)
         ssq_h0 = vf.mul_add_dst(h_lo, h_lo, preg)
         ssq_h1 = vf.mul_add_dst(h_hi, h_hi, preg)
+        vf.store_align(h_t + base, h_lo, preg)
+        vf.store_align(h_t + base + 64, h_hi, preg)
 
         p_lo = vf.load_align(partial_t, base + 128)
         p_hi = vf.load_align(partial_t, base + 128 + 64)
@@ -357,17 +356,16 @@ def process_row_vf(
         out_hi = vf.mul(n_hi, alpha, preg)
         out_lo = vf.mul_add_dst(p_lo, beta, preg)
         out_hi = vf.mul_add_dst(p_hi, beta, preg)
-        di0, di1 = vf.de_interleave(out_lo, out_hi)
-        bf_even = vf.astype(di0, preg, dtype=pl.DT_BF16, layout=pl.CastLayout.ZERO,
+        bf_even = vf.astype(out_lo, preg, dtype=pl.DT_BF16, layout=pl.CastLayout.ZERO,
                             round_mode=pl.VFRoundMode.CAST_RINT)
-        bf_odd = vf.astype(di1, preg, dtype=pl.DT_BF16, layout=pl.CastLayout.ONE,
+        bf_odd = vf.astype(out_hi, preg, dtype=pl.DT_BF16, layout=pl.CastLayout.ZERO,
                            round_mode=pl.VFRoundMode.CAST_RINT)
-        packed = vf.or_(bf_even, bf_odd, preg_u16)
-        vf.store_align(h_t + base + 128, packed, preg_u16, dist=pl.StoreDist.NORM_B16)
         h_lo = vf.astype(bf_even, preg_u16, dtype=pl.DT_FP32)
-        h_hi = vf.astype(bf_odd, preg_u16, dtype=pl.DT_FP32, layout=pl.CastLayout.ONE)
+        h_hi = vf.astype(bf_odd, preg_u16, dtype=pl.DT_FP32)
         ssq_h0 = vf.mul_add_dst(h_lo, h_lo, preg)
         ssq_h1 = vf.mul_add_dst(h_hi, h_hi, preg)
+        vf.store_align(h_t + base + 128, h_lo, preg)
+        vf.store_align(h_t + base + 128 + 64, h_hi, preg)
 
     ssq_h_sum = vf.add(ssq_h0, ssq_h1, preg)
     ssq_h_red = vf.reduce_sum(ssq_h_sum, preg)
@@ -380,39 +378,39 @@ def process_row_vf(
     vf.mem_bar(mode=pl.MemBarMode.VST_VLD)  # h written above, re-read below
     for c in pl.range(0, N_CHUNKS // 2):
         base = c * 256
-        h_pk = vf.load_align(h_t, base)
-        g_pk = vf.load_align(gamma_t, base)
-        h_e = vf.astype(h_pk, preg_u16, dtype=pl.DT_FP32, layout=pl.CastLayout.ZERO)
-        h_o = vf.astype(h_pk, preg_u16, dtype=pl.DT_FP32, layout=pl.CastLayout.ONE)
-        g_e = vf.astype(g_pk, preg_u16, dtype=pl.DT_FP32, layout=pl.CastLayout.ZERO)
-        g_o = vf.astype(g_pk, preg_u16, dtype=pl.DT_FP32, layout=pl.CastLayout.ONE)
+        h_e = vf.load_align(h_t, base)
+        h_o = vf.load_align(h_t, base + 64)
+        g_lo_u = vf.load_align(gamma_t, base, dist=pl.LoadDist.UNPK_B16)
+        g_e = vf.astype(g_lo_u, preg_u16, dtype=pl.DT_FP32)
+        g_hi_u = vf.load_align(gamma_t, base + 64, dist=pl.LoadDist.UNPK_B16)
+        g_o = vf.astype(g_hi_u, preg_u16, dtype=pl.DT_FP32)
         y_e = vf.mul(h_e, rstd_b, preg)
         y_o = vf.mul(h_o, rstd_b, preg)
         y_e = vf.mul(y_e, g_e, preg)
         y_o = vf.mul(y_o, g_o, preg)
         yb_even = vf.astype(y_e, preg, dtype=pl.DT_BF16, layout=pl.CastLayout.ZERO,
                             round_mode=pl.VFRoundMode.CAST_RINT)
-        yb_odd = vf.astype(y_o, preg, dtype=pl.DT_BF16, layout=pl.CastLayout.ONE,
+        yb_odd = vf.astype(y_o, preg, dtype=pl.DT_BF16, layout=pl.CastLayout.ZERO,
                            round_mode=pl.VFRoundMode.CAST_RINT)
-        ypacked = vf.or_(yb_even, yb_odd, preg_u16)
-        vf.store_align(h_t + base, ypacked, preg_u16, dist=pl.StoreDist.NORM_B16)
+        vf.store_align(y_t + base, yb_even, preg_u16, dist=pl.StoreDist.PACK_B32)
+        vf.store_align(y_t + base + 64, yb_odd, preg_u16, dist=pl.StoreDist.PACK_B32)
 
-        h_pk = vf.load_align(h_t, base + 128)
-        g_pk = vf.load_align(gamma_t, base + 128)
-        h_e = vf.astype(h_pk, preg_u16, dtype=pl.DT_FP32, layout=pl.CastLayout.ZERO)
-        h_o = vf.astype(h_pk, preg_u16, dtype=pl.DT_FP32, layout=pl.CastLayout.ONE)
-        g_e = vf.astype(g_pk, preg_u16, dtype=pl.DT_FP32, layout=pl.CastLayout.ZERO)
-        g_o = vf.astype(g_pk, preg_u16, dtype=pl.DT_FP32, layout=pl.CastLayout.ONE)
+        h_e = vf.load_align(h_t, base + 128)
+        h_o = vf.load_align(h_t, base + 128 + 64)
+        g_lo_u = vf.load_align(gamma_t, base + 128, dist=pl.LoadDist.UNPK_B16)
+        g_e = vf.astype(g_lo_u, preg_u16, dtype=pl.DT_FP32)
+        g_hi_u = vf.load_align(gamma_t, base + 128 + 64, dist=pl.LoadDist.UNPK_B16)
+        g_o = vf.astype(g_hi_u, preg_u16, dtype=pl.DT_FP32)
         y_e = vf.mul(h_e, rstd_b, preg)
         y_o = vf.mul(h_o, rstd_b, preg)
         y_e = vf.mul(y_e, g_e, preg)
         y_o = vf.mul(y_o, g_o, preg)
         yb_even = vf.astype(y_e, preg, dtype=pl.DT_BF16, layout=pl.CastLayout.ZERO,
                             round_mode=pl.VFRoundMode.CAST_RINT)
-        yb_odd = vf.astype(y_o, preg, dtype=pl.DT_BF16, layout=pl.CastLayout.ONE,
+        yb_odd = vf.astype(y_o, preg, dtype=pl.DT_BF16, layout=pl.CastLayout.ZERO,
                            round_mode=pl.VFRoundMode.CAST_RINT)
-        ypacked = vf.or_(yb_even, yb_odd, preg_u16)
-        vf.store_align(h_t + base + 128, ypacked, preg_u16, dist=pl.StoreDist.NORM_B16)
+        vf.store_align(y_t + base + 128, yb_even, preg_u16, dist=pl.StoreDist.PACK_B32)
+        vf.store_align(y_t + base + 128 + 64, yb_odd, preg_u16, dist=pl.StoreDist.PACK_B32)
 
 
 @pl.jit(auto_mutex=True, tiling_key=RowPath)
@@ -435,7 +433,8 @@ def block_attn_res_update_rms_norm_kernel(
     partial_grp = pl.make_tile_group(type=row_tt_f32, addrs=VA_PARTIAL, mutex_ids=[0, 1])
     delta_grp = pl.make_tile_group(type=row_tt_b16, addrs=VA_DELTA, mutex_ids=[2, 3])
     numer_grp = pl.make_tile_group(type=row_tt_f32, addrs=VA_NUMER, mutex_ids=[4, 5])
-    h_grp = pl.make_tile_group(type=row_tt_b16, addrs=VA_H, mutex_ids=[6])
+    h_grp = pl.make_tile_group(type=row_tt_f32, addrs=VA_H, mutex_ids=[6])
+    y_grp = pl.make_tile_group(type=row_tt_b16, addrs=VA_Y, mutex_ids=[7])
     query_grp = pl.make_tile_group(type=row_tt_f32, addrs=VA_QUERY, mutex_ids=[8])
     gamma_grp = pl.make_tile_group(type=row_tt_b16, addrs=VA_GAMMA, mutex_ids=[9])
 
@@ -465,12 +464,14 @@ def block_attn_res_update_rms_norm_kernel(
                 lmax_val = pl.getval(logit_max, row)
                 esum_val = pl.getval(exp_sum, row)
 
-                process_row_vf(p_slot, d_slot, n_slot, h_slot,
+                y_slot = y_grp.next()
+
+                process_row_vf(p_slot, d_slot, n_slot, h_slot, y_slot,
                                query_slot, gamma_slot, lmax_val, esum_val,
                                score_eps, norm_eps)
 
                 pl.store(partial_block, p_slot, [row, 0])
-                pl.store(y, h_slot, [row, 0])
+                pl.store(y, y_slot, [row, 0])
         else:
             # Staged row: release p's DMA right after phase 1 so it overlaps phases 2/3.
             score_grp = pl.make_tile_group(type=score_tt, addrs=VA_SCORE, mutex_ids=[10])
@@ -491,12 +492,18 @@ def block_attn_res_update_rms_norm_kernel(
                     pl.load(gamma_slot, gamma, [0])
                 lmax_val = pl.getval(logit_max, row)
                 esum_val = pl.getval(exp_sum, row)
+                # Precise score division runs on the scalar core while the
+                # vector pipe drains phase 1 (dot/rms are uniform in-lane).
+                dot_val = pl.getval(score_slot, 0)
+                rms_val = pl.getval(score_slot, 32)
+                score_val = dot_val / rms_val
 
                 h_slot = h_grp.next()
-                phase23_vf(p_slot, n_slot, h_slot, gamma_slot, score_slot,
-                           lmax_val, esum_val, norm_eps)
+                y_slot = y_grp.next()
+                phase23_vf(p_slot, n_slot, h_slot, y_slot, gamma_slot,
+                           score_val, lmax_val, esum_val, norm_eps)
 
-                pl.store(y, h_slot, [row, 0])
+                pl.store(y, y_slot, [row, 0])
     return
 
 

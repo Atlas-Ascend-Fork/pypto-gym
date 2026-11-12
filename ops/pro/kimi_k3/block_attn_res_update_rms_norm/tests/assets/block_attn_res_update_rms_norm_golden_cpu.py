@@ -8,9 +8,9 @@
 # -----------------------------------------------------------------------------------------------------------
 """Golden reference for block_attn_res_update_rms_norm.
 
-Reference arithmetic and input distributions are aligned with the AscendC
-ops-transformer spec.py: FTZ on div/sqrt/exp_sub boundaries, single-rounding
-FMA, explicit BF16 RNE, and the e2e input intervals.
+Reference arithmetic and input distributions follow the upstream reference
+spec: FTZ on div/sqrt/exp_sub boundaries, single-rounding FMA, explicit
+BF16 RNE, and the e2e input intervals.
 """
 
 import logging
@@ -24,7 +24,7 @@ _LOG = logging.getLogger(__name__)
 _FP32_TINY = float(np.finfo(np.float32).tiny)
 
 
-# ---------------- helpers copied from the AscendC spec.py (aligned) ----------------
+# ---------------- helpers aligned with the upstream reference spec ----------------
 def _round_to_bfloat16_float32(value):
     value = np.ascontiguousarray(value, dtype=np.float32)
     bits = value.view(np.uint32)
@@ -92,8 +92,8 @@ def block_attn_res_update_rms_norm_golden(
 ):
     """Returns (p_updated_partial, y). partial_block is NOT mutated here.
 
-    Update part mirrors the AscendC numpy golden (FTZ/FMA/BF16-RNE boundaries);
-    the RMSNorm epilogue consumes the rounded h in FP32 like the AscendC spec.
+    Update part mirrors the reference numpy golden (FTZ/FMA/BF16-RNE boundaries);
+    the RMSNorm epilogue consumes the rounded h in FP32 per the reference spec.
     """
     partial = np.asarray(partial_block.cpu(), dtype=np.float32)
     delta_f = delta.cpu().to(torch.float32).numpy()
@@ -123,7 +123,7 @@ def block_attn_res_update_rms_norm_golden(
     h_fp32 = _fma_float32(num, alpha[:, None], partial_scaled)
     h = _round_to_bfloat16_float32(h_fp32)
 
-    # RMSNorm epilogue on the rounded h (AscendC spec's _assert_results form)
+    # RMSNorm epilogue on the rounded h (reference spec's _assert_results form)
     h32 = torch.from_numpy(np.ascontiguousarray(h))
     rstd = torch.rsqrt((h32 * h32).mean(-1, keepdim=True) + norm_eps)
     y = (h32 * rstd * torch.from_numpy(gam)).to(torch.bfloat16)
@@ -132,7 +132,7 @@ def block_attn_res_update_rms_norm_golden(
     return p_out, y
 
 
-# ---------------- inputs (e2e intervals from the AscendC spec) ----------------
+# ---------------- inputs (e2e intervals from the reference spec) ----------------
 class Inputs(NamedTuple):
     """Named input bundle: keeps the helper's seven tensors explicit."""
 

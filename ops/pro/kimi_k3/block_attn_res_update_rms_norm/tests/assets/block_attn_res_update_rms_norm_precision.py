@@ -8,7 +8,7 @@
 # -----------------------------------------------------------------------------------------------------------
 """Numerical comparison criteria for block_attn_res_update_rms_norm.
 
-Contract (frozen from the AscendC reference operator):
+Contract (frozen from the upstream reference operator):
   * relative tolerance rtol=1e-3, absolute atol=0
   * mismatch ratio (fraction of elements failing isclose) must be <= 1e-3
   * every element of candidate and reference must be finite
@@ -20,7 +20,7 @@ import numpy as np
 
 
 def check_output(out, ref, rtol=1e-3, atol=0.0, max_mismatch_ratio=1e-3):
-    """AscendC-reference check: isclose(rtol, atol) mismatch ratio <= max_mismatch_ratio; non-finite fails."""
+    """Reference check: isclose(rtol, atol) mismatch ratio <= max_mismatch_ratio; non-finite fails."""
     a = out.detach().cpu().float().numpy()
     g = ref.detach().cpu().float().numpy()
     if a.shape != g.shape:

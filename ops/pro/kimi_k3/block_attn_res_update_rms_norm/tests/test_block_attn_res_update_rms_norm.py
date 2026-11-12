@@ -17,7 +17,7 @@ ratio <= 1e-3).
 Run from the repository root (``conftest.py`` injects ``tests/``, ``tests/assets/`` and
 ``op_kernel/`` into ``sys.path``)::
 
-    TILE_FWK_DEVICE_ID=5 pytest ops/pro/kimi_k3/block_attn_res_update_rms_norm/tests \
+    TILE_FWK_DEVICE_ID=<device-id> pytest ops/pro/kimi_k3/block_attn_res_update_rms_norm/tests \
         --mode jit -q
 """
 

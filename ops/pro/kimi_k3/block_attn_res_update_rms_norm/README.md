@@ -2,9 +2,9 @@
 
 ## 产品支持情况
 
-- Ascend 950：支持（`get_platform_info()` = `PlatformInfo(soc_version='DAV_3510', vector_core_num=56)`）。
+- Ascend 950PR：支持（本机 `get_platform_info()` = `PlatformInfo(soc_version='DAV_3510', vector_core_num=64)`，32 Cube / 64 Vector）。
 - 纯 Vector kernel，不使用 Cube；无 GM workspace，无跨核交接，无 scratch 张量。
-- 软件环境（验收环境）：CANN 9.3.0（`/data/zsj/cann930/cann-9.3.0`）、pto-isa `1a25714`、pypto 0.3.0、Python 3.10.20、torch 2.10.0+cpu、torch_npu 2.10.0。
+- 软件环境（本机验收环境）：CANN 9.3.0、pypto 0.3.0（源码版）、Python 3.14.6、torch 2.13.0+cpu、torch_npu 2.13.0rc1。
 
 ## 功能说明
 
@@ -79,8 +79,8 @@ y = block_attn_res_update_rms_norm(
 
 - 所有输入张量必须连续、位于同一 NPU，并满足参数表中的 dtype 与 shape。
 - `D = 7168` 固定（112 个 64 lane 的 FP32 寄存器对）；其他隐藏维在 host 侧抛 `ValueError`。
-- `T ≥ 0` 是唯一动态轴；`T = 0` 不启核，直接返回空张量。起核数为 `min(56, T)`，行按
-  `pl.get_block_idx()` 步长轮流分配，每行恰好一个核，无尾块。
+- `T ≥ 0` 是唯一动态轴；`T = 0` 不启核，直接返回空张量。起核数为 `min(64, T)`（本机 64 向量核），
+  行按 `pl.get_block_idx()` 步长轮流分配，每行恰好一个核，无尾块。
 - 三个除法都用精确除法；`den = exp_sum·a + b ≥ b > 0`，`alpha`/`beta` ∈ `[0, 1]`；
   `score_eps`/`norm_eps` 为正保证两个 `sqrt` 的被开方数 ≥ `eps`，即使 `p`、`h` 全零或被
   FTZ 冲成 `+0` 结果仍有限。
@@ -122,9 +122,9 @@ print(y.shape, y.dtype)
 在仓库根目录执行（`conftest.py` 统一注入 `tests/`、`tests/assets/`、`op_kernel/` 路径）：
 
 ```bash
-TILE_FWK_DEVICE_ID=5 pytest ops/pro/kimi_k3/block_attn_res_update_rms_norm/tests \
+TILE_FWK_DEVICE_ID=<device-id> pytest ops/pro/kimi_k3/block_attn_res_update_rms_norm/tests \
     --mode jit -q
-# 结果：21 passed，y / p 与 CPU golden 逐位一致（max|diff| = 0.0）
+# 结果：21 passed（本机 64 向量核环境，y / p 与 CPU golden 逐位一致（max|diff| = 0.0））
 ```
 
 与独立 CPU golden（`tests/assets/block_attn_res_update_rms_norm_golden_cpu.py`）按固定判据
@@ -146,31 +146,21 @@ CPU 参考实现可脱离 NPU 自检：`python tests/assets/block_attn_res_updat
 
 > 下表为**参考数值**，实际耗时每次运行可能有所波动。
 
-口径：msprof application 采集的内核 `Task Duration`（原生 task 时长，不含 host 派发与输入恢复），
-50 次预热 + 200 次采样，同机同 harness、同一会话，`D = 7168`、seed 42，Ascend 950PR / 56 向量核。
+口径：内核 `Task Duration`（设备端内核时间，不含 host 派发），torch_npu 进程内 profiler（ACL
+task-based）采集 `op_summary`，50 次预热 + 200 次采样，同机同 harness、同一会话，`D = 7168`、
+seed 42，Ascend 950PR_9589 / 64 向量核（本机共享设备，复测波动 ≤0.4%）。
 
-| 用例 | 本实现 med（µs） |
-| :--- | ---: |
-| T1 | 3.025 |
-| T2 | 3.129 |
-| T4 | 3.634 |
-| T8 | 3.727 |
-| T32 | 4.148 |
-| T64 | 5.704 |
-| T254 | 10.626 |
-| T512 | 17.332 |
+| 用例 | 本实现 p50（µs） | p10（µs） | p90（µs） |
+| :--- | ---: | ---: | ---: |
+| T1 | 2.493 | 2.397 | 2.543 |
+| T2 | 2.580 | 2.554 | 2.617 |
+| T4 | 3.089 | 3.044 | 3.155 |
+| T8 | 3.159 | 3.090 | 3.239 |
+| T32 | 3.536 | 3.260 | 3.818 |
+| T64 | 4.339 | 3.886 | 4.747 |
+| T254 | 8.490 | 7.964 | 8.995 |
+| T512 | 13.260 | 12.755 | 13.968 |
 
-**性能倍数（> 1 表示本实现更快）**
-
-| 对比对象 | 口径 | 本实现性能 = 对方的 |
-| :--- | :--- | ---: |
-| AscendC `block_attn_res_update` + `RmsNorm` | 同功能，两算子合计 | **1.45 倍** |
-| AscendC `block_attn_res_update` 单算子 | 半程（我们多一遍 RMSNorm） | 0.80 倍 |
-
-相对 AscendC 两段流水，`T1/8/64/512` 分别为 1.58 / 1.62 / 1.52 / 1.15 倍。AscendC 参考数据
-在不同环境测得，仅作量级参考。
-实现逐层走读与 AscendC 对比细节、计时入口留在仓库外的本地目录
-`/data/n00947604/block_attn_res_update_rms_norm_*`，仅作本地阅读。
 
 ## 文件结构
 

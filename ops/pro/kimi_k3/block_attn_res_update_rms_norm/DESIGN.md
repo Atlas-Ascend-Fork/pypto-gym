@@ -12,18 +12,25 @@ Kimi K3 块注意力残差模块的融合算子（残差更新 + online-softmax 
 
 | 阶段 | 输入（片上） | 输出 | 归约 |
 | :--- | :--- | :--- | :--- |
-| P1 | `partial`、`delta`、`query` | `p = partial + fp32(delta)`（留在 `partial` tile）、`score` 标量 | `dot = Σ p·q`、`ssq = Σ p²` 两路，沿 7168 累加 |
-| P2 | `p`、`numerator`、`gamma`、`score`、`logit_max`、`exp_sum` | `h`（BF16 tile）、`rstd` 标量 | `ssq_h = Σ fp32(h)²` |
-| P3 | `h`、`rstd`、`gamma` | `y`（BF16，写回 GM） | 无 |
+| P1 | `partial`、`delta`、`query` | `p = partial + fp32(delta)`（留在 `partial` tile）、`dot`/`rms` 两个 uniform 标量（存入 `score` tile） | `dot = Σ p·q`、`ssq = Σ p²` 两路，沿 7168 累加 |
+| P2 | `p`、`numerator`、`gamma`、`score`（标量参数）、`logit_max`、`exp_sum` | `h`（BF16 取整后以 FP32 存入 `h` tile）、`rstd` 标量 | `ssq_h = Σ fp32(h)²` |
+| P3 | `h`（FP32 tile）、`rstd`、`gamma` | `y`（BF16，写回 GM） | 无 |
 
+- `score = dot / rms` 的精确除法在 P1 与 P2 之间的**外层 SIMD 标量核**完成：P1 把 `dot`/`rms`
+  以 uniform 寄存器直存 `score` tile，标量核 `pl.getval` 读出后做 IEEE 除法（与向量精确除法
+  同为正确舍入），再作为 VF 标量参数传入 P2。这消除了 VF 内 `vf.div(precision=True)` 约
+  60 条指令/行的软件展开，是当前实现的主要优化点之一（见 RESULTS §3.3 剩余空间）。
 - P1 里 `p` 既写回 GM（契约要求原地更新）又留在 UB 供 P2 使用，所以 `p` 的 GM 写不是
   后续计算的依赖，唯一的依赖是 UB 里的 tile。
 - P2 的 `h` 必须先按 BF16 取整再做 `ssq_h`，与上游 `spec.py` 的取整位置一致；如果直接在
-  FP32 的 `h` 上归约，RMSNorm 的分母会与参考实现差一个 BF16 量化台阶。
-- P3 的 `y` 只取整一次（`fp32(h)·rstd·fp32(gamma)` 全在 FP32 完成），避免两次取整叠加。
+  FP32 的 `h` 上归约，RMSNorm 的分母会与参考实现差一个 BF16 量化台阶。取整经
+  `astype(BF16, CAST_RINT)` → `astype(FP32)` 在寄存器内完成，`h` 以**取整后的 FP32 值**存 UB，
+  P3 直接按 FP32 读回，整条 h 往返不再出现 `de_interleave`/`or_` 洗牌。
+- P3 的 `y` 只取整一次（`fp32(h)·rstd·fp32(gamma)` 全在 FP32 完成），避免两次取整叠加；
+  y 经 `astype(BF16, ZERO)` + `store_align(PACK_B32)` 连续直出到独立的 `y` tile。
 
 阶段划分的取舍：不切成 P1/P2/P3 三个 kernel。三个 kernel 要把 `p`、`h` 各多搬一遍 GM
-（每行 2×28KB + 14KB），而本算子在 `T = 512` 时已经是 GM 带宽受限（见 RESULTS 的流量表），
+（每行 2×28KB + 14KB），而本算子在 `T = 512` 时已经是访存带宽受限（见 RESULTS 的流量表），
 融合后每行 GM 流量是 `partial`(R) + `delta`(R) + `numerator`(R) + `query`(R，每核一次) +
 `gamma`(R，每核一次) + `p`(W) + `y`(W)。
 
@@ -37,10 +44,9 @@ core c 处理 row = c, c + ncore, c + 2·ncore, ...
 
 - **为什么不做拆分**：`D = 7168` 的一行只需要 2 次全行归约，归约本身在单核内就是
   28 轮、每轮 4 对寄存器累加（`N_CHUNKS / 2 = 28` 次迭代）；把一行按 `D` 切到多个核需要额外的
-  跨核统计量交换。该方案实现并按 `T ≤ 4` 实测过：8 核各持 896 列，经 GM scratch 传
-  `dot` / `ssq` / `ssq_h`，两次 `INTER_BLOCK` 屏障，精度完全正确，但 `T = 1/2/4` 的耗时
-  分别为整行方案的约 1.51 / 1.34 / 1.30 倍，即两次 GM 往返加屏障约 1.2 μs，
-  超过多核省下的向量时间，已移除。
+  跨核统计量交换。该方案实现并实测过：8 核各持 896 列，经 GM scratch 传
+  `dot` / `ssq` / `ssq_h`，两次 `INTER_BLOCK` 屏障，精度完全正确，但两次 GM 往返加屏障的
+  开销超过多核省下的向量时间，已移除。
 - **`T` 与核数不整除**：轮流分配天然覆盖，没有尾块；`T < 核数` 时多余的核不启（起核数
   就是 `T`），不会出现空转核。
 - **`T = 0`**：host 侧直接返回空张量，不启核。
@@ -65,27 +71,31 @@ FP32 容器再 `astype`，避免额外的中间 tile。
 
 ### 3.2 核内 Buffer 划分
 
-UB 静态划分，32 B 对齐，峰值 200960 B / 253952 B：
+UB 静态划分，32 B 对齐，峰值 229632 B / 253952 B：
 
 | Buffer | 大小（B） | 槽数 | 用途 |
 | :--- | ---: | :--- | :--- |
 | `partial` | 28672 | 2 | `p`，P1 写、P2 读，同时承担 GM 原地更新 |
 | `delta` | 14336 | 2 | BF16 增量 |
 | `numerator` | 28672 | 2 | 归一化分子 |
-| `h` | 14336 | 1 | BF16 的 `h`，P2 写、P3 读 |
-| `y` | 14336 | 1 | 与 `h` 复用同一块（`y` 就写回 `h` 的位置），省一次 tile |
+| `h` | 28672 | 1 | BF16 取整后的 `h` 以 FP32 存储，P2 写、P3 读 |
+| `y` | 14336 | 1 | P3 的 `PACK_B32` 输出，独立于 `h`（dtype 不同，不能复用同一 tile） |
 | `query` | 28672 | 1 | 所有行共享，每核搬一次 |
 | `gamma` | 14336 | 1 | 所有行共享，每核搬一次（`Path = 0` 时故意延后到首行之后搬，避免压在 P1 的搬入前缀上） |
-| `score` | 256 | 1 | 广播后的 `score` |
+| `score` | 256 | 1 | P1 存 `dot`（offset 0）与 `rms`（offset 32）两个 uniform 标量 |
 
 双槽只给需要跨行重叠的三个大张量；`h`/`y` 单槽是因为同一行的 P2→P3 是纯行内依赖，
-跨行重叠由 `partial`/`delta` 的双槽提供。
+跨行重叠由 `partial`/`delta` 的双槽提供。`h` 以 FP32（28672 B）而非 BF16 存储：消除打包/
+解包洗牌后，P3 直接按 64 lane FP32 `load_align` 读回，指令数每行净省且不再依赖
+`de_interleave` 布局约定。
 
 ### 3.3 寄存器布局
 
 - `dot0/dot1`、`ssq0/ssq1` 四对累加器承载两路归约，每轮各累加 128 元素，循环末
   `add` 合并成一对再 `reduce_sum`。
-- `score` 沿 64 lane 广播（`vf.full`）后只参与之后的 `exp`/`div`，整行不再回到标量域。
+- P1 的归约结果 `dot`/`rms` 以 `vf.full` 广播成 uniform 寄存器后整条直存 `score` tile；
+  `score = dot / rms` 由外层 SIMD 核读回后按标量精确除法完成（见 §1），VF 内不再出现除法
+  展开。`Path = 0`（单体 VF）没有可用的标量核间隙，`score` 的除法仍留在 VF 内。
 - 行元数据 `logit_max` / `exp_sum` 用 `pl.getval` 在**外层 SIMD kernel** 读成标量再传给
   VF，因此不需要为它们建 tile、做搬入或记账 valid-shape。
 
@@ -96,8 +106,8 @@ UB 静态划分，32 B 对齐，峰值 200960 B / 253952 B：
 - 静态分叉只用一个 1 bit 的 tiling key 字段 `Path ∈ {0, 1}`，由 host 侧
   `select_path(T)`（`T < 3 → 0`，否则 `1`）决定；两条路径的算术、UB 布局、起核方式完全
   相同，差异只是「一次 VF 还是两次 VF」。字段若删除，`T ≥ 3` 会退到单体方案，实测
-  小 `T` 场景下的 VF 边界开销消失但 `T ≥ 3` 的 `p` 写回无法与计算重叠（RESULTS 中有
-  对应数据）。
+  小 `T` 场景下的 VF 边界开销消失但 `T ≥ 3` 的 `p` 写回无法与计算重叠（RESULTS §2.2
+  的路径交叉实测可见该差异）。
 - 同步用 `auto_mutex=True` 的 tile group：同一 tile 的搬入、VF 访问、搬出由框架自动插
   事件，没有手写 `set_flag/wait_flag`。tile group 的 `mutex_ids` 保持在 0~9 的小范围内
   （实测把 id 用到 11 以上会超出每核 mutex 容量，表现为 VF 写回与 GM 搬出的顺序丢失）。
@@ -119,7 +129,8 @@ UB 静态划分，32 B 对齐，峰值 200960 B / 253952 B：
 
 `partial`/`delta`/`numerator` 各两槽，`auto_mutex` 在第 k 行用 A 槽计算时允许第 k+1 行
 往 B 槽搬入，于是 GM 搬入、向量计算、GM 搬出三者在稳态下同时进行。槽深只取 2 而不是
-更多：峰值 UB 已经是 200960 / 253952 B，再加一槽 `partial` 就超出。
+更多：峰值 UB 已经是 229632 / 253952 B，再加一槽 `partial` 就超出（实测把 `h`/`score`
+组加深到双槽也无收益，已回退）。
 
 ### 5.3 共享张量只搬一次
 
@@ -142,8 +153,8 @@ VF 内「写后读」**没有**自动顺序保证（框架文档记录了实测�
 
 | 位置 | 覆盖的依赖 |
 | :--- | :--- |
-| `phase23_vf` 开头、`process_row_vf` 阶段 2 之前 | 阶段 1 写回的 `p`（分行段方案里还有 `score`）在本 VF 内被重新读入 |
-| `phase23_vf` 阶段 3 之前、`process_row_vf` 阶段 3 之前 | 阶段 2 写出的 `h` 在本 VF 内被重新读入，做第二次归约与 `y` |
+| `phase23_vf` 开头、`process_row_vf` 阶段 2 之前 | 阶段 1 写回的 `p` 在本 VF 内被重新读入（`Path = 1` 的 `score` 已改为标量核直传，不再走 tile） |
+| `phase23_vf` 阶段 3 之前、`process_row_vf` 阶段 3 之前 | 阶段 2 写出的 `h`（FP32）在本 VF 内被重新读入，做第二次归约与 `y` |
 
 要点：
 
@@ -151,9 +162,8 @@ VF 内「写后读」**没有**自动顺序保证（框架文档记录了实测�
   barrier 覆盖它之后的所有相关读，所以每行只有 2 次，且都在 chunk 循环之外，不按元素计。
 - 它只排序本核向量流水内部的访存，不涉及 MTE2/MTE3/MTE1，不产生跨核同步，因此不会破坏
   「搬入—计算—搬出」的流水重叠。
-- 实测代价为 0：去掉这些 barrier 后 `T = 1` / `T = 512` 为 2.939 / 16.794 μs，保留时为
-  2.936 / 16.621 μs，差异在噪声内。去掉后用例仍然通过**不能**证明安全（同址写后读的竞争
-  是偶发的），因此保留。
+- 实测代价为 0：去掉这些 barrier 后耗时差异在噪声内。但去掉后用例仍然通过**不能**证明安全
+  （同址写后读的竞争是偶发的），因此保留。
 - 另一条思路是把 `h` 留在寄存器里避免这次往返，但 7168 个 BF16 = 14336 B，超过向量寄存器
   容量，写回 UB 再读是这条两遍归约结构固有的。
 - `mutex id` 必须留在小范围（这里 0~10）：实测把 id 用到 11 以上会超出每核 mutex 容量，
