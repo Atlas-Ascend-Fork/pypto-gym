@@ -1208,7 +1208,7 @@ def liger_cross_entropy_loss_fwd_wrapper(
     `liger_cross_entropy_loss_bwd_wrapper` to finish the backward; that is what
     `LigerCrossEntropyFunction` saves in its context.
 
-    It is returned unconditionally, including when `requires_grad` is clear --
+    It is returned unconditionally, including when `requires_grad` is false --
     the caller decides whether to keep it, exactly as the autograd Function
     does.
     """
