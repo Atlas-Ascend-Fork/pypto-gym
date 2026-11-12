@@ -28,8 +28,7 @@ the kernel should own, so `g` arrives as [1, ng] with ng either 1 or BT and row 
 reads element `min(r, ng - 1)` -- which collapses to 0 for every row when ng is
 1, and to r when ng is BT, with no condition either way.
 
-Every product is formed in float32 and rounded once, which is what `torch.mul`
-does for the half dtypes through its `opmath_t`, so the result is bit-exact
+Every product is formed in float32 and rounded once, so the result is bit-exact
 against the torch reference rather than merely close.
 
 The kernel body is machine-generated. Its source of truth is an EasyASC kernel
@@ -150,9 +149,9 @@ def liger_cross_entropy_is_identity_grad(grad_output):
     """Upstream's short circuit: a gradient of exactly one leaves the input alone.
 
     `torch.equal` compares dtype as well as value, which is load bearing: a
-    float32 scalar 1.0 against a half-precision saved buffer is *not* equal, so
-    such a call falls through to the scaling path instead of silently skipping
-    it. That is the upstream semantics, kept deliberately.
+    float64 scalar 1.0 against the float32 saved buffer is *not* equal, so such
+    a call falls through to the scaling path instead of silently skipping it.
+    That is the upstream semantics, kept deliberately.
     """
     if not isinstance(grad_output, torch.Tensor):
         return float(grad_output) == 1.0
@@ -213,9 +212,9 @@ def liger_cross_entropy_loss_bwd_wrapper(saved_input, grad_output):
         raise ValueError(
             "saved_input must be contiguous; call .contiguous() first")
 
-    # ng is 1 for a 0-dim grad_output and BT for a per-row one. Widening a half
-    # gradient to float32 here is exact, and float32 is the dtype the multiply
-    # runs in anyway.
+    # ng is 1 for a 0-dim grad_output and BT for a per-row one. Converting the
+    # gradient to float32 here matches the saved buffer, which is the dtype the
+    # multiply runs in anyway.
     ng = rows if per_row else 1
     g2d = grad_output.detach().to(torch.float32).contiguous().reshape(1, ng)
     # path 2 allocates, path 3 does not -- the upstream contract.
