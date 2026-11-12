@@ -194,7 +194,7 @@ Ascend950PR，card 0，CANN 9.2.0，测量时 `block_dim = 64`，取 3 轮 sweep
 - **仅 FP32。** BF16 / FP16 变体尚未随本次提交一并上库。
 - **动态选择 block 数。** 正反向均按 `min(BT, get_platform_info().vector_core_num)` 启动。正向跨两次 `INTER_BLOCK` rendezvous，不能超过当前设备的 Vector 核数，否则未能共同驻留的 block 无法到达屏障。
 - **全部行被 ignore 时**，`mean` 归约为 `0/0`：梯度按上游约定给全零（与 `F.cross_entropy` 的梯度一致），但 loss 为 0 而非 `NaN`。
-- **`logits` / `saved_input` 必须 contiguous。** 梯度中间量原地写回的是调用方那块 buffer，非 contiguous 的输入在下发路径上会被复制，kernel 写到副本上，调用方拿回原值 —— loss 看着正常而梯度悄悄丢失。两个 wrapper 都会直接报错而不是默默复制（反向仅在 `inplace=True` 时检查）。
+- **`logits` / `saved_input` 必须 contiguous。** 梯度中间量原地写回的是调用方那块 buffer，非 contiguous 的输入在下发路径上会被复制，kernel 写到副本上，调用方拿回原值 —— loss 看着正常而梯度悄悄丢失。正向 wrapper 总是报错而不是默默复制；反向 wrapper 仅在原地标量路径上检查，按行路径会显式拷贝。
 - **kernel 主体为机器生成**，请勿手工修改 `@pl.jit` 函数体。
 - **`lse_square_scale` 不在 autograd 用例的对照范围内**：那一层拿 `F.cross_entropy`
   当独立参照，而它没有 z-loss 项，非零 scale 下 loss 与梯度都会合理地不同。该开关由
