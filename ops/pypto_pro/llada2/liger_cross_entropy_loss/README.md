@@ -155,7 +155,7 @@ pytest tests/ops/pypto_pro/llada2/liger_cross_entropy/test_liger_cross_entropy_p
 | 反向 | 同样的 shape 集，逐位相等；`grad_output` 全部形态与各自的 buffer 契约；正反向串联（跨 1 / 2 / 4 个 64 lane 分组三种词表宽度） |
 | autograd | `loss.backward()` 打通到反向 kernel，三种 reduction 各自触发对应的 `grad_output` 形态；functional / Module 的返回契约与参数校验 |
 
-**两个参照，是有意的**：golden 覆盖完整的上游语义，但它对语义的理解与 kernel 同源；所以串联与 autograd 两段改对照 `F.cross_entropy`，它与两者都不共用代码，能抓住 kernel 与 golden 共同误读上游的情况。代价是它没有 z-loss 项，因此 `lse_square_scale` 只由 golden 覆盖。
+**两个参照，是有意的**：golden 覆盖完整的上游语义，但它对语义的理解与 kernel 同源；所以串联与 autograd 两段改为对照 `F.cross_entropy`，它与两者都不共用代码，能抓住 kernel 与 golden 共同误读上游的情况。代价是它没有 z-loss 项，因此 `lse_square_scale` 只由 golden 覆盖。
 
 ## 性能
 
