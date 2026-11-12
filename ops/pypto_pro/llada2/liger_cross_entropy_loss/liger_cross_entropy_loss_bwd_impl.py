@@ -164,7 +164,7 @@ def liger_cross_entropy_loss_bwd_wrapper(saved_input, grad_output):
 
     `saved_input` is the buffer the forward left dloss/dx in. Three paths, the
     same three the upstream triton implementation has, and which of them runs is
-    decided by the shape of `grad_output` rather than by a flag:
+    decided by the value and shape of `grad_output` rather than by a flag:
 
     * **exactly 1.0** -- cross entropy was the last layer, so the forward
       already produced the finished gradient. Returns `saved_input` itself,
