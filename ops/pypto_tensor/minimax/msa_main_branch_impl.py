@@ -67,9 +67,6 @@ def msa_main_branch(hq, hkv, dh, bk, topk, max_n=None):
             "cube_l1_reuse_setting": {"DEFAULT": 2},
             "cube_nbuffer_setting": {"DEFAULT": 2},
         },
-        codegen_options={
-            "vf_options": "-mllvm -cce-vf-enable-vloopv2-recognizer=true"
-        },
         host_options={"compile_timeout": 3600}
     )
     def kernel(

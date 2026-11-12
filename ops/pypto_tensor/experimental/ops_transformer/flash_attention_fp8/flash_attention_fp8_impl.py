@@ -38,9 +38,6 @@ K_TILE = 256
         "ooo_sched_mode": "HLF",
     },
     host_options={"compile_monitor_enable": 0},
-    codegen_options={
-        "vf_options": "-mllvm -cce-vf-enable-vloopv2-recognizer=true -mllvm -enable-pto-colop-fusion=true"
-    }
 )
 def flash_attention_fp8_varlen_forward_kernel(
     q: pypto.Tensor([pypto.DYNAMIC, ...], pypto.DT_HF8, format=pypto.TileOpFormat.TILEOP_ND),
