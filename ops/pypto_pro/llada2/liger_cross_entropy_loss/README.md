@@ -7,7 +7,7 @@
 算子的关键设计沿用上游 triton 实现的省显存技巧：**正向直接把梯度中间量原地写回 logits**，因此反向只是对它做一次链式缩放，不需要重算 softmax，也不需要额外保存一份 `[BT, V]` 张量。
 
 - **正向**为向量侧两趟流式结构。第一趟按行计算 online softmax 统计量并写入 workspace，经一次跨核 rendezvous 让所有 lane 拿到全局归一化因子（`n_non_ignore` / `sum_non_ignore_weight`），第二趟写回梯度；首次出现的 argmax 只在调用方要 `token_accuracy` 或 `predicted_tokens` 时才扫描。两趟都用双缓冲承载 GM tile，下一列块的搬运与当前列块的向量计算重叠。
-- **反向**为纯带宽型逐元素算子，一读一写，使用 `auto_mutex` + tile group 流水，实测达到该卡对齐平面屋顶的约 85%。
+- **反向**为纯带宽型逐元素算子，一读一写，使用 `auto_mutex` + tile group 流水，实测达到该卡 roofline 带宽上限的约 85%。
 
 ## 接口签名
 
@@ -172,7 +172,7 @@ Ascend950PR，card 0，CANN 9.2.0，测量时 `block_dim = 64`，取 3 轮 sweep
 
 `GB/s` 只计 logits 的搬运：正向流三遍（统计、梯度、写回），反向一读一写。
 
-反向为带宽受限，稳定在 1373–1427 GB/s，约为该卡对齐平面屋顶（~1.7 TB/s）的 85%；正向不在带宽曲线上 —— 它每元素两次 `exp`（统计趟的 online softmax 一次，梯度趟一次），开启 softcap 再加一次 `exp` 与一次除法，要 metrics 再加一次比较与选择。换 BF16 让字节减半后耗时反而略增，可佐证它受限于向量计算而非带宽。
+反向为带宽受限，稳定在 1373–1427 GB/s，约为该卡 roofline 带宽上限（~1.7 TB/s）的 85%；正向不在带宽曲线上 —— 它每元素两次 `exp`（统计趟的 online softmax 一次，梯度趟一次），开启 softcap 再加一次 `exp` 与一次除法，要 metrics 再加一次比较与选择。换 BF16 让字节减半后耗时反而略增，可佐证它受限于向量计算而非带宽。
 
 ### 正向的一次优化
 
