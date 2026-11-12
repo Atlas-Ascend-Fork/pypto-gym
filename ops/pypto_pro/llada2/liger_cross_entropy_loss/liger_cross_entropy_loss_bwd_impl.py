@@ -155,8 +155,7 @@ def liger_cross_entropy_is_identity_grad(grad_output):
     """
     if not isinstance(grad_output, torch.Tensor):
         return float(grad_output) == 1.0
-    return bool(torch.equal(grad_output,
-                            torch.tensor(1.0, device=grad_output.device)))
+    return bool(torch.equal(grad_output, torch.tensor(1.0, device=grad_output.device)))
 
 
 def liger_cross_entropy_loss_bwd_wrapper(saved_input, grad_output):
