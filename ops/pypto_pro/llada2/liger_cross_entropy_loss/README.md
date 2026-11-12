@@ -206,7 +206,7 @@ Ascend950PR，card 0，CANN 9.2.0，测量时 `block_dim = 64`，取 3 轮 sweep
 
 1. 在 EasyASC 侧把 kernel 以 `globvars.target = "pypto"` 追踪一遍；
 2. 调用 `easyasc.targets.pypto.transpiler.transpile(kern, list(kern.used_micros), jit_name)`，它返回 `(source, gaps, ...)`，`gaps` 非空表示存在没有映射的转译路径，必须先补齐；
-3. 把 `source` 原样贴回 impl 文件，只替换 `@pl.jit` 函数名（`liger_cross_entropy_forward_kernel` / `liger_cross_entropy_backward_kernel`），并保留文件末尾的 host wrapper；
+3. 把 `source` 原样贴回 impl 文件，只替换 `@pl.jit` 函数名（`liger_cross_entropy_loss_fwd_kernel` / `liger_cross_entropy_loss_bwd_kernel`），并保留文件末尾的 host wrapper；
 4. 重跑本目录下的测试。
 
 `split_workspace` 在 AscendC 侧是 kernel 内部分配，`pypto_pro` 没有对应物，所以转译后的签名会在公开张量之后追加每个 workspace 一个 `pl.Tensor`。wrapper 里的 `_FWD_WORKSPACES` 必须与之一致。
