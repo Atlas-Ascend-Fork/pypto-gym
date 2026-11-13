@@ -1,7 +1,7 @@
 ---
 type: "Reference"
 title: "在 PyPTO-Pro 中检索和关联知识卡片"
-description: "说明知识卡片如何进入 CLI 和 MCP 检索、如何标注与技术契约的关系，以及如何验证索引。"
+description: "说明知识卡片如何进入 CLI 检索、如何标注与技术契约的关系，以及如何验证索引。"
 status: "stable"
 tags: ["pypto-pro", "performance", "knowledge-card"]
 ---
@@ -9,7 +9,7 @@ tags: ["pypto-pro", "performance", "knowledge-card"]
 <a id="query-and-relate-performance-cards"></a>
 # 在 PyPTO-Pro 中检索和关联知识卡片
 
-知识卡片随本技能分发。使用命令行工具（CLI）或 MCP 查询时，通过 `--cards-root` 显式选中 `perf-cards` 数据源。只有登记在[有效卡片表](index.md#active-items)中的卡片会被检索。将文件放入分类目录、在投稿示例里写出代码片段，都不会使它自动成为内核的技术契约。卡片说明一种优化在什么条件下可能有效，具体实验仍由[优化工作流](../workflows/optimization.md)决定。
+知识卡片随本技能分发。使用命令行工具（CLI）查询时，通过 `--cards-root` 显式选中 `perf-cards` 数据源。只有登记在[有效卡片表](index.md#active-items)中的卡片会被检索。将文件放入分类目录、在投稿示例里写出代码片段，都不会使它自动成为内核的技术契约。卡片说明一种优化在什么条件下可能有效，具体实验仍由[优化工作流](../workflows/optimization.md)决定。
 
 <a id="link-only-the-part-that-overlaps"></a>
 ## 只关联能够明确说明的部分
@@ -51,4 +51,4 @@ python scripts/check.py --cards-root references/knowledge-cards query cube-06 --
 python scripts/check.py --pypto-root "$PYPTO_SRC" --cards-root references/knowledge-cards query --validate --format json
 ```
 
-后续读取或分段续读时，复用查询结果返回的请求及文件内容 SHA-256（`source_sha256`）；CLI 和 MCP 继续使用相同的卡片库和源码根目录。缺少外部框架源码时，应记录检查范围受限；不能据此判定某个 API 不存在。新卡按[贡献指南](CONTRIBUTING.md)准备材料，并在合入前交专业人员 review。文档标识、候选分组和分段续读的用法见[优化查询工具](../tooling/optimization.md#optional-performance-card-source)。
+后续读取或分段续读时，复用查询结果返回的请求及文件内容 SHA-256（`source_sha256`）；CLI 继续使用相同的卡片库和源码根目录。缺少外部框架源码时，应记录检查范围受限；不能据此判定某个 API 不存在。新卡按[贡献指南](CONTRIBUTING.md)准备材料，并在合入前交专业人员 review。文档标识、候选分组和分段续读的用法见[优化查询工具](../tooling/optimization.md#optional-performance-card-source)。

@@ -8,6 +8,9 @@
 
 """写法：原始。SIMT 的连续 GM 读写与共享 UB 转置。
 
+机制：[按真实访问集合比较布局](../../../references/patterns/vf-neighborhood.md#compare-layouts-from-actual-access-sets)。
+本例保留相同外部布局下的 UB pitch 控制；若另加全量格式转换，应计入准备/恢复流量。其他 stride 契约先对齐支持域再做完整调用对照。
+
 契约：非空连续 FP32[R,C] 输入、连续 FP32[C,R] 输出，二者不重叠。
 每个外层 worker 认领互不重叠的 32x32 tile；SIMT 线程协作加载和转置写回。
 GM 两侧按相邻线程的连续列访问，UB 的列读使用可选物理 padding。

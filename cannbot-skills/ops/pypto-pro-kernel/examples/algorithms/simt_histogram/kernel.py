@@ -16,7 +16,7 @@ local=False 保留直接 GM 原子对照，combine_runs=True 则合并同一线�
 三条路径都使用两个原生调用，空输入只清零；线程内合并不引入共享状态或额外屏障。
 线程数和 worker 数为显式配置；默认值不是性能最优声明。
 来源机制：Ascend 950 SIMT 原子优化指南；接口事实和数值验收以当前 PyPTO 安装为准。
-接口核对源码 c46548e；数值验证安装源码 cbd3c4a 的相关实现相同，CANN 9.2.0 / Ascend950PR。
+原子更新显式接收容器与逐轴元素坐标；数值验收使用 test.py 的独立频数参考、输入保持和输出守卫。
 example-query: {"aliases":["SIMT local histogram","SIMT local counters"],"term_groups":[["simt","ub","block-local"],["histogram","counters","categorical","直方图"]]}
 """
 
@@ -58,7 +58,7 @@ def make_histogram(n, threads=256, local=True, combine_runs=False):
         step = pl.simt.grid_dim().x * threads
         one = pl.simt.cast(1, I32)
         for i in pl.range(first, n, step):
-            pl.simt.atomic_add(out[x[i]], one)
+            pl.simt.atomic_add(out, [x[i]], one)
 
     @pl.vector_function(mode="simt", max_threads=threads)
     def runs_body(x, out):
@@ -73,10 +73,10 @@ def make_histogram(n, threads=256, local=True, combine_runs=False):
                 if next_key == key:
                     count = count + one
                 else:
-                    pl.simt.atomic_add(out[key], count)
+                    pl.simt.atomic_add(out, [key], count)
                     key = next_key
                     count = one
-            pl.simt.atomic_add(out[key], count)
+            pl.simt.atomic_add(out, [key], count)
 
     @pl.vector_function(mode="simt", max_threads=threads)
     def local_body(x, counts, out):
@@ -88,10 +88,10 @@ def make_histogram(n, threads=256, local=True, combine_runs=False):
         step = pl.simt.grid_dim().x * threads
         one = pl.simt.cast(1, I32)
         for i in pl.range(first, n, step):
-            pl.simt.atomic_add(counts[0, x[i]], one)
+            pl.simt.atomic_add(counts, [0, x[i]], one)
         pl.simt.syncthreads()
         for j in pl.range(tid, BINS, threads):
-            pl.simt.atomic_add(out[j], counts[0, j])
+            pl.simt.atomic_add(out, [j], counts[0, j])
 
     if local:
 

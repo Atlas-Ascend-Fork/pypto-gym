@@ -1,12 +1,27 @@
 # Example library
 
-Each example explains one mechanism, boundary or small integrated pattern. This page owns selection and admission. Detailed contracts, toolchain identity, measurement conditions and performance tradeoffs remain in each example's `kernel.py` / `test.py`; the index does not duplicate experiment narratives or historical pass counts.
+Each example explains one mechanism, boundary or small integrated pattern. This page owns discovery, the mechanism catalog and example admission; [authoring](../workflows/authoring.md#selecting-an-example) owns contract matching and adaptation. Detailed contracts, toolchain identity, measurement conditions and performance tradeoffs remain in each example's `kernel.py` / `test.py`; the index does not duplicate experiment narratives or historical pass counts.
 
 ## Selection principles
 
-Use `check.py query pl.insert --kind example --limit 3 --format json` for API use or `query 'batched transposed GEMM with M tails' --kind example --format json` for a scenario across all three groups. Resolve the returned program for its independent reference/test entries, support modules, dependencies and original applicability statements; the [program query contract](checks.md#complete-example-programs) owns the shared CLI/MCP behavior. `check.py surface` remains the live `basic_api/` maintenance view; the tables below own matmul and algorithm selection. Examples establish only their verified scope, not the current task's shapes, precision or configuration. If none fits, consult upstream Pro STs (`pypto/python/tests/st/pypto_pro/frontend/` in the matching source checkout), retain provenance and independently revalidate. Tensor API examples in `pypto/examples/` are not the Pro path.
+Use `check.py query pl.insert --kind example --limit 3 --format json` for API use or `query 'batched transposed GEMM with M tails' --kind example --format json` for a scenario across all three groups. Resolve the returned program for its independent reference/test entries, support modules, dependencies and original applicability statements; the [program query contract](checks.md#complete-example-programs) owns program discovery and source-bound reads. `check.py surface` remains the live `basic_api/` maintenance view; the tables below own matmul and algorithm selection. Use [authoring](../workflows/authoring.md#selecting-an-example) to qualify the selected program against the task. Tensor API examples in `pypto/examples/` are not the Pro path.
 
 Add examples for recurring mechanisms or verification gaps, not mechanically per API. An `algorithms/` example also needs a pattern or actual task consumer; that group is discovered by `query` and catalog selection, and is outside the VF assignment table and the `surface` maintenance view.
+
+### Mechanism routes
+
+Select a row for the current computation feature, then follow [contract matching and adaptation](../workflows/authoring.md#transfer-a-mechanism-through-an-example). Owners maintain the general proof and cost criteria; anchors maintain their concrete implementation and independent verification.
+
+| Computation feature | Knowledge owner | Existing native anchor and what to inspect |
+| --- | --- | --- |
+| Payload consumers repeatedly derive the same descriptor or coordinates | [Device metadata plans](../patterns/stable-placement.md#separate-reusable-metadata-from-payload-execution) | [Stable dispatch](../../examples/algorithms/stable_expert_dispatch/): interval counts and placement; [sampling](../../examples/algorithms/bilinear_sampling/): record/channel coordinate reuse |
+| A strict rank or recurrence invariant could remove algorithm work | [Invariant-based rewrites](../api/numerics.md#prove-an-invariant-before-removing-work) | [Gated outer state](../../examples/algorithms/gated_outer_state/): actual outer-product recurrence and matrix residency, distinct from scalarizing a matrix polynomial |
+| An approximation could change an index or selected set | [Certified decisions](../api/numerics.md#certify-a-discrete-decision-before-taking-a-fast-path) | [Sampling](../../examples/algorithms/bilinear_sampling/): integer-neighbor/ULP controls; [Top-2](../../examples/algorithms/row_top2/): exact indices and original payload bits |
+| Outputs share inputs but have different numerical sensitivity | [Per-output arithmetic](../patterns/multi-output-reductions.md#choose-arithmetic-independently-for-each-output) | [LayerNorm backward](../../examples/algorithms/layernorm_backward/): separate output mappings; [weighted combine](../../examples/algorithms/moe_weighted_combine/): bounded integer accumulation |
+| Loop extents and allocation capacity jointly bound addresses | [Joint range proofs](../api/vf.md#prove-joint-address-bounds-before-repeated-accesses) | [Row gather](../../examples/algorithms/row_gather/): physical padding, actual indices and validity; derive the new consumer's packet bound separately |
+| A layout/reorder changes the physical access set | [Access-set layout costs](../patterns/vf-neighborhood.md#compare-layouts-from-actual-access-sets) | [Strided transpose](../../examples/algorithms/strided_transpose/), [shared-UB transpose](../../examples/algorithms/simt_tiled_transpose/) and [sliding max](../../examples/algorithms/sliding_max/): strides, physical pitch and halo |
+| In-place outputs or state updates can destroy unread old values | [Old-state readers and commit](../workflows/authoring.md#separate-old-state-reads-from-state-commit) | [Fused AdamW](../../examples/algorithms/fused_adamw/): independent-element state updates and changing-input multi-call reference |
+| A special path depends on actual length or a capacity class | [Qualification sources](../workflows/authoring.md#generalization-and-specialization) | [Gated outer state](../../examples/algorithms/gated_outer_state/): D capacity versus runtime R/T; [tiling-key specialization](../../examples/matmul/tilingkey_specialize/): generated-resource classes |
 
 ## Matmul directory
 
@@ -39,6 +54,7 @@ Enter Cube work through the [GEMM mapping](../patterns/gemm-desugar.md). Select 
 | [row_top2](../../examples/algorithms/row_top2/) | Stable paired candidates, independent register state, exact indices and input bit patterns |
 | [row_topk](../../examples/algorithms/row_topk/) | Variable K, bounded candidates, ordered UB updates and dense outputs; merge scans complete candidate lists |
 | [row_topk_heads](../../examples/algorithms/row_topk_heads/) | Complete-order insertion/pruning and head/cursor emission for larger K; displaced ties, exhausted streams and exact payloads |
+| [sort_sparse_indices](../../examples/algorithms/sort_sparse_indices/) | Native 512-index sorting, key/record units, invertible bounded numeric/ordered-bit keys and independent TileGroup lifetimes |
 | [stable_expert_dispatch](../../examples/algorithms/stable_expert_dispatch/) | Interval counts/stable positions, payload mapping, inverse maps and unused tails |
 | [moe_weighted_combine](../../examples/algorithms/moe_weighted_combine/) | Bounded-error integer accumulation for reproducible indexed sums, worker/group private slots and complete-call scratch/traffic tradeoffs |
 | [embedding_bag](../../examples/algorithms/embedding_bag/) | Runtime offsets/indices, empty segments and direct versus partial/merge reduction |
@@ -103,7 +119,7 @@ Enter Cube work through the [GEMM mapping](../patterns/gemm-desugar.md). Select 
 | [quant_lightning_indexer](../../examples/algorithms/quant_lightning_indexer/) | MXFP4 QK, data/scale slot pairing, BF16 sequential head FMA, bounded Top-K selection and native alias/event ownership |
 | [quant_sparse_lightning_indexer](../../examples/algorithms/quant_sparse_lightning_indexer/) | Candidate-block gather, LI/LD metadata, retained Cube operands, explicit VF/Cube rings and exact BF16 Top-K checks |
 | [flash_attention](../../examples/algorithms/flash_attention/) | Fixed single-head online softmax, explicit placement and per-slot handovers, transposed scores, same-core alpha ring and an input-dependent precision budget |
-| [sparse_attention](../../examples/algorithms/sparse_attention/) | CANN FP16 sparse attention with V as a K prefix: dense-mask and selected-row paths, five native pipeline stages, static first/last VF dispatch, causal/empty rows and slot-reuse controls |
+| [sparse_attention](../../examples/algorithms/sparse_attention/) | CANN FP16 SparseFlashAttention with prefix V: dense-mask and selected-row paths, independent selected-coordinate reference, two representative workloads, ROWPLUSONE/aligned/padded controls, single-slot and overlapped schedules, causal/empty rows and slot reuse |
 | [flash_attention_mha](../../examples/algorithms/flash_attention_mha/) | Fixed BSND causal MHA, Host-known weighted partitioning, owner-cache/prefetch guards, explicit 512 KiB Mat plan and three handovers using 16 event IDs |
 | [causal_attention_backward](../../examples/algorithms/causal_attention_backward/) | Streamed FP32 VF gradients with explicit single-slot Vec placement, completed row statistics and independent query/key owners; K/V blocks and query reuse |
 | [decode_attention_gqa](../../examples/algorithms/decode_attention_gqa/) | Thin grouped contractions, explicit resources/events, physical/valid row separation, guarded prefetch and optional workspace/MIX merge; [short multi-position queries](../patterns/online-softmax.md#decode--very-thin-m-gqa) need their own coordinate/mask adaptation |
@@ -113,7 +129,7 @@ Use the shared [native-task timer](../verification/native-timing.md) for complet
 
 ### Run the grouped GEMM controls
 
-After selecting the device and taking its lock through the external environment, run from this skill’s root:
+After selecting the device through the external environment, run from this skill’s root:
 
 ```bash
 python scripts/check.py run --source examples/algorithms/grouped_gemm_swiglu_quant -- python -m pytest examples/algorithms/grouped_gemm_swiglu_quant/test.py -q
@@ -148,6 +164,7 @@ An external evaluator adapter must identify its dependency and preserve the orig
 
 - When adding, removing or renaming a `matmul/` or `algorithms/` example, update its direct directory or `kernel.py` link in this page's selection tables in the same change. A parent-group link does not cover its children. Run the default `check.py` before admission; its [catalog gate](checks.md#consistency-and-maintenance) rejects missing entries and broken example targets without maintaining a second inventory. `basic_api/` uses the separate API assignment and live surface checks.
 - Supply the kernel, independent reference and ordinary pytest tests. The test.py header answers: what it solves, physical accesses, synchronization rationale and independent verification.
+- Give each example one main teaching question. A structural teaching example exposes a correct control and candidate, changed work and a discriminating complete-call check, and links its owning mechanism section from the implementation design explanation. Keep the reusable derivation in that owner, and keep the example's actual qualification, control/candidate behavior and verification boundary in its existing entries. Both correct routes use the same independent mathematical reference and original criteria; only explicitly contractual rounding belongs in that reference.
 - Derive the reference mathematically rather than duplicating tile/slot/blocked accumulation order. Consume actual quantized inputs; explicitly specified intermediate rounding is contractual too. Do not infer tolerances backwards from the candidate. See the [HF8 correct/incorrect-reference comparison](../../examples/matmul/fundamental_usage/hif8_fp32/test.py).
 - Kernels compile without agentkit and follow [VF/GEMM shipping policy](../../SKILL.md#constraints-and-workspace-policy), including teaching examples. The Vector tile-compute exception is limited to the sorting family; manual Cube examples state their allowed scope explicitly.
 - The kernel.py module docstring begins with `写法：原始。`, `写法：语法糖。` or `写法：混合。`. These are checker conventions, not compiler requirements.

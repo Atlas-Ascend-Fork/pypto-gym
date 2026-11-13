@@ -169,9 +169,8 @@ def collect(root: Path = EXAMPLES_ROOT, *, document: Path = COVERAGE_DOC) -> Cov
 def surface(root: Path = EXAMPLES_ROOT) -> dict[str, dict[str, list[str]]]:
     """Build a reverse index: `{"vf": {api: [examples...]}, "pl": {...}, "pl.system": {...}}`, sorted by API name.
 
-    This answers the question represented by the `surface` field in ascriptor's `metadata.json`: “I want to use an API;
-    which example should I inspect?” The table in the design document is only forward (example → API), while an agent
-    needs the reverse direction.
+    This maps a requested native API to the examples that use it. Forward example-to-API coverage and
+    reverse API-to-example discovery serve different lookup directions.
     """
     index: dict[str, dict[str, set[str]]] = {namespace: {} for namespace in NAMESPACES}
     for name, path in kernels(root).items():

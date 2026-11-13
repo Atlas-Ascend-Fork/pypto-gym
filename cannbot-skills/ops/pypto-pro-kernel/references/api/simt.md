@@ -160,6 +160,25 @@ When several contiguous elements share coordinates, weights, indices, or a desti
 
 Use [runtime-reduction partitioning](../patterns/multi-output-reductions.md#partition-unequal-runtime-reductions) for direct owners, owned partials, empty work, merge ordering and workload comparisons. This API page owns the SIMT launch, index-type and synchronization constraints used to implement that mapping.
 
+<!-- kernel-query: {"id":"simt-bounded-index-arithmetic","aliases":["UINT32 scalar indexing","unsigned index arithmetic","有界无符号索引","uint32 规避标量冗余"],"term_groups":[["simt","scalar","标量"],["uint32","unsigned","无符号","int32"]],"when":"A nonnegative local index or offset may retain signed division/remainder correction or wide arithmetic.","missing_facts":["Prove the range of every intermediate, subtraction and loop update; preserve wide GM pointers and compare generated code plus the complete call."]} -->
+## Bound local integer arithmetic before choosing signedness
+
+A scalar annotation does not establish the type of its actual argument or every expression using it. Trace the caller, induction variable, constants and intermediate products. In a one-dimensional SIMT launch, `pl.simt.thread_idx().x` expresses the actual coordinate directly; a multidimensional launch still needs its full coordinate mapping. Use `pl.simt.cast` inside SIMT, and type the initial value, bounds and updates consistently. A Python integer literal can widen an otherwise narrow expression.
+
+The same range/signedness argument applies to JIT-side scalar scheduling, using that scope's `pl.astype` conversion. It does not establish support for a scalar cast inside VF; verify that separate frontend boundary before moving a conversion into a vector function.
+
+For a local row/word offset whose complete range is in `[0, 2**32)`, UINT32 can expose nonnegative division and remainder to the compiler and avoid correction needed for signed Python semantics. This is conditional on the whole expression, not just its final result: prove that `base + row * pitch + column` fits, that no subtraction underflows, and that a loop's final increment cannot wrap. Keep the actual GM pointer and any wider global product at their required width. Negative indices, negative strides and expressions such as `remainder - worker` do not satisfy this proof automatically. Casting an INT32 payload or negative sentinel to UINT32 is a semantic change.
+
+```python
+# Inside a one-dimensional SIMT body; caller bounds rows, pitch and the full span.
+lane = pl.simt.cast(pl.simt.thread_idx().x, pl.DT_UINT32)
+pitch = pl.simt.cast(row_pitch, pl.DT_UINT32)
+row = pl.simt.cast(selected_row, pl.DT_UINT32)
+offset = row * pitch + lane
+```
+
+Inspect the emitted expression to check that later constants or operands did not restore signed/wide arithmetic. A bounded positive-step `while` can retain a chosen SIMT induction type when `pl.range` lowers to a wider induction variable, but that is an implementation alternative to validate, not a general loop rule. Preserve VF hardware-loop structure separately; adding a narrow loop-carried counter can replace a hardware loop with scalar branches. Fewer static instructions or spills alone do not establish a faster complete call.
+
 <!-- kernel-query: {"id":"simt-physical-shapes","aliases":["SIMT physical shapes","SIMT static shape","simt.launch Tensor argument must have a static shape"],"term_groups":[["simt.launch Tensor argument must have a static shape"]],"when":"A GM Tensor descriptor passed to SIMT has a dynamic physical dimension, or a per-call shape specialization is being chosen.","missing_facts":["Separate physical descriptor dimensions and accessed storage extent from runtime indices, loop bounds and logical valid counts; a rejected dynamic physical shape does not reject runtime traversal."]} -->
 ## 11. Argument Physical Shapes Must Be Static; Input Sizes Can Be Specialized Per Call
 

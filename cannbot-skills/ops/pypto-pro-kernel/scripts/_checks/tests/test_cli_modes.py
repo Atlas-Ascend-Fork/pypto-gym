@@ -6,7 +6,7 @@
 # INCLUDING BUT NOT LIMITED TO NON-INFRINGEMENT, MERCHANTABILITY, OR FITNESS FOR A PARTICULAR PURPOSE.
 # See LICENSE in the root of the software repository for the full text of the License.
 
-"""The ordinary CLI remains usable when the optional MCP SDK cannot be imported."""
+"""CLI operations preserve structured reports and source-gated execution."""
 
 import json
 import subprocess
@@ -20,20 +20,9 @@ from _checks.paths import SKILL_ROOT
 ENTRY = SKILL_ROOT / "scripts/check.py"
 
 
-def call_without_mcp(tmp_path, *args):
-    bootstrap = f"""
-import runpy, sys
-class NoMCP:
-    def find_spec(self, fullname, path=None, target=None):
-        if fullname == 'mcp' or fullname.startswith('mcp.'):
-            raise ModuleNotFoundError('MCP intentionally unavailable')
-sys.meta_path.insert(0, NoMCP())
-sys.path.insert(0, {str(ENTRY.parent)!r})
-sys.argv = [{str(ENTRY)!r}, *sys.argv[1:]]
-runpy.run_path({str(ENTRY)!r}, run_name='__main__')
-"""
+def call_cli(tmp_path, *args):
     return subprocess.run(
-        [sys.executable, "-c", bootstrap, *map(str, args)],
+        [sys.executable, str(ENTRY), *map(str, args)],
         cwd=tmp_path,
         capture_output=True,
         text=True,
@@ -59,7 +48,7 @@ runpy.run_path({str(ENTRY)!r}, run_name='__main__')
         "experiment",
     ],
 )
-def test_cli_operations_do_not_depend_on_mcp(tmp_path, mode):
+def test_cli_operations(tmp_path, mode):
     source = tmp_path / "candidate.py"
     source.write_text("def run(): return 1\n")
     spec = tmp_path / "native.json"
@@ -139,11 +128,10 @@ def test_cli_operations_do_not_depend_on_mcp(tmp_path, mode):
             plan,
         ],
     }
-    result = call_without_mcp(tmp_path, *commands[mode])
+    result = call_cli(tmp_path, *commands[mode])
     assert result.returncode == (2 if mode == "native" else 0), result.stderr
     report = json.loads(result.stdout)
     assert report and isinstance(report, dict)
-    assert "MCP intentionally unavailable" not in result.stderr + result.stdout
     if mode == "native":
         assert report["status"] == "unverified"
         assert report["validation"]["numerical"] == "not_established"
@@ -151,18 +139,18 @@ def test_cli_operations_do_not_depend_on_mcp(tmp_path, mode):
         assert report["command"]["started"] and report["command"]["exit_code"] == 0
         assert "CLI_ONLY_OK" in result.stderr
     if mode == "experiment":
-        shown = call_without_mcp(
+        shown = call_cli(
             tmp_path, "experiment", "--state", tmp_path / "current.json"
         )
         assert shown.returncode == 0
         assert json.loads(shown.stdout) == report
 
 
-def test_cli_fallback_retains_source_gate_without_mcp(tmp_path):
+def test_cli_run_retains_source_gate(tmp_path):
     source = tmp_path / "candidate.py"
     source.write_text("missing_name()\n")
     marker = tmp_path / "started"
-    result = call_without_mcp(
+    result = call_cli(
         tmp_path,
         "run",
         "--source",

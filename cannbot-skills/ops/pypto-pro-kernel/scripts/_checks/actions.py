@@ -20,7 +20,7 @@ GOALS = (
     "compare_performance",
 )
 _REQUIRED = {
-    "select_experiment": "Match the supplied workload to the owner's conditions; name one change and a rejection test.",
+    "select_experiment": "For implementation optimization, identify the baseline's exposed parameter family, expand actual contraction/reduction extents and all addends, and compare removed/added complete-call work before selecting a local change. A selector for existing group widths, threads or tiles remains family selection even when realized ownership changes. Derive a distinct arithmetic/dataflow candidate where credible, with qualification and a rejection test; preserve requested fixed-family scope.",
     "native_probe": "Use concrete tensor metadata and the matching installation for a source-bound native probe.",
     "validate_numerics": "Run the original evaluator at the original tolerance over the declared acceptance cases.",
     "compare_performance": "Verify the exact variants numerically, then collect matched AB/BA complete-call timing.",
@@ -118,7 +118,7 @@ def for_report(result, requested):
             readiness="needs_workload_evidence",
             next_action="inspect_current_costs_and_workload",
             required_now=[
-                "No covered pattern matched. Use the supplied workload and current measured costs to choose an implementation experiment; do not infer an API gap or optimization ceiling."
+                "No covered pattern matched. Expand actual contractions/reductions, trace addends and consumers, and count repeated producers, residency and publications from source. Separate existing-family selection from a new arithmetic/dataflow candidate; compare removed and added complete-call work before choosing a local experiment. The detector is not exhaustive, and a miss is not an API gap or optimization ceiling. Preserve requested fixed-family scope."
             ],
         )
     elif (
@@ -172,7 +172,7 @@ def for_inventory(result, requested):
         item.update(
             next_action="assess_supplied_applicability",
             required_now=[
-                "Read the supplied source/workload and choose one falsifiable hypothesis when they suffice. Query only a named unresolved contract; inline evidence is not another file to search for."
+                "Read the supplied source/workload; for implementation optimization, identify existing controls, expand actual contractions and trace every addend before asserting an invariant. Compare work-elimination/reuse opportunities with local fusion costs, then choose a falsifiable candidate; an existing-parameter selector alone is family selection. Preserve requested fixed-family scope. Query only a named unresolved contract; inline evidence is not another file to search for."
             ],
         )
     else:
@@ -213,6 +213,10 @@ def for_experiment(state):
             if phase == "inconclusive"
             else "select_next_hypothesis_from_best"
         )
+        if state["trials"] >= state["max_trials"]:
+            item["required_now"].append(
+                "Export the verified best from this exhausted state. A locally chosen batch cap does not finish the user's task: continue actionable work in the next working batch unless an explicit user stop, verified hard execution limit or genuine blocker prevents it. Preserve cumulative quotas; never reset a real limit through another state."
+            )
     else:
         item = guidance("select_experiment")
         item.update(

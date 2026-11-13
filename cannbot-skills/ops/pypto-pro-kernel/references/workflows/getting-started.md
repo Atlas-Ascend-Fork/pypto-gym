@@ -9,7 +9,7 @@ Owner: `../pypto/docs/zh/guide/programming_guide/pro/development/kernel_function
 - A kernel is a plain Python function under `@pl.jit(...)`, with `import pypto_pro.language as pl`. Tensors appear as typed parameters.
 - The body is sectioned: `with pl.section_vector():` (AIV) / `with pl.section_cube():` (AIC). A kernel with both is a mixed kernel.
 - Loops inside the body use `pl.range(...)` — the builtin `range` is rejected at parse.
-- Key `@pl.jit` kwargs: `auto_mutex` (default True), `pipeline=`, `tiling_key=`, `name=`, `sanitizer=`. Launch is eager `kernel(x, out)`; a bracketed grid form `kernel[grid, cores]` called like a normal function exists (owner: `runtime/jit.py`).
+- Key `@pl.jit` kwargs: `auto_mutex` (default True), `pipeline=`, `tiling_key=`, `name=`, `sanitizer=`. Eager `kernel(x, out)` uses the stream's automatic block budget. Explicit `kernel[stream, cores]` must fit the actual stream budget for the kernel's engine mix; check that limit before tuning workers (owner: `runtime/jit.py`; [launch and ownership](../api/support.md#5-get_subblock_num-depends-on-whether-the-kernel-has-a-cube-section)).
 
 ## VF is the shipping form for vector compute
 
@@ -35,7 +35,7 @@ Owner: `../pypto/python/pypto_pro/language/typing/` and `_api.py`.
 - Signature params: `x: pl.Tensor[[64, 200], pl.DT_FP32]`; scalar parameters spell the dtype as `scale: pl.DT_FP32` or `count: pl.DT_INT64`, not a bare `FP32` alias or `pl.Scalar` ([annotation contract](../api/constraints.md#annotate-scalar-parameters-directly-with-a-dtype)). Dtype aliases inside `Tensor`/`Ptr` are a different case. Pointer parameters use `pl.Ptr[dtype]`; `Input`/`Output` provide direction marks. Dims are literal ints or `pl.DYNAMIC` (runtime); compile-time variants go through `tiling_key`/`datatype` specialization.
 - `pl.TileType(shape=[r, c], ...)` describes a **physical 2-D buffer**, not the logical GM shape. For the ordinary FP32/INT32 row-major Vec tiles used here, physical columns must be a multiple of 8 (32 bytes). Carry the true dimensions in `valid_shape`; it cannot repair an invalid physical declaration. Other layouts/dtypes follow their own TileType alignment contract (`pypto/docs/zh/api/pro_api/SIMD-API/basic_data_structures/TileType.md`).
 - Construct `TileType` during parsing, inside the kernel body or a helper invoked there; do not capture a preconstructed `TileType` in a Python factory closure. Capture shape/count values instead ([rejected form and replacement](../api/constraints.md#tiletype-cannot-be-a-closure-variable)).
-- [Host dtype carriers](../../examples/basic_api/support/dtype_carriers/): the host side does not check dtypes for you.
+- [Host dtype carriers](../../examples/basic_api/support/dtype_carriers/): validate Torch tensor metadata with Torch dtypes such as `torch.float32`; `pl.DT_FP32` is a native annotation enum, not a Torch dtype. The native runtime's byte-count check does not replace this [dtype check](../api/support.md#14-dtype_carriers-dtype-carriers-and-transfer-table).
 
 ## Common language — hardware term ↔ DSL spelling
 

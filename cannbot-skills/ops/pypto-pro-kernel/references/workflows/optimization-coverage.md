@@ -1,7 +1,6 @@
-# Coverage mode: enumerate, close, then optimize
+# Coverage mode: enumerate, optimize and close
 
-Use this mode only when the user asks to avoid missing known optimizations. Interactive
-optimization keeps the diagnostic-first flow in [optimization.md](optimization.md).
+Use this mode only when the user asks to avoid missing known optimizations. Interactive optimization uses the [implementation loop](optimization.md#generate-a-concrete-alternative-from-the-computation).
 Audited evidence is a separate target: this mode records closure, but it does not by
 itself make a measurement reproducible.
 
@@ -13,8 +12,7 @@ enumerate and must report coverage as incomplete instead of claiming closure.
 
 ## 1. Before enumerating
 
-Freeze the task contract, the baseline, the workload set, the metric and the budget.
-For a requested audit trail, also freeze the evaluator and test hashes.
+Freeze the task contract, baseline, workload set, metric and any supplied task limits. Use [limit provenance](optimization.md#budget-and-candidate-identity) for unspecified limits and local execution caps. For a requested audit trail, also freeze the evaluator and test hashes.
 
 ## 2. Enumerate
 
@@ -24,7 +22,9 @@ order:
 
 1. topic rows: `vec`, `cube`, `mem`, `pipe`, `scalar`, `sync`, `algo`, `recurrence`;
 2. structural review ([structural-review.md](structural-review.md)), when triggered;
-3. source-derived candidates, only after the above are closed.
+3. source-derived candidates, including opportunities from the initial structural review.
+
+This order inventories candidates; it does not set execution priority or postpone a feasible structural experiment until every card closes. The [implementation loop](optimization.md#generate-a-concrete-alternative-from-the-computation) ranks comparisons by the actual computation and complete-call cost.
 
 A card miss does not rule out a source-level optimization. If the source shows a
 concrete mechanism that no card covers (adjacent fusible operations, an avoidable GM
@@ -73,6 +73,4 @@ result, not a performance result. A row being `implemented` does not prove a gai
 
 ## 6. Stop
 
-Stop when every enumerated row is in a terminal state and a fresh sweep finds no new
-candidate. If the budget expires first, report the unclosed rows and untested directions
-separately from hardware hypotheses.
+Stop when every enumerated row is in a terminal state and a fresh sweep finds no new candidate. If a verified task-wide limit expires first, identify its source and report unclosed rows and untested directions separately from hardware hypotheses. Sampling counts, command timeouts and local batch sizes do not by themselves close the task.

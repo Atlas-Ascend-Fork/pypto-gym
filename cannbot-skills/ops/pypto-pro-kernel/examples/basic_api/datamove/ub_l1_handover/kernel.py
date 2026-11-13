@@ -10,7 +10,8 @@
 
 Each AIV owns ROWS rows, with ROWS in {8, 16, 32}. DIRECT=0 converts an
 aligned ND backing to NZ with move; DIRECT=1 writes an exact ROWS+1 pitch
-with cursor-based VF stores. Both insert disjoint row regions into L1.
+with cursor-based VF stores. The NZ declaration uses compact=0 so insert
+reads the declared physical pitch. Both insert disjoint row regions into L1.
 Local group mutexes protect MTE2/V/MTE3 work. The explicit cross-core edge
 orders MTE3 production before the Cube MTE1 consumer; there is no slot reuse.
 No performance ordering between the two variants is assumed.
@@ -96,6 +97,7 @@ def handover(
                 dtype=pl.DT_FP16,
                 target_memory=pl.MemorySpace.Vec,
                 layout=pl.NZ,
+                compact=0,
             ),
             addrs=0x4000,
             mutex_ids="auto",

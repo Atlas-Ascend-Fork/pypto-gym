@@ -1,2 +1,0 @@
--r requirements-checks.txt
-mcp==2.0.0

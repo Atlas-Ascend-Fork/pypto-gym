@@ -21,7 +21,7 @@
 
 ### 前置条件
 
-先配置可用且版本匹配的 CANN、PyPTO-Pro、Python 依赖和 Ascend NPU，并在项目中说明运行命令、环境脚本、设备和设备锁。源码检查还需匹配目标安装版本的 PyPTO 源码，可用 `PYPTO_SRC` 或 `--pypto-root` 指定。
+先配置可用且版本匹配的 CANN、PyPTO-Pro、Python 依赖和 Ascend NPU，并在项目中说明运行命令、环境脚本和设备选择。源码检查还需匹配目标安装版本的 PyPTO 源码，可用 `PYPTO_SRC` 或 `--pypto-root` 指定。
 
 配置好 [OpenCode](https://opencode.ai/) 和模型。本插件只安装技能与入口文件，不安装运行环境。
 
@@ -139,7 +139,7 @@ CANN 离线安装包交付使用已安装或另行提供的 `pypto-pro-cann-deli
 
 独立使用 kernel skill 进行默认源码交付时，将 kernel 与源码产物规范两个 skill 的完整目录并列放入目标工具的 skills 目录，保留跨 skill 的相对引用。插件默认安装已包含两者；安装仅提供资源，不决定本次是否执行整理，也不自动安装 CANN 交付 skill。
 
-可从 skill 根目录运行 `python scripts/check.py query 'UB to L1'` 定向查阅契约、官方资料和样例；`query --validate` 检查知识准入。CLI 和可选的 [MCP stdio 接口](../../ops/pypto-pro-kernel/references/tooling/mcp.md)共享查询、检查与执行反馈。MCP 需按说明单独配置，插件安装器只复制资源，不安装 SDK 或修改运行环境。
+可从 skill 根目录运行 `python scripts/check.py query 'UB to L1'` 定向查阅契约、官方资料和样例；`query --validate` 检查知识准入。CLI 提供查询、检查与执行反馈。插件安装器只复制资源，不修改运行环境。
 
 ### 参考资料与可选工具
 

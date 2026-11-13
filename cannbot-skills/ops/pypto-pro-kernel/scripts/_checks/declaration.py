@@ -27,8 +27,7 @@ from .source import Finding, first_docstring_line, read
 RULE = "writing-style-declaration"
 PREFIX = "写法："
 STYLES = ("语法糖", "原始", "混合")
-"""Controlled vocabulary. This follows the `TOPOLOGIES` pattern in ascriptor `library/tools/api_examples.py`: a
-filterable field needs a finite set of values, or the “writing style” column will have five spellings in two months."""
+"""Controlled vocabulary for the filterable writing-style field; use the declared finite set consistently."""
 
 
 def check(path: Path) -> list[Finding]:

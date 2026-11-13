@@ -97,7 +97,7 @@ def test_unknown_nodes_and_missing_fields_do_not_claim_complete_coverage(tmp_pat
 
 
 def runtime(
-    monkeypatch, source, *, observe=True, prepare_error=False, active=("cube", "vector")
+    monkeypatch, source, *, observe=True, prepare_error=False, active=("cube", "vector"), printer="python_print"
 ):
     events = []
     bound = object()
@@ -130,7 +130,7 @@ def runtime(
     )
     ir = SimpleNamespace(
         SectionKind=SimpleNamespace(Cube="cube", Vector="vector"),
-        python_print=lambda value: "parsed target IR",
+        **{printer: lambda value: "parsed target IR"},
     )
     monkeypatch.setattr(capture, "_runtime", lambda: (ir, jit, {}))
     kernel = SimpleNamespace(
@@ -144,17 +144,26 @@ def runtime(
     return kernel, events
 
 
+@pytest.mark.parametrize("printer", ["text_dump", "python_print"])
 def test_pipeline_preparation_precedes_each_target_and_never_launches(
-    tmp_path, monkeypatch
+    tmp_path, monkeypatch, printer
 ):
     source = tmp_path / "kernel.py"
     source.write_text("# native entry\n")
-    kernel, events = runtime(monkeypatch, source)
+    kernel, events = runtime(monkeypatch, source, printer=printer)
     monkeypatch.setenv("PYPTOPRO_JIT_ARCH", "caller-value")
     result = capture.capture_ir(kernel, config=capture.CaptureConfig())
     assert events == ["prepare", "parse:cube", "parse:vector"]
     assert len(result.digest) == 64 and len(result.transfers) == 2
     assert result.unknown_nodes == ()
+    assert os.environ["PYPTOPRO_JIT_ARCH"] == "caller-value"
+
+
+def test_enum_architecture_uses_canonical_environment_and_restores_it(monkeypatch):
+    monkeypatch.setenv("PYPTOPRO_JIT_ARCH", "caller-value")
+    arch = SimpleNamespace(name="DAV_3510")
+    with capture._architecture(arch):
+        assert os.environ["PYPTOPRO_JIT_ARCH"] == "3510"
     assert os.environ["PYPTOPRO_JIT_ARCH"] == "caller-value"
 
 

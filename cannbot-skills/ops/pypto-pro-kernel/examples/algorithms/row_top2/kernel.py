@@ -8,6 +8,9 @@
 
 """写法：原始。VF 稳定逐行 Top-2，输出输入原始 FP32 位模式。
 
+机制：[选择集合与payload](../../../references/patterns/ordered-selection.md#exact-payload-recovery-cannot-repair-lossy-selection)及[离散决策资格](../../../references/api/numerics.md#certify-a-discrete-decision-before-taking-a-fast-path)。
+本例用原始 FP32 值决定次序，再保留获胜来源位型；测试中的精确索引能区分错误选择，不能由最终 payload 搬运替代。本例没有区间证书/unknown修复路线。
+
 契约：连续有限 FP32 x[M,N]，N>=2；数值降序、平局按原始下标升序，两个下标不同。
 +0/-0 数值相等，但输出保留所选源的符号位。Host 仅选择形状与 worker 数。
 每个 lane 保留两份独立的值/索引状态，再跨 lane 合并；最终从获胜来源选择数值。

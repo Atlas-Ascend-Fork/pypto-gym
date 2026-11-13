@@ -312,7 +312,7 @@ def _capture_calls(call, *, repeats, tasks_per_call, runtime, pipe_metrics=False
 def measure_native(call, *, warmup=3, repeats=20, tasks_per_call=1):
     """Return whole-call and per-task durations, excluding event/host intervals.
 
-    Caller owns device selection, external board lock and timeout. This function
+    Caller owns device selection, load comparability and timeout. This function
     invokes call warmup + repeats times; validate numerical results separately.
     """
     if any(
@@ -339,7 +339,7 @@ def measure_pipes(call, *, warmup=3, repeats=20, tasks_per_call=1):
     """Collect warmed task-level PipeUtilization alongside complete-call durations.
 
     Use per-core msprof op output when these aggregates cannot explain a tail.
-    Caller owns immutable inputs, numerical validation, device lock and timeout.
+    Caller owns immutable inputs, numerical validation, device selection and timeout.
     """
     if any(
         type(value) is not int or value < 1
@@ -373,7 +373,7 @@ def measure_metrics(call, *, metric, warmup=3, repeats=20, tasks_per_call=1):
     Counter names, units, zeros and missing samples retain their exported form.
     These aggregates are not per-core data or an authenticated HBM byte count.
     L2Cache selects the metric group, not the separate l2_cache export switch.
-    Caller owns source/variant identity, correctness, stream, lock and timeout.
+    Caller owns source/variant identity, correctness, stream and timeout.
     """
     if metric not in _METRIC_GROUPS:
         raise ValueError(f"metric must be one of {_METRIC_GROUPS}")
@@ -415,8 +415,8 @@ def compare_native(baseline, candidate, *, warmup=3, repeats=20, tasks_per_call=
     tasks_per_call is (baseline_count, candidate_count), independent of order.
     Callbacks must use equivalent immutable inputs, repeat a fixed task sequence
     on one stream, and overwrite their outputs. Check correctness before calling.
-    Caller owns the device, board lock and timeout. Failed captures are retained
-    for diagnosis at the path printed with the original error.
+    Caller owns device selection, load comparability and timeout. Failed captures
+    are retained for diagnosis at the path printed with the original error.
     """
     if not isinstance(tasks_per_call, (tuple, list)) or len(tasks_per_call) != 2:
         raise ValueError(
@@ -473,8 +473,9 @@ def compare_configurations(
     AB visits candidates in mapping order; BA reverses that order. Each candidate
     has its own adjacent baseline invocation in every repetition. With N
     candidates, baseline runs warmup + 2*N*repeats times; each candidate runs
-    warmup + 2*repeats times. The caller owns the lock, timeout and bounded batch
-    size. Use compare_native for different task counts and final pairwise checks.
+    warmup + 2*repeats times. The caller owns load comparability, timeout and
+    bounded batch size. Use compare_native for different task counts and final
+    pairwise checks.
     """
     if not callable(baseline):
         raise ValueError("baseline must be callable")
@@ -548,7 +549,7 @@ def compare_wall(baseline, candidate, *, warmup=3, repeats=20):
     outside the callbacks, including fresh pools for single in-place updates.
     This measures host dispatch, execution and the final synchronization; it
     does not collect profiler task durations or establish numerical correctness.
-    Caller owns device selection, the board lock and an otherwise idle stream.
+    Caller owns device selection, load comparability and an otherwise idle stream.
     """
     if any(type(value) is not int or value < 1 for value in (warmup, repeats)):
         raise ValueError("warmup and repeats must be positive integers")

@@ -14,7 +14,7 @@ Write a test that asserts an error message and it may pass **regardless of what 
 
 `match` was **not skipped**; it ran and **matched successfully** because the regular expression found itself in the message.
 
-`PyptoProError.__str__` (`pypto_pro/_errors.py:560`) returns a rendered form rather than plain diagnostic text: the first line + `--> file:line:col` + **source excerpts spanning two lines before and after the error** (rendered at `_errors.py:606`; the window is defined by `_PRIOR_CONTEXT_LINES` / `_FOLLOWING_CONTEXT_LINES` at `:370-371`). The source comes from `source_lines`, and `runtime/kernel.py:127-129` passes in the **entire file** (`f.read().split("\n")`), not just the lines containing the kernel.
+`PyptoProError.__str__` in `pypto_pro/_errors.py` delegates to `render`, which includes the first line + `--> file:line:col` + **source excerpts spanning two lines before and after the error**. `_append_source_preview` derives the window from `_PRIOR_CONTEXT_LINES` / `_FOLLOWING_CONTEXT_LINES`. The renderer uses the supplied `source_lines`; when absent, `_append_location` loads the span's file through `source_lines_of`. The preview can therefore include neighboring test code rather than only the kernel body. These symbol references match PyPTO `6c254b2e`; the self-matching mechanism still needs the discriminating control below.
 
 When the test's `@pl.jit` kernel is written in the test file, the span's filename is that test file. The ±2-line window can extend beyond the end of the kernel and copy the following line into the message:
 
@@ -108,7 +108,7 @@ collected 5 items
 
 Likewise, an incorrect column-stripe address in split-N does not raise an error; it simply writes somewhere else.
 
-**Recommended form:** directly assert the shape and layout of the tile read by `move` when checking a transpose; validate numerical correctness on the board against a reference. ascriptor recorded the on-board behavior of an incorrect transpose (D-122): the result was **completely unrelated** to the reference, with no error.
+**Recommended form:** directly assert the shape and layout of the tile read by `move` when checking a transpose, then validate the actual consumer against an independent reference. Use a nonsquare coordinate-distinct panel: successful compilation or a matching uniform row cannot establish the axis map.
 
 ---
 
@@ -184,7 +184,7 @@ Also, the parser rejects an explicit `None` in `pl.TileType(..., compact=None)` 
 
 ## 6. The MX Scale Plane Address Is Derived; Scalar `addrs` Can Silently Produce Wrong Results
 
-The tile in `ScaleLeft` / `ScaleRight` (called a **plane** by ascriptor) cannot use an arbitrary address: it must equal the **paired L0 data tile address `>> 4`**. Hardware `mad_mx` does not take scale as an explicit operand; it finds it implicitly through the SFractal layout, which means through the address.
+The scale tile in `ScaleLeft` / `ScaleRight` cannot use an arbitrary address: it must equal the **paired L0 data tile address `>> 4`**. Hardware `mad_mx` does not take scale as an explicit operand; it finds it implicitly through the SFractal layout, which means through the address.
 
 ### Why the Framework Did Not Catch It: the Check Saw Only Slot 0
 
@@ -270,7 +270,7 @@ The related-check scope is in “A multi-slot check cannot use slot 0 as a proxy
 
 ### Discriminating Experiment: Parsed IR, No Device Required
 
-Keep the same load → fillpad → store sequence and change only the synchronization form; after parsing to `ir.SectionKind.Vector`, inspect `@system.*` / `@block.*`:
+Keep the same load → fillpad → store sequence and change only the synchronization form; after parsing to `ir.SectionKind.Vector` and applying the synchronization pass, inspect `system.*` / `block.*`:
 
 | Form | Synchronization ops |
 | --- | --- |
@@ -280,9 +280,12 @@ Keep the same load → fillpad → store sequence and change only the synchroniz
 
 ```python
 program, _ = kernel.to_kernel_def().parse_target_program(ir.SectionKind.Vector)
-text = pypto_pro.ir.python_print(program.get_function(kernel.__name__))
-ops = re.findall(r"@(system\.[\w.]+|block\.[\w.]+)", text)
+program = ir.Pass.insert_sync()(program)
+text = pypto_pro.ir.text_dump(program.get_function(kernel.__name__))
+ops = re.findall(r"\b(system\.[\w.]+|block\.[\w.]+)\(", text)
 ```
+
+`parse_target_program` returns the pre-pass IR. Inspect automatic mutex operations after the same `Pass.insert_sync()` pass used by JIT code generation; raw IR alone cannot establish their absence in the executable. The canonical `text_dump` format uses operation names without an `@` prefix.
 
 ### On-Board Symptom: Stable, Regular, and Wrong
 

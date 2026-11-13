@@ -63,7 +63,7 @@ See [parse-error localization and regressions](#parse-error-localization-and-reg
 
 For each tile, report its space, address range, byte size, mutex IDs, and depth, plus the capacity actually used by each space. Keep output silent by default and export on request, binding it to the source and toolchain; do not equate declared size with peak live allocation. See [capacity conventions](../api/memory-limits.md) for capacity sources.
 
-`ir.IRVerifier` exposes batched `Diagnostic` objects whose field shape can serve as a reference, but historical probes confirmed that `Diagnostic` has no Python constructor, Python cannot register rules, and severity does not include Info. Probe capabilities first; do not rely on it as a generic report container. Existing `python_print` can read layouts, so the report is a convenience for consumers, not a prerequisite for allocator correctness.
+`ir.IRVerifier` exposes batched `Diagnostic` objects whose field shape can serve as a reference, but historical probes confirmed that `Diagnostic` has no Python constructor, Python cannot register rules, and severity does not include Info. Probe capabilities first; do not rely on it as a generic report container. The IR `text_dump` printer can read layouts, so the report is a convenience for consumers, not a prerequisite for allocator correctness.
 
 Regressions: `python/tests/ut/pypto_pro/test_compile_warnings.py`, `test_error_format.py`, and `test_match_guard.py`. Search the source tree for their actual locations. Listing these tests as entry points does not mean they were rerun for this revision.
 

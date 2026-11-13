@@ -291,7 +291,7 @@ def test_invalid_regex_explains_literal_search_without_changing_semantics(
     _, policy = config
     path = tmp_path / "kernel.py"
     path.write_text("one = vf.full(1.0, preg)\n")
-    with pytest.raises(ValueError, match="CLI --fixed or MCP fixed=true"):
+    with pytest.raises(ValueError, match="search --fixed"):
         host_io.search([path], config=policy, pattern="vf.full(")
     result = host_io.search([path], config=policy, pattern="vf.full(", fixed=True)
     assert result["status"] == "complete" and result["coverage"]["complete"]

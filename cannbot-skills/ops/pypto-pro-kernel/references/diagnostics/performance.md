@@ -17,6 +17,48 @@ Turn the next experiment into a short chain: **observed cost → source work →
 
 Keep the comparison's scope explicit. For a claimed reduction in GM activation bytes, first compare that operand's producer loads, extents, repetitions and owners in both sources. L0 copies, accumulator capacity and measured speed are separate questions; leave them open if they are not needed to decide the stated byte prediction. Once the local question is resolved, report that result and select the next distinguishing measurement instead of expanding every referenced hardware topic.
 
+## Collect the right profile
+
+Use [performance collection](../tooling/performance-collection.md) for collector commands and [field meanings](../tooling/performance-fields.md) for exported metrics, including `ResourceConflictRatio`. Check the installed collector and actual exported fields before interpretation. The [native timing helper](../verification/native-timing.md#collect-pipe-counters-for-diagnosis) supplies complete-call timing and task-level pipe counters; per-core questions need the collector-specific path. Keep raw captures in ignored scratch.
+
+Factory variants can share a C++-mangled symbol even when their requested JIT labels differ. Bind captures to the actual specialization and task positions, or use separate captures; do not split rows by an unverified Python label. In the scoped native-timing environment, trace directory names containing `=` were rejected.
+
+<!-- kernel-query: {"id":"profiling-evidence-quality","aliases":["PMU counter validation","partial instruction trace","profiling evidence quality","PMU计数校验","指令采样不完整"],"when":"Choosing a profiling depth, interpreting per-core metrics, or deciding which PMU/trace fields are trustworthy.","missing_facts":["Check identity, topology, frequency, metric denominators, independent work counts and sampled coverage; quarantine unsupported groups without inventing missing measurements."]} -->
+## Choose the next profile by the unresolved question
+
+| Unresolved question | Smallest useful observation | Decision it can support |
+| --- | --- | --- |
+| Which launch matters to the target? | Complete-call task identities, durations and task count | Select a consequential phase; include preparation, finalization and merge launches |
+| Is work concentrated on a few long cores or spread across the device? | Per-core span, actual work/tiles, pipe active times, launch topology and frequency | Compare ownership or tail-wave changes before changing local instructions |
+| Is a suspected memory cost repeated requests, poor transfer geometry, local conflicts or physical-memory traffic? | One relevant metric group checked against source-derived bytes; an independent matched transfer control when needed | Choose a layout, residency, cache or stream experiment; retain unmeasured layers as unknown |
+| Which dependency exposes a stall? | A bounded steady-state/startup/tail timeline window with matched producer/reader/slot identities | Move a legal prefetch or split an unnecessarily coupled readiness window; deeper slots help only an exposed lifetime/overlap problem |
+| Did scalar control, register pressure or code generation defeat the source change? | Generated CCE plus actual function disassembly/resource evidence | Compare loop form, address work, live-state lifetime or specialization while preserving arithmetic |
+
+Start with existing counters and one representative nondegenerate workload. A full instruction trace is not a default prerequisite for each tiling point. Separate application timing from profiler replay: compare replay controls in the same collector mode to explain a mechanism, then use the prescribed complete-call protocol to establish the gain. Do not sum a preparation stage from one replay and a compute stage from another to construct an application latency.
+
+### Check metric groups against known work
+
+For each capture, retain kernel/specialization identity, effective AIC/AIV workers, frequency, units, collection mode and missing fields. Compare per-core maximum and distribution with the actual work map; an arithmetic mean of each core's busy percentage has different denominators from device throughput. Fewer input workers can each do more vector/transfer work while the complete preparation stage becomes faster. Record that changed assignment before attributing a per-core increase to slower instructions.
+
+Use source-derived MMAD counts/dimensions, expected output stores or cumulative partial-publication bytes as independent checks on available metric groups. A correctly reported total MMAD count does not validate a floating/integer subclass split that contradicts the emitted opcodes. Preserve such raw fields but exclude the contradicted group from quantitative attribution; task timing and other independently checked groups can remain valid. Conversely, a successful parse or a self-consistent pipe group does not qualify every Memory/Arithmetic field. Correctly absent inactive-core fields are different from missing rows for an active core.
+
+If a group is missing or inconsistent, diagnose that boundary and recapture only the needed scope when authorized; do not discard ordinary valid timing or repeat an entire benchmark to select more favorable values. A missing frequency, incomplete per-core export or unsupported counter leaves the corresponding explanation unknown. More FIX/scalar active time after a synchronization change can reflect changed waiting/overlap or work; check the unchanged publication count and critical path before claiming extra bytes or a regression.
+
+### Check timeline coverage before counting instructions
+
+Bind physical trace tracks to logical roles using the emitted path, launch mapping and identifiable producer/consumer work, not the `coreN` label alone. Record sampled cores, retained time interval, dropped/truncated events and the export's coverage. If the trace contains fewer instructions than the source requires for those same sampled workers and interval, it cannot establish a complete dynamic count. Absence of a VF or DMA event in that partial trace is not proof that the work was removed. Static code counts, dynamic sampled counts and full-kernel work counts remain distinct.
+
+Follow ready/read/release edges for the actual logical task, physical slot and pipe. Check both first-data latency and terminal drain; a steady-state window alone can miss the short-case bottleneck. For a display-compatible or cropped trace, retain the original and preserve timestamps, PC, identities, arguments and event order in the selected range. Presentation repairs do not recover missing samples. Use a focused native comparison when the available sampling cannot quantify the proposed overlap or bank/cache mechanism.
+
+<!-- kernel-query: {"id":"profile-critical-path-model","aliases":["profiling critical path model","conditional compute bound","pipe service time model","关键路径性能模型"],"when":"Estimating headroom or ranking structural candidates from source work and profiling rather than launching another undirected sweep.","missing_facts":["Use padded/carrier work, independently calibrated service rates, actual worker dependencies and startup/tail costs; do not add overlapping pipe times or turn a fitted model into a hardware ceiling."]} -->
+## Model the current mapping without declaring a hardware limit
+
+For a compute hypothesis, count each worker's executed padded matrix work, including every high/low compensation product and partial tile, not only the useful mathematical MACs. A conditional estimate is `max_i(work_i / q)`, where `q` is independently calibrated for the relevant dtype, tile/instruction form, precision mode and frequency. Fewer MMAD calls can leave executed matrix work unchanged. A model fitted to the candidate's elapsed time cannot independently prove its headroom.
+
+For transfers, count useful bytes, repeated/padded requests, the tool's reported path bytes and independently measured physical-memory traffic separately. Calibrate the same read/write mix, layout, cache state and worker regime before using bytes/bandwidth as a conditional service estimate. Respect the [bandwidth distinctions](#distinguish-bandwidth-quantities); a bank-address calculation or high L2 hit rate alone does not measure a penalty or prove saturation.
+
+Combine these estimates through actual dependencies and the longest worker. Overlapping pipe service times are not additive, whereas separate ordered native launches contribute to the complete call. Include startup, final publication/merge and tail waves. A conditional envelope describes the current representation and mapping; changing residency, arithmetic representation or ownership can invalidate it. If a local optimization is hidden by another station's slack, a small shrink may leave latency unchanged while a larger diagnostic removal helps. Restore correctness and measure the complete candidate before using that observation as an accepted optimization.
+
 ## Read work distribution before pipe ratios
 
 Check `Block Num`, launch group semantics and output ownership first. Replicated work and same-address writes can make memory pipes look dominant while no useful resource is saturated. The [multicore GEMM example](../../examples/algorithms/gemm_bias_silu_multicore/) demonstrates disjoint ownership; the [cross-core contract](../api/crosscore-sync.md) owns mix-kernel block semantics.
@@ -100,6 +142,14 @@ Start with source/generated-code work counts and board counters. Match the sourc
 Before merging work items to reuse inputs, count both saved transfers and retained compute on the critical worker: VF reductions/nonlinear operations multiplied by their loop extents, serial dependencies, independent items and scheduling waves. Halving transfers while doubling sequential compute per item can lose, especially with unequal runtime lengths. A one-worker model can reveal reuse but cannot establish the parallel benefit of that grouping. A bottleneck observed for one paradigm or mapping is not a property of the task's name.
 
 Optimize complete-call latency at the original numerical contract, not maximum utilization. Removing redundant work may lower a pipe's busy ratio while making the kernel faster. Simulated ticks, queue waits, task-level profiler ratios and operator-replay counters have different denominators and scopes; do not average them into one score. If they disagree, check model coverage, generated code, collector identity and a focused implementation comparison. Keep the disagreement visible instead of fitting model parameters to make this kernel look correct.
+
+## Fewer synchronization instructions can lengthen the critical path
+
+Merging two local mutex ownership windows can reduce GET/RLS instructions yet delay the first consumer until both asynchronous producers complete. Count the newly coupled readiness edges, not just the removed instructions. Likewise, an input slot reused as an output stage remains live through its final MTE3 read; releasing it at VF completion changes correctness, not only instruction count. Use the [physical-reader audit](../api/crosscore-sync.md#one-payload-with-several-physical-readers) before experimenting.
+
+Compare separate and combined windows at fixed arithmetic, transfers, slots and launch. Inspect first-data readiness, overlap and the complete call. Keep a necessary tail/initialization completion edge even if an unrelated entry barrier has no outstanding work. Static BAR/GET/RLS totals do not identify dynamic waits; a smaller count with a longer execution window is a valid negative result, not evidence that the control failed to apply.
+
+For VF state changes, inspect the complete caller and device function, including native loop form, address setup, constant placement and stack accesses. Fewer source copies or a smaller total text section can leave the hot loop longer. A zero CFI/unwind frame report alone does not prove absence of spill or explicit private-memory traffic; check actual prologue/address bases and loads/stores within the function's symbol bounds. Distinguish SIMT per-thread resources from VF vector registers. Use the existing [artifact/resource procedure](#bind-resources-to-the-device-function), and keep an observed instruction reduction separate from complete-call speedup.
 
 ## Follow the symptom
 

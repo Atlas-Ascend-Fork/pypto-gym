@@ -48,6 +48,15 @@ For attribution, hold tile sizes, layout, work counts, slots and `mutex_id` assi
 
 This performance issue does not establish a synchronization defect. `auto_mutex` requires correctly associated tile-group IDs, cross-core handovers require their own completion/reuse proof, and [ordering within VF](#212-multiple-memory-accesses-to-the-same-tile-inside-vf-have-no-ordering-guarantee) still needs appropriate dependencies. Keep those checks separate.
 
+<!-- kernel-query: {"id":"joint-address-range-proof","aliases":["joint address range proof","planner packet capacity proof","联合范围证明","规划边界容量证明"],"when":"Related loop extents, table capacities and physical packet addresses are repeatedly clamped or recomputed in a VF consumer.","missing_facts":["Prove the joint invariant for the actual consumer, physical packet width, index range and tails, then inspect selected-version lowering and complete-call cost."],"example":"algorithms/row_gather/kernel.py","term_groups":[["address","packet","capacity","地址","容量"],["joint","range proof","联合","范围证明"]]} -->
+## Prove joint address bounds before repeated accesses
+
+Express related extents together at the planning boundary. For `0<=i<T`, `s` in `{0,1}` and `0<=g<G`, the packet rank `(2*i+s)*G+g` is strictly below `2*T*G`. Independent loose bounds on i, s and g can hide this relation. Prove the consumer uses the same T/G as the allocation, that products fit their index/address types, and that an empty domain executes no access. Host-known geometry can establish capacity; tensor-content-dependent eligibility still needs a device proof.
+
+A logical rank bound is only one part of memory safety. Derive the byte address using physical pitch, dtype and offsets, then include every element touched by the actual load/store packet, including the last packet and offset views. A later lane/store mask does not protect an earlier complete load. Keep a valid tail or guard-storage strategy where the instruction footprint exceeds the logical domain; use [byte-footprint derivation](datamove.md#derive-physical-accesses-in-bytes).
+
+When the relation holds over a whole legal loop, compare constructing addresses and invariant boundary state once with repeated per-packet correction. Use the selected frontend's actual expressions and supported APIs; this is no claim of a special guard interface or automatic range optimization. Inspect generated loops, remaining divisions/minima, live state and spills, then time the full call. Fewer address instructions can lose to ABI, register or batching costs. [Row gather](../../examples/algorithms/row_gather/) supplies a native physical-padding/validity control; a different table consumer still needs its own joint proof and lowering comparison.
+
 ## 1. How squeeze and unalign work together
 
 This section grew from a question: the unalign family is complicated. It proceeds from the problem it solves, through the difference between two chains and a real use case, to four constraints, then three measurements.
@@ -153,19 +162,20 @@ Validation must check all outputs and their unused tails, covering zero matches,
 
 Runnable comparisons: [vf_unalign](../../examples/basic_api/vf/vf_unalign/) initializes independent squeeze streams separately. [stable_filter](../../examples/algorithms/stable_filter/) demonstrates another choice: predicate prefix ranks construct unique destination indices, which multiple fields then share. The latter must satisfy scatter address and index-uniqueness contracts and does not depend on AR's cumulative displacement.
 
-### 1.5. Three measurements (2026-09-26, parsing only, no hardware run)
+### 1.5. Parsing and code generation boundaries
 
-A minimal kernel remotely parsed four forms without using a card:
+On official PyPTO `bca90a6c`, `vf.squeeze(src, preg, *, gather_mode=...)` infers its result dtype from the source register. Construct the source in the intended dtype; an explicit bit reinterpretation and a numerical conversion have different lane-layout contracts and must not be substituted blindly.
 
 | Probe | Result |
 | --- | --- |
-| `vf.squeeze(..., dtype=pl.DT_UINT16)` | **Parsing passes**. `dtype` specifies the destination register type; the backend reinterprets the source register as that type rather than numerically truncating it. Omitting it infers the source type. Public declarations and official documentation have been completed |
+| `vf.squeeze(..., dtype=pl.DT_UINT16)` | Rejected during argument binding: `dtype` is not a keyword of the current API. For local sequence indices in the U16 range, create the source arange in U16 and preserve the original packed-bit oracle. |
+| Call `vf.squeeze(...)` without assigning its result | Parsing alone can succeed, but CCE generation rejects the missing assignment target, including with `NO_STORE_REG`. Assign the result even when only the notification is subsequently consumed. |
 | Omit `squeeze_store_unalign_post` | **Parsing passes**, with no error. Missing bytes are a silent runtime error |
 | **Two consecutive `squeeze` calls without a store between them** | **Parsing passes**. The documentation says this can **hang hardware**, yet the toolchain does not block it |
 
-**The third is a silent-failure class**: a pattern capable of hanging the device passes parsing without a warning. Inside one `@pl.vector_function` body, `vf.squeeze(gather_mode=STORE_REG)` and `vf.squeeze_store_unalign` must strictly alternate. The `squeeze-alternation` rule in `check.py` checks this condition.
+Two consecutive notification-producing squeezes form a pattern capable of hanging the device even though parsing permits it. Inside one `@pl.vector_function` body, `vf.squeeze(gather_mode=STORE_REG)` and `vf.squeeze_store_unalign` must strictly alternate. The `squeeze-alternation` rule in `check.py` checks this condition.
 
-A5 generated code defaults to `MODE_STORED`: omitting `gather_mode` writes AR. Pure register compaction should explicitly use NO_STORE_REG. API documentation and defaults were aligned at framework `aff3b5a70`; `test_squeeze_contract.py` pins the generated code, and the gate uses the same default. Validation: 2026-09-28, CANN 9.2.0 / Ascend950PR; 34 lane-layout and unalign cases plus 11 SPR cases passed.
+A5 generated code defaults to `MODE_STORED`: omitting `gather_mode` writes AR. Pure register compaction should explicitly use `NO_STORE_REG`. The [SPR controls](../../examples/basic_api/support/spr_ctrl/test.py) distinguish argument-binding, parsing and CCE-generation checks; [VF lane layouts](../../examples/basic_api/vf/vf_lane_layout/) and [unaligned transfers](../../examples/basic_api/vf/vf_unalign/) retain numerical checks for packed values and byte counts.
 
 ### 1.6. Entry scope and example coverage
 
@@ -335,7 +345,7 @@ Packing changes which physical positions hold useful elements. Two full 64-eleme
 
 The three construction paths have distinct roles. `create_mask(pattern=)` produces a static low-anchored pattern. `vf.update_mask(scalar)` has **count semantics, verified on hardware** (FP16: `update_mask(3)`→lanes {0,1,2}, `update_mask(0x14)`→lanes {0..19}, `update_mask(128)`→all 128 lanes): `update_mask(N)` means the first N elements are valid; N ≥ element count selects the full width (`update_mask(128, FP16)` is equivalent to `create_mask(ALL, FP16)`; the official example's `0xFFFFFFFF` saturates to full width). Follow the official functional description, “generate a valid-bit mask of the corresponding length.” The parameter-table phrase “its bits define the new mask pattern” refers to hardware expansion of per-element mask bits (2 bits per FP16 element, 256 bits total); interpreting it as scalar bits selecting lanes is wrong. Use it for a prefix mask of runtime scalar length (`create_mask` patterns are compile-time constants). `vf.mask_gen_with_reg_tensor` generates a mask at runtime from bits in a specified RegTensor DataBlock (data-driven mask; offset counts DataBlocks rather than elements, as at the end of §2.5).
 
-**Separate-responsibility idiom (ascriptor precedent)**: masks determine only which lanes are valid, selecting a **contiguous prefix** (Q/H/VL/count); store-side stride/dist/block_stride determines where they go. Both ascriptor's `reg_to_ub(dst, src, FRAC_STRIDE4, mask=LOWQUAT)` (low-quarter mask + strided scatter) and pto FA's vsstb (`block_stride` block copy + full-width mask) follow this split. The usable vsstb form is **cursor-based**, with no explicit offset and with `post_update`; the mechanism and explicit-offset gap are in crosscore-sync's “row+1 pitch convention” section. Window-mask segment selection (8 16-lane windows × full-width stores) was tested and rejected: values were correct, but each store used only 1/8 of its lanes, causing 8× VF port overhead and doubling measured device time.
+**Separate validity from placement**: a prefix mask selects valid lanes; store-side stride, distribution and block stride determine their destination positions. The native FA cursor-store recipe combines `block_stride` block copy with a full-width predicate; a mask alone does not scatter values. The usable vsstb form is **cursor-based**, with no explicit offset and with `post_update`; the mechanism and explicit-offset gap are in crosscore-sync's “row+1 pitch convention” section. Window-mask segment selection (8 16-lane windows × full-width stores) was tested and rejected: values were correct, but each store used only 1/8 of its lanes, causing 8× VF port overhead and doubling measured device time.
 
 `CastLayout.ZERO` outputs are **even-interleaved**, not the contiguous low half selected by `H`; a prefix mask cannot select their even positions. Choose port packing for dense ND output or register packing for a dense-register consumer according to the [narrowed-output contract](#210-narrowing-fp32-to-fp16-choose-port-packing-or-a-dense-register).
 
@@ -345,6 +355,8 @@ The three construction paths have distinct roles. `create_mask(pattern=)` produc
 First check [VF control flow and realized loop form](#keep-runtime-dispatch-out-of-vf-loops). Then count the complete predicate expression at its loop frequency: scalar coordinate arithmetic, `pl.min` / `pl.max`, count conversion, mask generation and selection. A compact expression such as `vf.update_mask(pl.max(0, pl.min(width, count)), dtype=...)` can expose substantial scalar-control cost inside VF. Use [VF cost decomposition](../diagnostics/performance.md#decompose-a-busy-vf-stage) before attributing the remaining cost to mask generation or nonlinear arithmetic.
 
 Under the count semantics above, `update_mask` already saturates counts at the register width. When `width` is the full register element count for that dtype, an upper `min(width, count)` can be redundant; a smaller logical tail bound still needs enforcement. Preserve the lower bound unless its nonnegativity is proved: the scalar is converted to `uint32`, and a negative count does not mean an empty mask. Also prove that the count fits the conversion range. This is a reason to simplify a particular expression, not a blanket claim that `update_mask` is slow.
+
+For `H > 0` and offsets `0, L, ..., (ceil(H/L)-1)*L`, each executed `H-offset` is positive. In that complete domain, `max(0, H-offset)` repeats a proved fact on every iteration; the bare remaining count supplies the same prefix mask. A nominal outer loop extending beyond the actual tail does not satisfy this proof. Keep the original VF loop form when simplifying the count: an extra INT32 loop-carried counter can remove hardware-loop lowering even if the resulting static body is shorter. The [bounded-integer discussion](simt.md#bound-local-integer-arithmetic-before-choosing-signedness) distinguishes this from SIMT induction-type choices.
 
 Choose a comparison from the predicate's structure:
 
@@ -422,9 +434,9 @@ On the same behavior/toolchain, the installed `update_mask` docstring and C++ `E
 Modes verified on hardware in this repository (2026-09-29):
 
 - **`LoadDist.UNPK`**: expands 64 consecutive 16-bit elements into low halves of b32 containers, preserving source order; the entry path for order-preserving FP16→FP32 widening (§2.13, bit-exact). **The b8 member of this family also works**: INT8 widened with `UNPK_B8` + `astype(FP16, layout=ZERO)` is bit-exact (hardware evidence 2026-09-29, W_q widening in examples/algorithms/quant_gemm_w8a16). `UNPK_B8` and `UNPK4` have different container widths and cannot be interchanged in composite conversions; see below.
-- **The official `LoadDist.E2B` description is wrong**: it says “16-bit→32-bit expansion,” but measurement shows **element-to-block broadcasting**, duplicating each source element to fill a 32-byte DataBlock, consistent with ascriptor interp's `e2b` implementation. Use UNPK for 16→32 expansion.
+- **The official `LoadDist.E2B` description is wrong**: it says “16-bit→32-bit expansion,” but measurement shows **element-to-block broadcasting**, duplicating each source element to fill a 32-byte DataBlock. Use UNPK for 16→32 expansion.
 - **`StoreDist.PACK_B32` and generic `PACK`**: choose explicit container width after numerical conversion; the [narrowed-output contract](#210-narrowing-fp32-to-fp16-choose-port-packing-or-a-dense-register) owns the FP32→FP16 ND-store and dense-register alternatives. Port packing alone does not convert numerical types.
-- **`vf.interleave`/`de_interleave` (register layer) versus INTLV/DINTLV (port layer)**: the first return from `de_interleave(a, b)` concatenates even lanes from both sources. A port `DINTLV` load sends memory elements 2i/2i+1 to lane i of two destination registers. A port `INTLV` store interleaves the two sources lane by lane in memory; **A5 ignores the predicate and writes all 2L elements** (ascriptor RFC-0001 hardware note: the mask is ineffective for this instruction, so the entire footprint must be in bounds).
+- **`vf.interleave`/`de_interleave` (register layer) versus INTLV/DINTLV (port layer)**: the first return from `de_interleave(a, b)` concatenates even lanes from both sources. A port `DINTLV` load sends memory elements 2i/2i+1 to lane i of two destination registers. A port `INTLV` store interleaves two sources lane by lane in memory. Account for the full 2L-element footprint unless the selected instruction explicitly guarantees a smaller masked access. A prefix predicate is not by itself that guarantee; validate any claimed inactive-write behavior with a fully sized backing and distinguishable contents on the actual target.
 
 #### Map physical containers before composing conversions
 
@@ -524,7 +536,9 @@ Step is fixed at `±1` (a hardware property of `vci`); follow it with `vf.muls` 
 
 ### 3.3. AddrReg: loop addressing and validation limits
 
-`create_addr_reg` supplies cumulative offsets per loop axis. It is neither a per-lane address index vector nor the UnalignReg created by `unalign_reg_for_store` to cache an unaligned tail. The limit is 8 registers and at most 4 loop axes. This library's `addr_reg_walk` verified offset advancement through two rounds of aligned transfers.
+`create_addr_reg` supplies cumulative offsets per loop axis. It is neither a per-lane address index vector nor the UnalignReg created by `unalign_reg_for_store` to cache an unaligned tail. The limit is 8 registers and at most 4 loop axes. The library's two-round `addr_reg_walk` test checks offset advancement with an exact numerical reference when compilation succeeds.
+
+Official PyPTO `bca90a6c` with CANN 9.3.0 emits a unit-step `i += 1` loop that triggers `Failed to capture the expected i16 canonical induction variable for VAG intrinsic!`. The `vf_gather_scatter` and `vf_spr_misc` tests use strict XFAIL for `RuntimeFailure` only after checking that exact compiler diagnostic. Other compilation errors and numerical mismatches remain failures; successful compilation and the original numerical checks produce strict XPASS until the marker is removed. The marker does not replace AddrReg with another addressing mechanism or skip compilation.
 
 **AddrReg + `store_unalign` is an existing path, not a capability awaiting implementation.** Checked against framework `8faa85389`:
 
@@ -568,12 +582,14 @@ This example asserts only two defensible properties: all 12 combinations (`MemBa
 
 **Assert observable behavior, not the test's own prose.** A source-text search for “no numerical criterion” cannot validate memory ordering or replace the execution controls above.
 
-### 3.7. Two additional gaps discovered
+### 3.7. Predicate coverage and inline helper calls
 
-- **`MaskPattern` has 15 members** (measured via `__members__`): `ALL` `ALLF` `H` `Q` `M3` `M4` `VL1` `VL2` `VL3` `VL4` `VL8` `VL16` `VL32` `VL64` `VL128`. `vf_predicate` uses only `ALL`; **the other 14 have no example coverage of their semantics**. Owner: batch 6's `layout_table`, or an additional section in `vf_predicate`.
+- **`MaskPattern` has 15 members** in the measured `__members__` enumeration: `ALL` `ALLF` `H` `Q` `M3` `M4` `VL1` `VL2` `VL3` `VL4` `VL8` `VL16` `VL32` `VL64` `VL128`. `vf_predicate` uses only `ALL`; that example does not qualify the other predicates' semantics. Consult [layout_table](../../examples/basic_api/support/layout_table/) and the [current coverage view](../tooling/example-coverage.md) for the selected predicate before relying on its behavior.
 - **Inline helpers called inside kernel bodies accept only positional arguments**: `_tile_type(cols=2*N)` is rejected during parsing (`_bind_inline_arguments` in `_call_parser.py`: “only supports plain positional arguments”). Like “`pl.const`'s first argument must be literal” and “no list comprehensions,” this follows from **the kernel body being a DSL**. Conversely, **enum values can enter the kernel body from a closure** (measured IR: `bin_type="bin_type": 1`), so one factory creating N kernels differing only by enum is valid. The four single-mode baselines in `vf_spr_misc` use this pattern.
 
 ### 3.8. Measure a complete VF computation with real dependencies
+
+An explicit fused spelling such as `vf.exp_sub(x, maximum, mask)` can clarify softmax's operation, but a compiler may already fuse `vf.sub` followed by `vf.exp`. Check the actual loaded binary before attributing a benefit to fewer source calls. Identical native code is an equivalence observation, not a measured speedup; preserve the original numerical checks when changing the expression.
 
 [VF softmax](../../examples/basic_api/vf/vf_softmax/) demonstrates the register reduction/broadcast chain. Its benchmark carries each softmax result into the next iteration and orders the UB write/read dependency, so repeated work cannot be lifted out as an invariant. It validates each complete specialization before [native-task timing](../verification/native-timing.md). Host launch time, a short stream interval and an isolated instruction count are different measurements; none establishes a universal advantage for an API family. The workspace's VF requirement is an authoring policy.
 
@@ -659,6 +675,23 @@ This also applies to loop-carried state consumed by the next iteration. After co
 On 2026-10-06, at behavior version `872df763f`, CANN 9.2.0, a branch with `result = vf.select(...)` in one arm and `result = zeros` in the other generated a float-typed merge variable when stored after the branch. BiSheng reported `assigning to 'float' from incompatible type 'RegTensor<float>'`. Initializing `result` with `vf.full` before the branch alone still failed; changing the other arm to `vf.full` or full-mask `vf.move` made both variants pass 13 hardware tests each. This confirms failure for ordinary aliasing participating in this control-flow merge, not a blanket lack of VF branch support.
 
 Evidence: copy semantics in official `SIMD-API/reg_computation/data_movement/move.md` and installed `_vf_api.py::move`; different handling of VF writes and ordinary assignment by Python `_control_flow_parser.py::collect_written_vars`; original generated CCE and hardware logs. Validation scope: behavior version `872df763f`, CANN 9.2.0.
+
+<!-- kernel-query: {"id":"vf-state-ownership-proof","aliases":["VF logical value physical owner","VF loop copy elimination","VF full population"],"when":"Porting immutable/mutable VF state, removing copies, or reusing register storage across branches or loop carries.","missing_facts":["Check storage aliases, demanded lanes, all-path initialization, old-value observers, zero-trip loops and parallel backedges separately; fewer copies do not prove unchanged arithmetic or speed."]} -->
+### Prove storage reuse separately from value equivalence
+
+Another frontend's immutable value or compiler-eliminated copy is not a Pro register-binding rule. Use [independent Pro copies](#independent-register-copies) when the algorithm needs snapshots, then inspect generated destinations before changing storage. Keep these obligations separate:
+
+| Obligation | Counterexample to an unsafe reuse |
+| --- | --- |
+| The old value has no later observer | TwoSum computes a new high part and still needs the old high to recover its residual |
+| Every observed physical lane is initialized | A partial MERGING write preserves undefined lanes later read by a full reduction or wider view |
+| All control-flow paths establish the state | A branch updates only one arm, or a loop executes zero times and exposes its seed |
+| Aliased bytes and captures remain valid | A reinterpret/helper retains a view even after the direct name's final source use |
+| Backedges are simultaneous state transfers | Two carries swap; sequentially reusing one owner destroys the other's old value |
+
+The demanded-lane proof must follow the actual consumer. Masked arithmetic, reduction participation, load footprint and skipped store positions have different roles. A proof that every reader ignores inactive lanes may justify a narrowly scoped normalization removal in a compiler that supports it; it neither shrinks the physical load nor authorizes arbitrary uninitialized Pro state. Stateful mask counters/SPR effects also cannot be treated as pure constants solely because their source syntax repeats.
+
+Use a fully initialized, independently owned control and cover partial masks, zero/one/multiple loop trips, saved old state, nested carries and cross-carry swaps as relevant. Verify the original numerical outputs before comparing the complete emitted function and call time. A source-level self-assignment can survive as a real native copy, while another copy can be required by packing or a snapshot; neither should be removed by a textual rule. Framework lowering changes need their own scope and tests beyond kernel authoring.
 
 ### Numerical truncation is not integer type conversion
 

@@ -47,11 +47,7 @@ def make_masked_softmax(n_cols):
 
         for block in pl.range(0, blocks, 1):
             offset = block * VL
-            active = length - offset
-            if active > VL:
-                active = VL
-            if active < 0:
-                active = 0
+            active = pl.min(VL, pl.max(0, length - offset))
             prefix = vf.update_mask(active, dtype=FP32)
             values = vf.load_align(tile, [0, offset])
             safe_values = vf.select(values, neg_inf, prefix)
@@ -62,11 +58,7 @@ def make_masked_softmax(n_cols):
         row_sum = vf.full(0.0, all_lanes)
         for block in pl.range(0, blocks, 1):
             offset = block * VL
-            active = length - offset
-            if active > VL:
-                active = VL
-            if active < 0:
-                active = 0
+            active = pl.min(VL, pl.max(0, length - offset))
             prefix = vf.update_mask(active, dtype=FP32)
             values = vf.load_align(tile, [0, offset])
             safe_values = vf.select(values, max_broadcast, prefix)
@@ -80,11 +72,7 @@ def make_masked_softmax(n_cols):
         denominator_broadcast = vf.full(denominator, all_lanes)
         for block in pl.range(0, blocks, 1):
             offset = block * VL
-            active = length - offset
-            if active > VL:
-                active = VL
-            if active < 0:
-                active = 0
+            active = pl.min(VL, pl.max(0, length - offset))
             prefix = vf.update_mask(active, dtype=FP32)
             values = vf.load_align(tile, [0, offset])
             safe_values = vf.select(values, max_broadcast, prefix)

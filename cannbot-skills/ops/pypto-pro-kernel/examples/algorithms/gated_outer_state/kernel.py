@@ -8,6 +8,9 @@
 
 """写法：原始。门控外积更新与查询，矩阵状态在片上跨时间步保留。
 
+机制：[不变量改写](../../../references/api/numerics.md#prove-an-invariant-before-removing-work)与[特例资格](../../../references/workflows/authoring.md#generalization-and-specialization)。
+本例实际维护完整矩阵，只示范外积递推的驻留与 D 容量/R、T 实际范围；秩一矩阵多项式降为标量需要另一份算法与数值证明。
+
 example-query: {"aliases": ["gated outer-product recurrence", "on-chip recurrent matrix state", "门控外积状态递推"], "facets": {"source_dtype": ["FP16", "FP32"], "destination_dtype": ["FP32"]}}
 
 q/k/v 为 FP16 [R,T,D]，g 为 FP32 [R,T]，s0 为 FP32 [R,D,D]。

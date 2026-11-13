@@ -19,7 +19,7 @@
 #   3. --quick 模式:    每次 repeat 只采集 kernel 时间（既有行为）；传 manifest 时逐 case 严格归属
 #   4. --batch 模式:    批量扫描目录下的多个算子子目录，并行执行对比测试；算子目录提供
 #                       PERFORMANCE_CASES.json 或传入 map 时启用 manifest 证据批，否则保持
-#                       既有 batch（flock 锁 + ASCEND_RT_VISIBLE_DEVICES）
+#                       非 manifest 批处理（ASCEND_RT_VISIBLE_DEVICES 轮转，允许共享设备）
 #
 # Usage (标准模式):
 #   bash msprof_profile_run.sh [--warm-up=N] [--output=<dir>] -- python3 test_op.py
@@ -179,7 +179,7 @@ Usage: bash msprof_profile_run.sh [OPTIONS] -- python3 test_op.py [args...]
   默认读取每个算子目录必需的 PERFORMANCE_CASES.json。
   同构 batch 可传全局 --op-name；异构 batch 必须传 --op-name-map。
   同时接受对比模式的 --case-arg/--case-env、--repeats、可选 --seed 以及 --retry、--keep-prof，
-  并原样透传到每个算子。未启用证据批时保持既有行为（flock 锁 + ASCEND_RT_VISIBLE_DEVICES）。
+  并原样透传到每个算子。未启用证据批时按 ASCEND_RT_VISIBLE_DEVICES 轮转，允许共享设备。
 
 脚本会按顺序用 msprof 采集 7 个 aic-metrics:
   PipeUtilization, ArithmeticUtilization, Memory, MemoryL0, MemoryUB,
@@ -575,15 +575,12 @@ run_batch_manifest() {
 
 
 # ============================================================================
-# 批量模式（既有流程）：flock 锁 + ASCEND_RT_VISIBLE_DEVICES 轮转
+# 非 manifest 批量模式：限制总并发，按 ASCEND_RT_VISIBLE_DEVICES 轮转，允许共享设备
 # ============================================================================
 run_batch_legacy() {
     BASE_DIR="$(cd "$BASE_DIR" && pwd)"
     LOG_FILE="${BASE_DIR}/batch_performance.log"
     : > "$LOG_FILE"
-
-    LOCK_DIR="/tmp/ascend_locks_$$"  # kb-integrity: allow-path (a device lock shared across runs; per-cwd would not mutually exclude)
-    mkdir -p "$LOCK_DIR"
 
     device_id=$DEVICE_START
 
@@ -596,25 +593,10 @@ run_batch_legacy() {
                 sleep 0.5
             done
 
-            # 寻找空闲设备
-            while true; do
-                lock_file="$LOCK_DIR/device_${device_id}.lock"
-                if ! ( set -o noclobber; flock -n 200 ) 200>"$lock_file" 2>/dev/null; then
-                    device_id=$(( (device_id % 7) + 1 ))
-                    sleep 0.2
-                else
-                    break
-                fi
-            done
-
-            echo ">>> 锁定设备 $device_id 并启动算子: $folder_name" | tee -a "$LOG_FILE"
+            echo ">>> 使用设备 $device_id 启动算子: $folder_name" | tee -a "$LOG_FILE"
 
             # 启动后台任务
             (
-                lock_file="$LOCK_DIR/device_${device_id}.lock"
-                exec 200>"$lock_file"
-                flock 200
-
                 export ASCEND_RT_VISIBLE_DEVICES=$device_id
 
                 # 调用对比模式
@@ -631,8 +613,6 @@ run_batch_legacy() {
     done
 
     wait
-    rm -rf "$LOCK_DIR"
-
     echo "所有并行任务已执行完毕，日志已保存至 $LOG_FILE"
 
     # 生成批量汇总报告

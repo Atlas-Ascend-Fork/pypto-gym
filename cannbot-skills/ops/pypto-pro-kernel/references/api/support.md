@@ -1,16 +1,10 @@
 # Supporting interfaces and version-scoped findings
 
-**All eight examples were run on board** (2026-09-28, Ascend950PR). The examples are in [`examples/basic_api/support/`](../../examples/basic_api/support/). **At the close of this chapter, all 40 examples in the example plan had been implemented.**
+**Calibration context:** Ascend950PR, 2026-09-28. Individually stated behavior versions and toolchains qualify their own findings; these measurements do not establish acceptance on a different runtime.
 
-`debug_probe` and `dtype_carriers` were delivered in batch 1 (you need `printf` and a low-precision carrier table on the first day of writing VF); their findings are in §13 / §14 at the end. Sections 2–12 cover the six examples from batch 6.
+## 1. Supporting interface examples
 
-The contract table is in [`tooling/example-coverage.md`](../tooling/example-coverage.md).
-
-## 1. Responsibilities of the Eight Examples
-
-The six examples in batch 6 are `spr_ctrl` (CTRL bitfields), `saturation` (saturation flags), `block_grid` (core/subcore indices), `scalar_const` (scalars and compile-time constants), `entry_and_loop` (`pl.jit` / `pl.pipeline` / `pl.range`), and `layout_table` (legal layout combinations). The two examples delivered in batch 1 are at the end: `debug_probe` (§13) and `dtype_carriers` (§14).
-
-**None of the `spr_ctrl` and `saturation` APIs has an ST**—those two examples probe behavior from scratch rather than copying an ST. See [`tooling/example-coverage.md`](../tooling/example-coverage.md) for the contract table; use `pytest examples/basic_api/support -q` for the current test count.
+[`examples/basic_api/support/`](../../examples/basic_api/support/) covers CTRL bitfields (`spr_ctrl`), saturation flags, block/subcore indexing (`block_grid`), scalar constants, entry/loop forms, layout combinations, debug probes and dtype carriers. Sections 13 and 14 own the last two topics. The [coverage table](../tooling/example-coverage.md) maps contracts to examples; run the relevant tests on the selected toolchain for current acceptance.
 
 ## 2. CTRL Register: Entry Value Differs from the Documented Default
 
@@ -64,6 +58,8 @@ If passing `saturate=ON` to `astype` has no effect, the first instinct is to thi
 ## 5. `get_subblock_num` Depends on Whether the Kernel Has a Cube Section
 
 When porting a work partition, verify block and subblock indices on the target with the same kernel sections. A `pl.store` keyword or the presence of a Python API cannot establish the divisor for worker ownership.
+
+The native launcher resolves the automatic block count from the executing stream's core budget and the compiled kernel's engine requirements. An explicit `kernel[None, W]` must fit that stream's block budget; the current `runtime/jit.py` reports an over-budget request before launching it. A device-wide core count alone does not establish the stream's available budget. Use the automatic launch for an initial legal control or establish the actual limit before comparing explicit worker counts; legality does not establish the fastest count.
 
 | Kernel | `subblock_num` | `subblock_idx` (4 blocks) |
 | --- | ---: | --- |
@@ -221,6 +217,8 @@ One related point: only `pl.trap` unconditionally terminates execution; **give i
 ## 14. `dtype_carriers`: Dtype Carriers and Transfer Table
 
 Bit-width groups for each dtype, formulas for 69 combinations, the `HF8→uint8` mapping, and three independent confirmations for 4-bit formats are all in [`examples/basic_api/support/dtype_carriers/`](../../examples/basic_api/support/dtype_carriers/test.py). This page keeps only cross-example findings—**four constraints that affect how other chapters declare tensors**:
+
+Host and native dtype objects belong to different interfaces. In a Torch wrapper, compare `x.dtype` with `torch.float32` (and other Torch dtypes); use `pl.DT_FP32` in native `pl.Tensor` / `pl.TileType` declarations. Equality between a Torch dtype and a PyPTO `DataType` enum does not validate a compatible input.
 
 | Fact | Affected |
 | --- | --- |

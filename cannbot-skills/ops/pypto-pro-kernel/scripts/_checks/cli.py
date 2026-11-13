@@ -641,25 +641,6 @@ def main(argv: list[str] | None = None) -> int:
         help="PyPTO source repository; defaults to PYPTO_SRC or pypto/ beside the skill",
     )
     sub = parser.add_subparsers(dest="command")
-    mcp = sub.add_parser(
-        "mcp", help="Serve the existing JSON CLI as local MCP tools over stdio"
-    )
-    mcp.add_argument(
-        "--workspace",
-        type=Path,
-        default=Path.cwd(),
-        help="Default working directory for all tool calls",
-    )
-    mcp.add_argument(
-        "--context-policy",
-        type=Path,
-        help="Fixed context roots and read/search budgets",
-    )
-    mcp.add_argument(
-        "--python",
-        type=Path,
-        help="Interpreter for CLI children; defaults to the server interpreter",
-    )
     for operation in ("search", "read"):
         io = sub.add_parser(
             operation, help="Bounded source search/read with explicit paths"
@@ -715,12 +696,6 @@ def main(argv: list[str] | None = None) -> int:
         "--config",
         action="store_true",
         help="Print the hook configuration without enabling it",
-    )
-    mcp.add_argument(
-        "--timeout-seconds",
-        type=float,
-        default=120,
-        help="Whole-call timeout ceiling, up to 3600 seconds",
     )
     recommendations = sub.add_parser(
         "suggest",
@@ -1080,25 +1055,6 @@ def main(argv: list[str] | None = None) -> int:
             )
             print(host_io.encode(result))
             return 2
-
-    if args.command == "mcp":
-        try:
-            from . import mcp_server
-
-            mcp_server.run(
-                workspace=args.workspace,
-                python=args.python,
-                timeout_seconds=args.timeout_seconds,
-                pypto_root=args.pypto_root,
-                examples_root=args.examples_root,
-                context_policy=args.context_policy,
-                cards_root=args.cards_root,
-            )
-        except (ImportError, OSError, ValueError) as exc:
-            parser.error(
-                f"MCP startup failed: {exc}. Use Python 3.10+ with scripts/requirements-mcp.txt."
-            )
-        return 0
 
     if args.command == "claim":
         try:

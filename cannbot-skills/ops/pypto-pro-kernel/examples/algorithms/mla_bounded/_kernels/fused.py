@@ -354,6 +354,7 @@ def make_fused(
             dtype=dtype,
             target_memory=pl.MemorySpace.Vec,
             layout=pl.NZ,
+            compact=0,
         )
         lo = pl.make_tile_group(
             type=lo_type, addrs=8 * half * key_block, mutex_ids="auto", depth=1
@@ -363,6 +364,7 @@ def make_fused(
             dtype=dtype,
             target_memory=pl.MemorySpace.Vec,
             layout=pl.NZ,
+            compact=0,
         )
         hi = pl.make_tile_group(
             type=hi_type,

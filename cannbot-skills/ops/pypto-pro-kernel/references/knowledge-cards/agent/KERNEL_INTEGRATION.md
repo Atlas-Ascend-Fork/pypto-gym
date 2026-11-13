@@ -47,4 +47,4 @@ python scripts/check.py --cards-root references/knowledge-cards query cube-06 --
 python scripts/check.py --pypto-root "$PYPTO_SRC" --cards-root references/knowledge-cards query --validate --format json
 ```
 
-For subsequent reads and continuations, reuse the returned request and file-content SHA-256 (`source_sha256`). Keep the same selected roots for CLI and MCP calls. An unavailable external framework is a coverage limitation, not evidence of an absent API. For exact document IDs, candidate grouping and continuation reads see [optimization tooling](../../tooling/optimization.md#optional-performance-card-source).
+For subsequent reads and continuations, reuse the returned request and file-content SHA-256 (`source_sha256`). Keep the same selected roots for CLI calls. An unavailable external framework is a coverage limitation, not evidence of an absent API. For exact document IDs, candidate grouping and continuation reads see [optimization tooling](../../tooling/optimization.md#optional-performance-card-source).

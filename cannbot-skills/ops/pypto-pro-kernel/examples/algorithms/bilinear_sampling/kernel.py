@@ -8,6 +8,10 @@
 
 """写法：原始。原生 SIMT 双线性采样，使用带边界判定的四邻点读取。
 
+机制：[元数据计划](../../../references/patterns/stable-placement.md#separate-reusable-metadata-from-payload-execution)、[离散决策](../../../references/api/numerics.md#certify-a-discrete-decision-before-taking-a-fast-path)和[布局成本](../../../references/patterns/vf-neighborhood.md#compare-layouts-from-actual-access-sets)。
+本例复用各 lane 的坐标状态，测试覆盖 floor 邻域；没有跨通道共享全局计划或区间证书修复。新增路线须保留原始坐标并独立验证选点、尾部和完整调用。
+既有 group_width/threads 控制的 Host 选择器属于[配置族选型](../../../references/workflows/optimization.md#distinguish-family-selection-from-an-implementation-change)；独立描述符 producer 与消费阶段才是另一种实现组织，须另证生命周期和完整成本。
+
 一组线程共享逻辑采样点，各 lane 在自己的寄存器中复用坐标、权重和有效位。
 商余映射给每个输出唯一写者，输入只读，不需要线程间交换或屏障。
 整数合法点直接搬运；其他坐标逐邻点零延拓，输出不依赖旧值。

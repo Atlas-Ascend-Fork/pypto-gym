@@ -22,8 +22,9 @@ Choose the current workflow from [SKILL.md](../SKILL.md), then consult the match
 | Implement a kernel | [Contract, resources, implementation and verification](workflows/authoring.md) |
 | Compilation failure, incorrect results or a hang | [Symptom-driven debugging](workflows/debugging.md) |
 | Numerically correct; only device timing is needed | [Native-task timing](verification/native-timing.md) |
-| Numerically correct; optimization is needed | [Experiment selection and complete-call comparison](workflows/optimization.md) |
-| Structurally limited; micro-tuning stalled | [Forced structural review and reachable target](workflows/structural-review.md) |
+| Numerically correct; optimization is needed | [Experiment selection and complete-call comparison](workflows/optimization.md); use [mechanism owners and native anchors](tooling/examples.md#mechanism-routes) to implement a concrete alternative |
+| Reuse optimization knowledge from another frontend | [Residency/representation/publication review](workflows/optimization.md#review-residency-representation-and-publication); rederive [byte footprints](api/datamove.md#derive-physical-accesses-in-bytes), [repeated-reader lifetimes](api/crosscore-sync.md#one-payload-with-several-physical-readers) and [native-reference qualification](api/numerics.md#calibrate-mathematical-and-native-references-separately) |
+| A target or unresolved cost needs deeper structural investigation | [Expanded structural review and reachable target](workflows/structural-review.md) |
 | Optimize with a coverage requirement | [Enumerate, close and record known methods](workflows/optimization-coverage.md) |
 | Prepare an operator handoff | [Delivery target and policy selection, native implementation and final validation](workflows/delivery.md) |
 
@@ -72,6 +73,7 @@ Choose the current workflow from [SKILL.md](../SKILL.md), then consult the match
 | VF | [vf.md](api/vf.md): [loop specialization and runtime control](api/vf.md#keep-runtime-dispatch-out-of-vf-loops), physical masks/conversions, register bindings, implicit input destinations, reductions and measured precision |
 | SIMT | [simt.md](api/simt.md): two launch levels, static shapes, grid coverage, mathematical precision and atomics |
 | Data movement and views | [datamove.md](api/datamove.md): offset units, padding, valid shapes, strides, SSBUF and barriers |
+| Per-transfer L2 hints and stream reuse | [Versioned directional enums and per-stream comparison](api/datamove.md#per-stream-l2-policy); sampling flushes have a separate [protocol identity](verification/native-timing.md#preserve-evaluator-and-cache-protocol-identity) |
 | Fixpipe | [fixpipe.md](api/fixpipe.md): final output conversion, on-path quantization, scale/offset, dual modes and dtype/layout combinations |
 | Supporting interfaces | [support.md](api/support.md): CTRL, SPR, blocks, dtype carriers, layout checks, debug probes and bounded tensor-collection interface candidates |
 | Quantized computation | [quantization.md](api/quantization.md): integer-to-floating epilogues, dynamic row scales, W8A16 routes and dequantization placement |
@@ -85,7 +87,7 @@ Choose the current workflow from [SKILL.md](../SKILL.md), then consult the match
 | Tests pass but results may still be wrong | [Validation traps](diagnostics/validation-traps.md) |
 | Missing warnings, inaccurate locations or broken error matching | [Diagnostic messages and locations](diagnostics/messages.md) |
 | Unmatched frontend/lowering errors, upstream ST or combined regression failures | [Regression leads](diagnostics/regressions.md); historical behavior is not a skip whitelist |
-| Task durations are known but the bottleneck needs explanation | [Performance diagnosis](diagnostics/performance.md): pipe counters, timelines, bandwidth and critical paths; collect per-core and 7-group evidence through [performance collection](tooling/performance-collection.md) |
+| Task durations or profiling output need to guide the next optimization | [Profiling feedback loop](workflows/optimization.md#turn-profiling-into-the-next-implementation-decision), [profile selection and metric checks](diagnostics/performance.md#choose-the-next-profile-by-the-unresolved-question), and [conditional work models](diagnostics/performance.md#model-the-current-mapping-without-declaring-a-hardware-limit); use [performance collection](tooling/performance-collection.md) for per-core and metric-group captures |
 | Calibrating an A5 compute or memory ceiling | [A5 roofline calibration](diagnostics/a5-roofline.md): installed SKU configuration, rate units and matched bandwidth calibration |
 | A specific framework defect is suspected | [Defect references](diagnostics/defects/); start Fixpipe cases at the [disposition overview](diagnostics/defects/fixpipe-overview.md) |
 
@@ -106,7 +108,7 @@ Choose the current workflow from [SKILL.md](../SKILL.md), then consult the match
 | Need | Reference |
 | --- | --- |
 | Static checks, knowledge/API/document lookup, Markdown links and source-reference checks | [Script entry](../scripts/check.py); [usage and limits](tooling/checks.md), [original documents and docstrings](tooling/checks.md#official-documents-guides-and-docstrings), [knowledge admission and refresh](tooling/checks.md#knowledge-admission-and-refresh) |
-| The same CLI tools through an agent host | [CLI/MCP modes and fallback](tooling/checks.md#cli-and-mcp-modes); [MCP setup](tooling/mcp.md), output budgets and execution lifecycle |
+| Execution context, pending commands and recovery | [CLI execution contract](tooling/checks.md#cli-execution-contract), bounded context reads and existing execution receipts |
 | Source-pattern candidates, measured-cost ranking and recoverable best/current state | [Optimization tools](tooling/optimization.md); verifier inputs, evidence gates and bounded scratch state |
 | Discovering complete programs, reading independent references/tests, and admitting examples | [Shared program query](tooling/checks.md#complete-example-programs); [example catalog and conventions](tooling/examples.md) |
 | Find performance knowledge | Browse the [card index in Chinese](knowledge-cards/index.md) or use [card retrieval and relationships](knowledge-cards/agent/KERNEL_INTEGRATION.md). |
@@ -123,6 +125,7 @@ This skill bundles its knowledge, tools and examples. Framework source and the i
 - Workflows describe the next action and reading conditions. Computation patterns, API facts, diagnostics and verification methods have their own owners. Maintain each fact once and link to it elsewhere.
 - Organize API references by family or mechanism. Preserve the distinct evidence and version boundaries of official contracts, installed source and measured behavior; sharing a directory does not make them interchangeable evidence.
 - Summarize knowledge that transfers across examples. Keep individual details in native `kernel.py` / `test.py` files. Link to executable code, official framework material, machine configuration at their owners instead of copying them.
+- Keep distributed guidance self-contained in native Pro contracts, selected toolchain evidence and bundled examples. Omit unrelated project names and private source trees; keep source-project provenance at its original owner instead of importing it into this skill.
 - Do not maintain historical pass counts, experiment ledgers or superseded reasoning narratives. Retain current conclusions, necessary counterexamples and applicability conditions; a historical pass is not current acceptance.
 - Prefer source symbols over line numbers. Bind necessary line references to a version. Link checks do not establish agent effectiveness or hardware performance.
 - When changing knowledge metadata, sources, paths or headings, update incoming links, relative paths, anchors and tool consumers together. Run the shared [knowledge admission gate](tooling/checks.md#knowledge-admission-and-refresh) with `check.py query --validate --format json`; check representative discovery, resolution and repaired/invalid inputs through the affected interfaces. Use explicit `check.py links` inputs for repository documents outside the selected references and run `check.py srcrefs` when source references are affected. `srcrefs` is heuristic: assess items individually rather than renumbering in bulk.

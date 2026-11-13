@@ -8,6 +8,9 @@
 
 """写法：原始。原生 VF LayerNorm backward，两个归约方向分别分配输出所有权。
 
+机制：[逐输出精度与owner](../../../references/patterns/multi-output-reductions.md#choose-arithmetic-independently-for-each-output)。
+本例提供不同归约方向的原生控制；迁入其他多输出任务时，逐输出重算误差链、表示和近零条件，保留各自独立判据，再比较共享遍历与完整调用。
+
 契约：连续 FP32 x/dy[M,N]、gamma[N]、mean/rstd[M]，输出 dx[M,N]、dgamma/dbeta[N]。
 严格使用传入的 FP32 统计量，不在 kernel 或 Host 重算前向统计量；Host 仅做形状视图与调度。
 dx 按行分工，参数梯度按列块分工。后者一次搬入二维块，在 VF 内逐行累加独立 lane，统计量用 BRC_B32 广播。

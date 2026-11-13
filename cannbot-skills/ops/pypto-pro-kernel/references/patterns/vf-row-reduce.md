@@ -8,6 +8,26 @@ Each output row depends only on its own input row through one or more full-row r
 
 **Register width scales with the tile dtype** (256-byte physical register): FP32 source = 64 lanes per `load_align`, FP16 source = **128** — the `VL=64` constant in the worked fillings is FP32-specific. For FP16 source data needing FP32 math, the order-preserving widening is **`load_align(..., dist=pl.LoadDist.UNPK)`** (64 contiguous FP16 into the low half of 64 b32 containers, source order kept) followed by `astype(dtype=FP32, layout=ZERO)`. Before applying the 64-lane computation, derive the widening predicate from the [physical-container mask contract](../api/vf.md#213-the-fp32-path-for-fp16-source-data-order-preserving-widening-with-unpk-required-reading): an FP16 prefix of the logical count masks off half the expanded values. Plain load + widening `astype` instead silently even/odd-subsamples the source. Worked example: `examples/algorithms/rmsnorm_gemm`.
 
+<!-- kernel-query: {"id":"vf-row-reduction-costs","aliases":["row reduction tails","row normalization work","residual normalization tails","逐行归一化尾部"],"term_groups":[["rmsnorm","rms norm","row reduction","行归约"],["tail","padding","residual","尾","填充","残差"]],"example":"algorithms/layernorm/kernel.py","when":"Mapping independent row reductions, rectangular tails and dependent residual/normalization phases. The linked LayerNorm is a native API/dataflow anchor, not the RMSNorm formula.","missing_facts":["Preserve the actual formula/dtype, compare reduction frequency, padding and batching, trace input/state/output lifetimes, and measure the declared tail and aligned regimes."]} -->
+## Plan the row work before choosing a template
+
+Keep the task's formula and rounding: LayerNorm's mean subtraction and a quantizer's required FP16 intermediate do not belong to a plain FP32 residual RMSNorm. Use their native declarations as mechanism references only when those mathematical differences are explicit.
+
+Inspect these sites in the first correct source. Choose the largest plausible removable cost, compare one structural control at fixed workers, then retune launch configuration. A worker sweep alone does not test these costs.
+
+| Source structure | First comparison and boundary |
+| --- | --- |
+| Horizontal `reduce_sum` inside the feature-block loop | [Accumulate lanes across blocks, then reduce](#choose-the-horizontal-reduction-frequency). For `K` blocks this can replace `K` horizontal reductions by one. Preserve tail neutrality and validate the changed summation order with the original tolerance. |
+| A separate load→VF→store sequence for every short row | [Batch independent rows](#batch-independent-rows-even-when-each-row-fits) in a tile/VF call. Include a modest coarser batch; account for capacity, partial batches and the busiest worker's actual rows. |
+| One scalar `setval` per padded element | Compare [bulk `fillpad`](../api/datamove.md#3-fillpad-requires-three-pieces-in-three-places-omitting-one-leaves-valid-data-surrounded-by-garbage) at the original valid extent. Masked consumers may need no fill; the sentinel must remain neutral through the actual arithmetic. |
+| The input tile also carries retained state and the final output | When capacity permits, compare [independent input and state/output buffers](../api/memory-allocation.md#independent-buffers-and-slot-depth) at the same batch and workers. In-place residual/output updates keep the input slot live through apply and GM store; its next load must wait. `auto_mutex` preserves that dependency. A larger batch or a fused VF does not remove it; account for the extra UB before selecting the smaller tile count. |
+| The apply phase reloads or recomputes the same residual/intermediate | Compare [retaining it in UB](#choose-where-dependent-phases-share-state) at fixed batching. Separate producer/consumer VF calls can remain in one native task; fewer source calls do not establish lower cost. |
+| A VF reloads bytes it previously stored | Resolve the [same-VF memory dependency](../api/vf.md#212-multiple-memory-accesses-to-the-same-tile-inside-vf-have-no-ordering-guarantee): use the required VF ordering or separate TileGroup-tracked VF calls. Proved disjoint physical accesses need no store-to-load barrier. Passing numerics and `auto_mutex` do not prove intra-VF ordering. |
+
+Time the declared tail/small-work and aligned/large-work regimes before freezing a selector. Numerical coverage of a shape does not supply its timing. Keep the task's arithmetic, rounding and acceptance unchanged; a rejected structural control remains useful evidence, not a requirement to adopt it.
+
+The sections below own the detailed ownership, capacity, padding and numerical conditions. The [LayerNorm example](../../examples/algorithms/layernorm/) supplies an executable row/padding API anchor; [residual RMS quantization](../../examples/algorithms/residual_rms_quant/) owns its different FP16-rounding and integer-output contract.
+
 ## Logical dataflow
 
 GM row block → UB tile (padded width) → per row: reduce(s) → scalar chain (sqrt/log/div…) → broadcast-apply over the row → store back only the valid columns.
@@ -53,6 +73,15 @@ If any per-row output is a value, index, count or statistic, read [patterns/vf-s
 For runtime row metadata (length, segment bound, scale), `pl.getval(tensor, linear_element_offset)` reads a scalar directly from GM in the outer SIMD kernel; pass that scalar as a VF argument. This is a simple starting point for isolated control values. For batches of reused metadata, compare it with the [UB batch-and-broadcast route](vf-outer-reduce.md#metadata-and-invariant-inputs). Signature and integer promotion: official getval contract (`pypto/docs/zh/api/pro_api/SIMD-API/transpose_and_element_access/getval.md`).
 
 For uneven row counts, define ownership together with the host launch. In a pure vector kernel, `pl.range(pl.get_block_idx(), ROWS, pl.get_block_num())` gives every row one owner. Launch a bounded `WORKERS` with `kernel[None, WORKERS](...)`; pure Vector has `get_subblock_num()==1`, not two. Start with one worker, then test several workers and a row count that does not divide them. Mixed cube/vector kernels use a different index mapping ([primer](../workflows/getting-started.md)).
+
+<!-- kernel-query: {"id":"small-matrix-lane-map","aliases":["small matrix lane mapping","paired column epsilon","register resident Sinkhorn"],"when":"A batch of small matrices repeatedly normalizes rows and columns or keeps dependent iterations in registers.","missing_facts":["Map matrix/row/column to register, lane and physical predicate; preserve reduction groups, combine paired partials before epsilon, and compare the complete iteration chain."]} -->
+### Small matrices: map lanes and dependent normalizations together
+
+For many independent small matrices, compare a lane-owned matrix with entries kept in separate registers against a layout placing a reduction axis across lane groups. In the first design, columns/rows become register choices and reductions become short register chains; in the second, they use explicit within-group exchanges/reductions. A third candidate can pair two columns in the low/high register halves. Write `(matrix, row, column) → (register, lane, physical predicate bit)` for every stage; changing the layout changes the reduction participants and the broadcast map, not the mathematical axes.
+
+If two halves hold partial sums for the same denominator, combine them before applying its nonlinear step or adding epsilon. `(s0 + s1) + eps` differs from `(s0 + eps) + (s1 + eps)`. Enable both halves in a paired predicate, keep neighboring matrices outside the group, and define incomplete groups independently. The two-half trick is a mapping candidate, not a claim that a particular Pro reduction/gather API implements it automatically; check the selected port and exchange contracts.
+
+Budget live registers and explicit UB scratch across all dependent iterations. A register-resident matrix can remove repeated UB traffic while an expanded implementation can spill or increase scheduling cost. Test nonsymmetric matrices, dimensions around the packing boundary, epsilon-dominated rows, tails and repeated calls; validate every normalization step and the final output. Compare the complete resident sequence with the existing tiled control rather than extrapolating one reduction's timing.
 
 ## When a full row does not fit
 

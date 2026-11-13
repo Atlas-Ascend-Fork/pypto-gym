@@ -6,7 +6,7 @@
 # INCLUDING BUT NOT LIMITED TO NON-INFRINGEMENT, MERCHANTABILITY, OR FITNESS FOR A PARTICULAR PURPOSE.
 # See LICENSE in the root of the software repository for the full text of the License.
 
-"""Bounded, explicit-scope source reads shared by CLI, MCP and a host hook.
+"""Bounded, explicit-scope source reads shared by CLI and a host hook.
 
 These operations constrain their own reads. They do not sandbox arbitrary Python,
 native imports or shell commands offered by the calling host.
@@ -499,7 +499,7 @@ def search(
                             :300
                         ].strip()
                         raise ValueError(
-                            "ripgrep rejected the search pattern or source; for literal code, use CLI --fixed or MCP fixed=true. "
+                            "ripgrep rejected the search pattern or source; for literal code, use search --fixed. "
                             + detail
                         )
                     result["coverage"]["scan_bytes"] += size

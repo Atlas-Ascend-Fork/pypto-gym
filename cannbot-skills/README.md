@@ -49,7 +49,7 @@ python scripts/check.py
 
 完整知识准入和 API 核对需要用 `PYPTO_SRC` 或 `--pypto-root` 指定匹配目标安装版本的外部源码树；缺少该来源时保留 `unverified`，不将 API 缺失当作事实。`rules`、`coverage`、`catalog` 和 `links` 可独立使用，源码相关检查仍会说明未核对的范围。上板样例需要对应的 PyPTO、PyTorch、torch_npu 和 Ascend NPU 环境；该 skill 不包含仿真器。
 
-`scripts/check.py query` 统一检索契约、API、原始文档和完整样例，`query --validate` 检查知识准入，`links` 检查内置 Markdown 链接与标题引用。`native` 通过匹配安装版本的 PyPTO 进行元数据预检，`run` 执行调用方指定的验证命令，`suggest` 与 `experiment` 辅助优化候选和当前实验状态；这些结果不替代数值或性能验收。CLI 无需 MCP SDK；可选的 [MCP stdio 接口](ops/pypto-pro-kernel/references/tooling/mcp.md)复用同一实现。词法名称检查依赖 `scripts/requirements-checks.txt` 中固定版本的 Pyflakes。样例统一以 `kernel.py`、`reference.py`、`test.py` 为公开入口；Sparse Attention 的原始评估器对照额外需要 `CANN_BENCH_ROOT` 和可导入的 `kernel_eval`。
+`scripts/check.py query` 统一检索契约、API、原始文档和完整样例，`query --validate` 检查知识准入，`links` 检查内置 Markdown 链接与标题引用。`native` 通过匹配安装版本的 PyPTO 进行元数据预检，`run` 执行调用方指定的验证命令，`suggest` 与 `experiment` 辅助优化候选和当前实验状态；这些结果不替代数值或性能验收。工具通过 CLI 调用并提供结构化 JSON 反馈。词法名称检查依赖 `scripts/requirements-checks.txt` 中固定版本的 Pyflakes。样例统一以 `kernel.py`、`reference.py`、`test.py` 为公开入口；Sparse Attention 的原始评估器对照额外需要 `CANN_BENCH_ROOT` 和可导入的 `kernel_eval`。
 
 ### 安装后使用
 

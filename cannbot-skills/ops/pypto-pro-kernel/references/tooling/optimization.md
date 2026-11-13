@@ -19,6 +19,10 @@ The JSON feedback returns at most three candidates by default (`--limit` accepts
 
 Recipe fields live in the `candidate` object of the owning section's `kernel-query` marker, alongside the full explanation. Do not maintain a parallel candidate catalog or infer a rule from arbitrary prose. Missing matches mean only that these three families did not match; they are not evidence of a hardware ceiling. The command proposes comparisons, does not edit kernels and does not replace `rules`, `native` or numerical checks.
 
+Use the [structural candidate-generation procedure](../workflows/optimization.md#generate-a-concrete-alternative-from-the-computation) independently of these matches. The tool does not infer algebraic simplifications, cross-phase residence, alternative output ownership or the best publication boundary from arbitrary source. A returned local instruction candidate need not have higher priority than a source-grounded structural rewrite. `select_experiment` guidance asks for that review while preserving the caller's fixed-family scope; it does not certify or automatically execute the rewrite.
+
+Identify the [baseline family's controls](../workflows/optimization.md#distinguish-family-selection-from-an-implementation-change) and [expand the actual expressions](../workflows/optimization.md#derive-opportunities-from-actual-expressions) before ranking a local candidate. Existing-parameter selection can change realized ownership without implementing a new dataflow. The source detector does not perform that classification or prove a contraction invariant; the workload and complete producer expression remain necessary evidence.
+
 Optional `pypto-kernel-costs/1` input:
 
 ```json
@@ -40,7 +44,7 @@ Replace `profile` with the unchanged result of [`measure_pipes` or `measure_nati
 
 ## Optional performance-card source
 
-Pass `--cards-root references/knowledge-cards` before the command to search the [bundled Active cards](../knowledge-cards/index.md) from the skill directory (use an absolute path from elsewhere). Install `scripts/requirements-cards.txt` into the checker interpreter only when this optional source is used. The CLI and MCP keep this source opt-in; ordinary document search does not admit unregistered cards or contributor examples.
+Pass `--cards-root references/knowledge-cards` before the command to search the [bundled Active cards](../knowledge-cards/index.md) from the skill directory (use an absolute path from elsewhere). Install `scripts/requirements-cards.txt` into the checker interpreter only when this optional source is used. The CLI keeps this source opt-in; ordinary document search does not admit unregistered cards or contributor examples.
 
 ```bash
 python scripts/check.py --cards-root references/knowledge-cards query cube-06 --kind document --format json
@@ -53,13 +57,13 @@ Only files registered as stable in the Active table are collected. The provider 
 
 `coverage.documents.cards` reports `active_items`, `cards_read`, `linked_cards`, `unlinked_cards` and `relation_count`. The last three count only accepted cards and resolved relationships; an invalid card still contributes to the Active count and explicit errors. A readable card without relationships remains queryable. Complete reads and resolved links establish retrieval coverage, not implemented detectors or verified optimizations. Read the card's full conditions and capability gaps before choosing an experiment; a document relationship can cover only one prerequisite of a broader technique.
 
-For partial card content, pass the returned SHA-pinned `next` request to `read --request` / `kernel_read` with the same `--cards-root` configuration. This explicitly selected root is available to default context reads even outside the execution workspace. An explicit context policy's `roots` remains authoritative; include the card directory there when that policy should permit continuations.
+For partial card content, pass the returned SHA-pinned `next` request to `read --request` with the same `--cards-root` configuration. This explicitly selected root is available to default context reads even outside the execution workspace. An explicit context policy's `roots` remains authoritative; include the card directory there when that policy should permit continuations.
 
 `suggest` attaches directly linked cards to existing source-detected candidates as `related_cards`. `same_mechanism_only` groups references under that candidate without creating a duplicate, while specific candidate equivalence and current applicability remain `not_established`; other relationships are `reference_only`. A contract reference does not make every optimization inside the contract the same intervention. There are still only three source-pattern families: other cards need a query and explicit applicability judgment, not an invented source match or predicted speedup. Original card Markdown reads use `document:perf-cards/<registered-relative-path>`, with the same SHA-pinned read and source-sensitive cursor rules as other documents.
 
 ## Action-scoped guidance
 
-An explicit `--goal` on `query` or `suggest` adds `action_guidance` without execution, a new state file or a knowledge cache. MCP accepts the same `goal` on `kernel_query` and `kernel_suggest`. Goals are `select_experiment`, `native_probe`, `validate_numerics` and `compare_performance`. A controller task inventory may declare the same optional `goal`; a conflicting CLI/tool goal is invalid. The inventory still verifies only declared bytes and labels inline evidence as unauthenticated.
+An explicit `--goal` on `query` or `suggest` adds `action_guidance` without execution, a new state file or a knowledge cache. Goals are `select_experiment`, `native_probe`, `validate_numerics` and `compare_performance`. A controller task inventory may declare the same optional `goal`; a conflicting explicit goal is invalid. The inventory still verifies only declared bytes and labels inline evidence as unauthenticated.
 
 ```bash
 python scripts/check.py query acc-final-output --source candidate.py --goal select_experiment --format json
@@ -74,7 +78,7 @@ During an experiment, the existing best/current/phase state is authoritative. It
 
 ## Performance claim consistency
 
-`claim --spec /scratch/claim.json` and `kernel_claim({"spec":"claim.json"})` check a positive assertion or a supplied claim under review. They read declared snapshots and an explicit observation; they do not run kernels, update experiment state, authenticate a verifier or prove hardware performance. A decision making no performance claim does not require another query/check loop. The checker reuses the experiment's identity, numerical coverage and AB/BA retention gates.
+`claim --spec /scratch/claim.json` checks a positive assertion or a supplied claim under review. It reads declared snapshots and an explicit observation; it does not run kernels, update experiment state, authenticate a verifier or prove hardware performance. A decision making no performance claim does not require another query/check loop. The checker reuses the experiment's identity, numerical coverage and AB/BA retention gates.
 
 ```json
 {
@@ -106,7 +110,7 @@ Initialization refuses an existing state. Selection replaces the current trial, 
 
 Declare every executable local dependency: entry, wrappers, helpers, dynamic imports, reference/comparator and relevant non-Python inputs. Installed libraries belong to toolchain identity. Dependencies are not inferred through imports. Source snapshots are bounded to 64 files and 2 MiB per variant and preserve relative paths; external dependencies must be represented in the toolchain record or explicitly copied into the declared root. Editing or deleting the original work files does not destroy best. Byte hashes include filenames, entry and configuration, so changing only a specialization also changes identity; that alone does not prove a structural optimization.
 
-The selection count is a search bound, not a device-request/time/token counter. Host execution quotas, device locks and timeouts remain with the execution controller. Exhaustion stops further selections; completing current evidence and exporting best remain available. Scope or toolchain changes require a new plan and validation. Source/toolchain drift and malformed evidence fail without rewriting state; state integrity hashes detect accidental manual edits.
+The selection count bounds this experiment state, not the task's device-request/time/token allowance. Exhaustion stops further selections in that state; completing current evidence and exporting best remain available. A self-chosen state cap does not authorize ending the user's task: preserve/export best and arrange the next working batch when actionable hypotheses remain, retaining cumulative consumption. A genuine user/platform hard limit still forbids further work covered by that limit; never reset it through another state. See [limit provenance](../workflows/optimization.md#budget-and-candidate-identity). Host execution quotas, device selection and per-command timeouts remain with the execution controller. Scope or toolchain changes require a new plan and validation. Source/toolchain drift and malformed evidence fail without rewriting state; state integrity hashes detect accidental manual edits.
 
 ### Plan and selection
 
@@ -133,7 +137,9 @@ The selection count is a search bound, not a device-request/time/token counter. 
 }
 ```
 
-The example policy requires a gain greater than 2% and at least 70% paired wins in each order, with at least five pairs per order. These configurable screening thresholds are not a statistical significance claim; establish a suitable noise floor for the workload. The target metric is `native_task_sum_us` or `synchronized_wall_us`. Cases must specify the actual data regimes, launch geometry, input identity/generator and cache protocol relevant to the claim; the tool cannot discover omitted controls.
+The illustrative `max_trials=4` bounds one state file; it is not a recommended task-wide trial limit or evidence that four trials finish an optimization. Use the actual user/controller limit where one exists and keep local batching distinct from task completion.
+
+The example policy requires a gain greater than 2% and at least 70% paired wins in each order, with at least five pairs per order. These configurable thresholds are not a statistical significance claim or universal acceptance criteria. Choose them against valid workload noise evidence and the task's protocol; the workflow's [sampling policy](../workflows/optimization.md#screen-candidates-before-confirmation) governs reuse and additional collection. The target metric is `native_task_sum_us` or `synchronized_wall_us`. Cases must specify the actual data regimes, launch geometry, input identity/generator and cache protocol relevant to the claim; the tool cannot discover omitted controls.
 
 `selection.json` names the candidate snapshot and one testable hypothesis:
 
@@ -159,7 +165,7 @@ An execution controller can call `scripts/_checks/observations.py::capture` insi
 
 The adapter binds the executed specifications to best/current, reads every declared source dependency before and after callbacks, checks the unchanged state/toolchain/oracle, and validates the projected observation through the existing experiment gates. It publishes one new observation file and returns its identity; it does not mutate state. Import that artifact with `experiment --observe`. A failed or unrun numerical case suppresses timing; callback errors propagate without publishing a success record. Existing evidence is never overwritten.
 
-Callbacks own actual loading, execution, input/cache/worker matching and reference adequacy. They must load the declared bytes with ordinary source semantics and verify the actual native program. `evidence_kind` remains a declaration, not authentication. A generic command exit or model-authored JSON cannot supply the callbacks' numerical or timing acceptance. The adapter is available to both CLI and MCP execution controllers through their existing explicit `run` commands; it adds no transport-specific verifier.
+Callbacks own actual loading, execution, input/cache/worker matching and reference adequacy. They must load the declared bytes with ordinary source semantics and verify the actual native program. `evidence_kind` remains a declaration, not authentication. A generic command exit or model-authored JSON cannot supply the callbacks' numerical or timing acceptance. Execution controllers can invoke the adapter through an explicit `run` command; it adds no separate verifier.
 
 ### Verifier observation and retention
 

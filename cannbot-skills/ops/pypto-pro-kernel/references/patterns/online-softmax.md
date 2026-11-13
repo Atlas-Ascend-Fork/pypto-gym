@@ -53,6 +53,16 @@ Plan L1 and L0 blocks separately: retaining a large input block in L1 does not r
 
 For causal/window masks, include [runtime predicate construction](../api/vf.md#repeated-runtime-masks-in-vf-loops) in the layout comparison before tuning preload. Derive full, empty and boundary regions from logical query/key coordinates and each AIV's valid rows, including any folded head/position axes. This route covers block specialization, vector-maintained boundaries and MHA's precomputed triangular bias; a non-causal anchor does not establish their cost or validity.
 
+## Sparse keys and representative implementation comparisons
+
+For sparse attention, distinguish the original key coordinate from its position in the selected list. Apply causal/window predicates to the original coordinate, with the task's alignment convention. A dense membership route and a selected-row gather route implement the same set only under their declared duplicate/index rules. Sorting indices can combine contiguous DMA rows, but it also changes reduction order; preserve the original index buffer for a retry whose acceptance depends on that order. Include the sort, gather, detection and any retry launches in complete-call timing.
+
+Choose representative cases by the work they stress: a small query-head group sharing K/V across many query positions, and a wide head group reusing one selected K/V panel, can expose different score orientation, residency and publication costs. Match their numerical criteria before comparing dense-mask, gathered, transposed or resident paths. A `V == K[..., :Dv]` optimization is a data-content precondition, not a consequence of matching shape/dtype; a general independent-V task needs its own loads and lifetime plan. Keep runtime scale dynamic even when public shape/layout/causal values select a specialization.
+
+Include sparse-predicate construction and reuse in a score-layout comparison. A transpose can remove horizontal reductions yet introduce repeated predicate gathers or a second score pass. Similarly, a larger gathered panel may require a different shared L0 K/N geometry and fewer live handover slots; fewer panels alone do not establish that losing overlap is worthwhile.
+
+The [sparse attention example](../../examples/algorithms/sparse_attention/) provides dense-mask and selected-row controls with the same independent reference. Its actual receiving shapes, buffer depths, configurations and verification scope remain in the source and tests; its selection rules do not establish a universal fastest route.
+
 ## Numerical acceptance (template)
 
 Use the original mathematical reference and tolerance. If the task permits deriving a bound, include score accumulation, exponential approximation, coefficient narrowing, payload accumulation and finalization; the [flash-attention reference](../../examples/algorithms/flash_attention/) shows one such derivation. Do not make the reference adopt candidate-specific coefficient rounding without a contractual reason.

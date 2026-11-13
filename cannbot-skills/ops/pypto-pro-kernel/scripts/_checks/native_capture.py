@@ -72,6 +72,14 @@ class Capture:
     unknown_nodes: tuple[str, ...]
 
 
+def _ir_text(ir, program):
+    for name in ("text_dump", "python_print"):
+        printer = getattr(ir, name, None)
+        if callable(printer):
+            return printer(program)
+    raise RuntimeError("Native preflight requires an IR text printer")
+
+
 def _runtime():
     """Guard the private preparation interfaces before importing a user entry."""
     import pypto
@@ -85,7 +93,7 @@ def _runtime():
     required = (
         getattr(ir, "attributes_api_version", None) == 1
         and callable(getattr(ir, "get_attributes", None))
-        and callable(getattr(ir, "python_print", None))
+        and any(callable(getattr(ir, name, None)) for name in ("text_dump", "python_print"))
         and callable(parser)
         and "observer" in inspect.signature(parser).parameters
         and callable(prepare)
@@ -122,11 +130,12 @@ def _runtime():
 
 @contextmanager
 def _architecture(arch):
-    if arch != "a5":
+    name = str(getattr(arch, "name", arch)).strip().lower()
+    if name not in {"a5", "3510", "dav_3510", "npuarch.dav_3510"}:
         raise RuntimeError(
             f"Native preflight supports the current a5 frontend, got {arch!r}"
         )
-    selected = {"PYPTOPRO_JIT_ARCH": arch, "PYPTOPRO_NPU_ARCH": "dav-c310"}
+    selected = {"PYPTOPRO_JIT_ARCH": "a5" if name == "a5" else "3510", "PYPTOPRO_NPU_ARCH": "dav-c310"}
     previous = {key: os.environ.get(key) for key in selected}
     os.environ.update(selected)
     try:
@@ -258,7 +267,12 @@ def capture_ir(kernel, *args, config):
         )
         if not all(callable(getattr(kernel, name, None)) for name in required):
             raise ValueError("Expected a native @pl.jit Pro kernel")
-        arch = (kernel.arch or jit.get_current_arch()).strip().lower()
+        arch = kernel.arch or jit.get_current_arch()
+        normalize = getattr(jit, "normalize_arch", None)
+        if callable(normalize):
+            arch = normalize(arch)
+        elif isinstance(arch, str):
+            arch = arch.strip().lower()
         with _architecture(arch):
             key = dict(config.tiling_key) if config.tiling_key is not None else None
             if kernel.tilingkey_schema is not None:
@@ -300,7 +314,7 @@ def capture_ir(kernel, *args, config):
                         {
                             "target": target,
                             "active": bool(active),
-                            "ir": ir.python_print(program).replace(
+                            "ir": _ir_text(ir, program).replace(
                                 scratch, "<native-preflight>"
                             ),
                         }

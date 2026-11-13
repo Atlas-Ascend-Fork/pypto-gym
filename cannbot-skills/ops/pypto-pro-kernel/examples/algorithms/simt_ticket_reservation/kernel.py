@@ -15,7 +15,7 @@ counts[B] 和 tickets[N] 均覆盖旧内容，输入与两个输出互不重叠�
 combine_runs=True 合并同一线程实际 grid-stride 遍历中的相同 key 连续段。
 atomic_add 返回该段的起点，再回访段内位置写 base+rank；不需要线程私有数组。
 每个元素的 ticket 语义仍被保留；不支持观察逐项中间状态或更强顺序的调用者。
-接口依据 c46548e；目标 CANN 9.2.0 / Ascend950PR，数值验收见 test.py。
+atomic_add 显式接收 counts 与单轴元素坐标，返回更新前的 INT32 计数；数值验收见 test.py。
 example-query: {"aliases":["SIMT ticket ranges","SIMT batched reservation"],"term_groups":[["simt","atomic"],["ticket","reservation","票据"]]}
 """
 
@@ -56,7 +56,7 @@ def make_reservation(n, bins, threads=128, combine_runs=True):
         step = pl.simt.grid_dim().x * threads
         one = pl.simt.cast(1, I32)
         for i in pl.range(first, n, step):
-            tickets[i] = pl.simt.atomic_add(counts[keys[i]], one)
+            tickets[i] = pl.simt.atomic_add(counts, [keys[i]], one)
 
     @pl.vector_function(mode="simt", max_threads=threads)
     def range_body(keys, counts, tickets):
@@ -72,7 +72,7 @@ def make_reservation(n, bins, threads=128, combine_runs=True):
                 if key == run_key:
                     run_count = run_count + one
                 else:
-                    base = pl.simt.atomic_add(counts[run_key], run_count)
+                    base = pl.simt.atomic_add(counts, [run_key], run_count)
                     pos = run_start
                     ticket = base
                     while pos < i:
@@ -82,7 +82,7 @@ def make_reservation(n, bins, threads=128, combine_runs=True):
                     run_key = key
                     run_start = i
                     run_count = one
-            base = pl.simt.atomic_add(counts[run_key], run_count)
+            base = pl.simt.atomic_add(counts, [run_key], run_count)
             pos = run_start
             ticket = base
             while pos < n:
