@@ -455,6 +455,13 @@ if (ENABLE_OPS_HOST AND NOT PREPARE_BUILD)
         install(FILES ${ASCEND_IMPL_OUT_DIR}/dynamic/${_op_name}.py
                 DESTINATION ${_vendor_dir}/op_impl/ai_core/tbe/${VENDOR_NAME}_impl/dynamic OPTIONAL
                 COMPONENT ${VENDOR_NAME})
+        # 运行期重编(static kernel/SK)时 wrapper 按 dynamic/op_kernel/<op_file>.py 查找 DSL,
+        # 与构建期 src/<op>/op_kernel 布局保持一致; 多个算子共用该目录, 排除会互相覆盖的 __init__.py
+        install(DIRECTORY ${_op_dir}/op_kernel
+                DESTINATION ${_vendor_dir}/op_impl/ai_core/tbe/${VENDOR_NAME}_impl/dynamic
+                OPTIONAL COMPONENT ${VENDOR_NAME}
+                PATTERN "__pycache__" EXCLUDE
+                PATTERN "__init__.py" EXCLUDE)
         install(DIRECTORY ${_op_dir}/op_kernel
                 DESTINATION ${_vendor_dir}/op_impl/ai_core/tbe/${VENDOR_NAME}_impl/ascendc/${_op_name}
                 OPTIONAL COMPONENT ${VENDOR_NAME}
