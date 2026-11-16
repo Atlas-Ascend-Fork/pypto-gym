@@ -84,17 +84,25 @@ def test_declaration_metadata_and_single_pipe_are_not_race_proofs(tmp_path, body
     "body",
     [
         "    consume(tile,x,out)\n",
-        "    with pl.section_vector():\n        if flag:\n            pl.load(tile,x,[0,0])\n            pl.store(out,tile,[0,0])\n",
-        "    with pl.section_vector():\n        for row in pl.range(rows):\n            pl.load(tile,x,[row,0])\n            pl.store(out,tile,[row,0])\n",
+        "    with pl.section_vector():\n        if flag:\n           "
+        " pl.load(tile,x,[0,0])\n            pl.store(out,tile,[0,0])\n",
+        "    with pl.section_vector():\n        for row in pl.range(rows):\n       "
+        "     pl.load(tile,x,[row,0])\n            pl.store(out,tile,[row,0])\n",
         "    alias=tile\n" + COPY,
         "    tile=other\n" + COPY,
-        "    with pl.section_vector():\n        pl.load(tile,x,[0,0])\n        pl.system.bar_all()\n        pl.store(out,tile,[0,0])\n",
-        "    with pl.section_vector():\n        pl.load(tile,x,[0,0])\n        pl.system.sync_src(set_pipe=pl.PipeType.MTE2,wait_pipe=pl.PipeType.MTE3,event_id=0)\n        pl.store(out,tile,[0,0])\n",
+        "    with pl.section_vector():\n        pl.load(tile,x,[0,0])\n       "
+        " pl.system.bar_all()\n        pl.store(out,tile,[0,0])\n",
+        "    with pl.section_vector():\n        pl.load(tile,x,[0,0])\n       "
+        " pl.system.sync_src(set_pipe=pl.PipeType.MTE2,wait_pipe=pl.PipeType.MTE3,event_id=0)\n"
+        "        pl.store(out,tile,[0,0])\n",
         "    def helper():\n        consume(tile)\n    helper()\n",
         "    if flag:\n        return\n" + COPY,
-        "    with pl.section_vector():\n        return\n        pl.load(tile,x,[0,0])\n        pl.store(out,tile,[0,0])\n",
-        "    with pl.section_vector():\n        begin()\n        pl.load(tile,x,[0,0])\n        pl.store(out,tile,[0,0])\n        end()\n",
-        "    with pl.section_vector():\n        pl.load(tile,x,[0,0])\n        pl.store(wait_and_return(out),tile,[0,0])\n",
+        "    with pl.section_vector():\n        return\n       "
+        " pl.load(tile,x,[0,0])\n        pl.store(out,tile,[0,0])\n",
+        "    with pl.section_vector():\n        begin()\n       "
+        " pl.load(tile,x,[0,0])\n        pl.store(out,tile,[0,0])\n        end()\n",
+        "    with pl.section_vector():\n        pl.load(tile,x,[0,0])\n       "
+        " pl.store(wait_and_return(out),tile,[0,0])\n",
     ],
 )
 def test_incomplete_control_alias_or_manual_sync_evidence_is_advisory(tmp_path, body):

@@ -42,14 +42,14 @@ def api_uses(source):
             for alias in node.names:
                 if alias.name == PL_MODULE or alias.name.startswith(PL_MODULE + "."):
                     aliases[alias.asname or alias.name] = (
-                        "pl" + alias.name[len(PL_MODULE) :]
+                        "pl" + alias.name[len(PL_MODULE):]
                     )
         elif isinstance(node, ast.ImportFrom) and node.module and not node.level:
             if node.module == PL_MODULE or node.module.startswith(PL_MODULE + "."):
                 for alias in node.names:
                     if alias.name != "*":
                         aliases[alias.asname or alias.name] = (
-                            "pl" + node.module[len(PL_MODULE) :] + "." + alias.name
+                            "pl" + node.module[len(PL_MODULE):] + "." + alias.name
                         )
     targets = []
     for node in ast.walk(source.tree):
@@ -64,9 +64,9 @@ def api_uses(source):
         path = attribute_path(node)
         for alias in sorted(aliases, key=len, reverse=True):
             if path == alias or path and path.startswith(alias + "."):
-                name = aliases[alias] + path[len(alias) :]
+                name = aliases[alias] + path[len(alias):]
                 if name == "pl." + VF_CLASS or name.startswith("pl." + VF_CLASS + "."):
-                    name = "vf" + name[len("pl." + VF_CLASS) :]
+                    name = "vf" + name[len("pl." + VF_CLASS):]
                 result.setdefault(name, set()).add(node.lineno)
                 break
     return {name: sorted(lines) for name, lines in sorted(result.items())}

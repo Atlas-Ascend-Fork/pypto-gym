@@ -146,4 +146,3 @@ $X_{22}$ 为 $n_2\times n_2$。两次乘法有先后依赖，对角子块求解�
 ## 参考资料
 
 - [独立逻辑块打包](../recurrence/recurrence-02-pack-logical-chunks.md)
-- [操作数全链路审计](../../../../pypto-pro-precision-debug/references/operand-range-audit.md)

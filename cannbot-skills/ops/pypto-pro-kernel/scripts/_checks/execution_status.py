@@ -111,7 +111,8 @@ def inspect(receipt, *, request_id, source, wait_seconds=20, poll_seconds=1):
                     outcome="passed" if code == 0 else "failed",
                 )
                 result["next_action"] = (
-                    "Inspect this request's verifier evidence; process completion alone does not establish kernel correctness or performance."
+                    "Inspect this request's verifier evidence; process completion alone"
+                    " does not establish kernel correctness or performance."
                 )
                 break
             result["outcome"] = "pending"

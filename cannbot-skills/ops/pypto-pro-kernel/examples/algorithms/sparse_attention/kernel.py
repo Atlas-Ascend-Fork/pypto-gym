@@ -244,7 +244,7 @@ def make_kernel(
                     key_dim // 16
                 )
                 pl.load(
-                    packed[:, row * 16 : (row + 1) * 16],
+                    packed[:, row * 16: (row + 1) * 16],
                     key_fragments,
                     [source_row, 0],
                 )
@@ -405,7 +405,7 @@ def make_kernel(
                 for row in pl.range(half_queries):
                     pl.store(
                         output,
-                        result[row * heads : (row + 1) * heads, :],
+                        result[row * heads: (row + 1) * heads, :],
                         [b, qbase + sub * half_queries + row, head * heads, 0],
                         order=[2, 3],
                     )

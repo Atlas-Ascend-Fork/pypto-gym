@@ -35,7 +35,8 @@ def report(path, *, config, goal=None):
         data = json.loads(raw)
     except (json.JSONDecodeError, UnicodeDecodeError) as error:
         raise ValueError(
-            "query --task requires a pypto-task-context/1 JSON inventory, not task prose; use query TEXT for knowledge discovery"
+            "query --task requires a pypto-task-context/1 JSON inventory, not task"
+            " prose; use query TEXT for knowledge discovery"
         ) from error
     if not isinstance(data, dict) or data.get("schema") != "pypto-task-context/1":
         raise ValueError(
@@ -68,7 +69,10 @@ def report(path, *, config, goal=None):
             "numerical": "not_established",
             "performance": "not_established",
         },
-        evidence_limit="Controller declarations and checked file bytes only. Inline evidence is not a file to discover; labels do not authenticate verifier claims or establish kernel acceptance.",
+        evidence_limit=(
+            "Controller declarations and checked file bytes only. Inline evidence is"
+            " not a file to discover; labels do not authenticate verifier claims or establish kernel acceptance."
+        ),
     )
     result["coverage"].update(files_read=1, scan_bytes=len(raw))
     for item in inline:

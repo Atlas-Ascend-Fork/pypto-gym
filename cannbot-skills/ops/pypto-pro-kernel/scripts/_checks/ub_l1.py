@@ -340,7 +340,10 @@ def inspect(path: Path, *, pypto_root=PYPTO_ROOT):
                     ):
                         if uncertain and not advisory:
                             advisory = True
-                            message += " The containing control flow is unresolved; confirm the active specialization with native preflight."
+                            message += (
+                                " The containing control flow is unresolved; confirm"
+                                " the active specialization with native preflight."
+                            )
                         found.append(
                             Finding(path, node.lineno, rule, message, advisory=advisory)
                         )

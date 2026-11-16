@@ -44,7 +44,7 @@ def frontmatter(text):
     lines = text.splitlines()
     if not lines or lines[0] != "---" or "---" not in lines[1:]:
         raise ValueError("Card needs YAML frontmatter")
-    source = "\n".join(lines[1 : lines.index("---", 1)])
+    source = "\n".join(lines[1: lines.index("---", 1)])
 
     class CardLoader(yaml.SafeLoader):
         def construct_mapping(self, node, deep=False):
@@ -332,7 +332,9 @@ def collect(root, *, references_root, entries):
                         section_count=len(headings),
                         conditions=[data["applicability"], data["target_api_gate"]],
                         missing_facts=[
-                            "Active is a candidate status, not current applicability, runnable code or numerical/performance evidence. Read the original card and resolve its conditions."
+                            "Active is a candidate status, not current applicability,"
+                            " runnable code or numerical/performance evidence. Read the"
+                            " original card and resolve its conditions."
                         ],
                         _text=text,
                         _headings=headings,
@@ -361,9 +363,7 @@ def collect(root, *, references_root, entries):
                     "detail": "Active table contains no registered cards",
                 }
             )
-        records = [
-            row for row in records if row["card"]["item_id"] not in ambiguous_ids
-        ]
+        records = [row for row in records if row["card"]["item_id"] not in ambiguous_ids]
     except (OSError, RuntimeError, ValueError) as error:
         errors.append(
             {

@@ -150,5 +150,7 @@ def capture(
         "observation": evidence,
         "phase_if_observed": projected["phase"],
         "executed_variants": identities,
-        "evidence_limit": "Controlled-verifier attestation over declared inputs, not authentication or independent replay.",
+        "evidence_limit": (
+            "Controlled-verifier attestation over declared inputs, not authentication or independent replay."
+        ),
     }

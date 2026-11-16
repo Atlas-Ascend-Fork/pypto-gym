@@ -83,9 +83,7 @@ def event_metrics(path, *, host_counters=None):
     known_tools = {"command_execution", "mcp_tool_call", "file_change"}
     incomplete_lines = 0
     sessions, hook_notices, feature_notices = set(), set(), set()
-    lines = [
-        line for line in path.read_text(encoding="utf-8").splitlines() if line.strip()
-    ]
+    lines = [line for line in path.read_text(encoding="utf-8").splitlines() if line.strip()]
     for position, line in enumerate(lines):
         if not line.strip():
             continue
@@ -249,7 +247,16 @@ def event_metrics(path, *, host_counters=None):
         "incomplete_event_lines": incomplete_lines,
         "host_counters": counter_identity,
         "host_attempt_coverage": host_coverage,
-        "scope": "Visible actions count command/edit/MCP identities once; matching host counters also include Bash attempts omitted before execution. Recognized hook-trust and pre-tool feature notices are not actions. Without those counters hook-enabled attempt coverage remains unknown. Codex JSONL does not expose every session-poll API call, so total tool_calls remain unknown. Host input tokens are cumulative across requests and include cached input; peak/unique context tokens remain unknown. Command output bytes measure logged visible text only. No numerical or direction correctness is inferred.",
+        "scope": (
+            "Visible actions count command/edit/MCP identities once; matching host"
+            " counters also include Bash attempts omitted before execution. Recognized"
+            " hook-trust and pre-tool feature notices are not actions. Without those"
+            " counters hook-enabled attempt coverage remains unknown. Codex JSONL does"
+            " not expose every session-poll API call, so total tool_calls remain"
+            " unknown. Host input tokens are cumulative across requests and include"
+            " cached input; peak/unique context tokens remain unknown. Command output"
+            " bytes measure logged visible text only. No numerical or direction correctness is inferred."
+        ),
     }
 
 
@@ -377,9 +384,7 @@ def _handover_tasks():
 
 def run(*, checker=None, split="all", pypto_root=PYPTO_ROOT):
     checker = (checker or SKILL_ROOT / "scripts/check.py").resolve()
-    selected = [
-        task for task in _handover_tasks() if split == "all" or task["split"] == split
-    ]
+    selected = [task for task in _handover_tasks() if split == "all" or task["split"] == split]
     result = feedback.envelope("tool_evaluation", pypto_root)
     result["evaluated_checker"] = feedback.file_identity(checker)
     result["evaluated_skill_sha256"] = bundle_identity(checker.parent.parent)
@@ -507,7 +512,8 @@ def compare_observations(path):
             k not in row for k in keys + ("variant", "skill_sha256", "source_sha256")
         ) or row["variant"] not in {"baseline", "candidate"}:
             raise ValueError(
-                "Each observation needs task/model/reasoning/budget/toolchain/repeat, variant and skill/source identities"
+                "Each observation needs task/model/reasoning/budget/toolchain/repeat,"
+                " variant and skill/source identities"
             )
         for key in ("task_sha256", "skill_sha256", "source_sha256"):
             if not isinstance(row[key], str) or not re.fullmatch(
@@ -561,5 +567,8 @@ def compare_observations(path):
         "schema": "pypto-agent-comparison/1",
         "input": feedback.file_identity(path),
         "pairs": pairs,
-        "scope": "External observations, not inferred from checker success. Missing metrics remain null; a pilot does not establish general model effectiveness.",
+        "scope": (
+            "External observations, not inferred from checker success. Missing metrics"
+            " remain null; a pilot does not establish general model effectiveness."
+        ),
     }

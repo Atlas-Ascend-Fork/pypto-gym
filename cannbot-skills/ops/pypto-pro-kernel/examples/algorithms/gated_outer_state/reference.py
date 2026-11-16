@@ -12,9 +12,7 @@ import numpy as np
 
 
 def reference(q, k, v, g, s0):
-    q, k, v, g, state = [
-        np.asarray(value, dtype=np.float64) for value in (q, k, v, g, s0)
-    ]
+    q, k, v, g, state = [np.asarray(value, dtype=np.float64) for value in (q, k, v, g, s0)]
     state = state.copy()
     result = np.empty(q.shape, dtype=np.float64)
     for t in range(q.shape[1]):

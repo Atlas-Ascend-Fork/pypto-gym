@@ -93,7 +93,3 @@ target_api_gate: "需核验完整操作数判定、分片 flag 合并、跨任�
 - 省略乘法不应绕开仍有语义作用的 cast、校验或输出；数值范围仍需全链路审计。
 - 标志可能跨核/缓存发布，核内 mutex 不自动保证跨任务可见。
 - 不等次数的 buffer 轮转可能破坏地址对应；共享地址时核对共享计数器和 buffer 的生命周期。
-
-## 参考资料
-
-- [操作数全链路审计](../../../../pypto-pro-precision-debug/references/operand-range-audit.md)

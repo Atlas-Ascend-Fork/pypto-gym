@@ -166,9 +166,7 @@ def drain(content, command):
                 "text_bytes": count,
                 "reason": content.get("reason", "continuation_unavailable"),
             }
-        request = {
-            key: value for key, value in following.items() if key != "request_index"
-        }
+        request = {key: value for key, value in following.items() if key != "request_index"}
         identity = json.dumps(request, sort_keys=True)
         if identity in seen:
             return {
@@ -383,9 +381,7 @@ def run(
     positive = [row for row in results if row.get("positive")]
     scored = [row for row in positive if row.get("hit_at_5") is not None]
     reads = [row["read"] for row in results if "read" in row]
-    durations = [
-        row["observation"]["wall_seconds"] for row in results if "observation" in row
-    ]
+    durations = [row["observation"]["wall_seconds"] for row in results if "observation" in row]
     return {
         "schema": SCHEMA,
         "status": "failed"
@@ -431,5 +427,9 @@ def run(
             "context_tokens": None,
         },
         "results": results,
-        "scope": "Deterministic retrieval and original-source reads only; source identities, conditions and source roles are graded separately. No model, installed support, numerical or performance acceptance.",
+        "scope": (
+            "Deterministic retrieval and original-source reads only; source identities,"
+            " conditions and source roles are graded separately. No model, installed"
+            " support, numerical or performance acceptance."
+        ),
     }

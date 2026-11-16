@@ -58,10 +58,20 @@ class SpecValidationTests(unittest.TestCase):
         contract = _extract(VALID)
         for amount in (0, 1, 3):
             contract["tolerance"]["integer_atol"] = amount
-            self.assertEqual(load_spec_contract_text("```json machine-contract\n" + json.dumps(contract) + "\n```")["tolerance"]["integer_atol"], amount)
+            self.assertEqual(
+                load_spec_contract_text(
+                    "```json machine-contract\n" + json.dumps(contract) + "\n```"
+                )["tolerance"]["integer_atol"],
+                amount,
+            )
         for amount in (-1, True, 1.5, "1"):
             contract["tolerance"]["integer_atol"] = amount
-            self.assertIn("integer_atol", validate_text("```json machine-contract\n" + json.dumps(contract) + "\n```")[0])
+            self.assertIn(
+                "integer_atol",
+                validate_text(
+                    "```json machine-contract\n" + json.dumps(contract) + "\n```"
+                )[0],
+            )
 
     def test_p0_special_inputs_are_explicit_and_typed(self) -> None:
         contract = _extract(VALID)

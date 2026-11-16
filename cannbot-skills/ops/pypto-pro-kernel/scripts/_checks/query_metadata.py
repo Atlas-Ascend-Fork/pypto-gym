@@ -231,7 +231,7 @@ def collect(root):
                             fence = opening[1]
                         elif (
                             opening[1].startswith(fence)
-                            and not value[opening.end() :].strip()
+                            and not value[opening.end():].strip()
                         ):
                             fence = None
                         continue

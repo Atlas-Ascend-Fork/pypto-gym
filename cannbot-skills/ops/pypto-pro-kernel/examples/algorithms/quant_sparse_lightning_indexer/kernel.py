@@ -2981,7 +2981,7 @@ def qsli_kernel(
                             pl.store(part_key, out_u16.current(), [ld_slot, 0])
                             pl.store(
                                 part_pos,
-                                pos.current()[0:1, 0 : (TopKCapacity + 15) // 16 * 16],
+                                pos.current()[0:1, 0: (TopKCapacity + 15) // 16 * 16],
                                 [ld_slot, 0],
                             )
                         else:
@@ -3239,7 +3239,7 @@ def qsli_kernel(
                         pl.store(part_key, out_u16.current(), [carry_slot, 0])
                         pl.store(
                             part_pos,
-                            pos.current()[0:1, 0 : (TopKCapacity + 15) // 16 * 16],
+                            pos.current()[0:1, 0: (TopKCapacity + 15) // 16 * 16],
                             [carry_slot, 0],
                         )
                     if WriteValues:

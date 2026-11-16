@@ -227,7 +227,9 @@ def rules_result(targets, *, pypto_root, examples_root=EXAMPLES_ROOT, findings=N
         "ub_l1": {
             "resolved": resolved,
             "unverified": unverified,
-            "limits": "Direct source descriptors only; helpers, shadowing, producer bytes and synchronization are not proved.",
+            "limits": (
+                "Direct source descriptors only; helpers, shadowing, producer bytes and synchronization are not proved."
+            ),
         },
         "lexical_names": [name_resolution.inspect(path)[1] for path in files],
         "group_depth": [
@@ -383,8 +385,9 @@ def run_command(
                             result["omitted_related_contracts"],
                         ) = routes, omitted
                         result["contract_review_scope"] = (
-                            "Conditional reviews of statically resolved source references; not a diagnosis, "
-                            "executed-call proof or inferred numerical root cause. Query a matching owner before a broad search."
+                            "Conditional reviews of statically resolved source"
+                            " references; not a diagnosis, executed-call proof or"
+                            " inferred numerical root cause. Query a matching owner before a broad search."
                         )
             except (OSError, SyntaxError):
                 pass  # A missing or changed source cannot supply a review route.
@@ -476,9 +479,7 @@ def run_command(
             parsed = native.report(
                 native_spec, pypto_root=pypto_root, examples_root=examples_root
             )
-        result["native_preflight"] = {
-            k: parsed[k] for k in ("status", "specialization", "coverage")
-        }
+        result["native_preflight"] = {k: parsed[k] for k in ("status", "specialization", "coverage")}
         result["identity"]["installed_runtime"] = parsed["identity"][
             "installed_runtime"
         ]
@@ -858,7 +859,9 @@ def main(argv: list[str] | None = None) -> int:
     lookup.add_argument(
         "--filters",
         type=_query_filters,
-        help="JSON routing conditions: source_memory, destination_memory, dtype, layout, source_dtype, destination_dtype",
+        help=(
+            "JSON routing conditions: source_memory, destination_memory, dtype, layout, source_dtype, destination_dtype"
+        ),
     )
     lookup.add_argument(
         "--limit",

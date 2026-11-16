@@ -63,7 +63,10 @@ def report(path):
             "numerical": "not_independently_established",
             "performance": "not_independently_established",
         },
-        "evidence_limit": "Consistency over declared source snapshots and verifier attestations, not authentication, independent replay or generalized workload support.",
+        "evidence_limit": (
+            "Consistency over declared source snapshots and verifier attestations, not"
+            " authentication, independent replay or generalized workload support."
+        ),
     }
     try:
         if spec.get("observation") is not None:
@@ -161,6 +164,10 @@ def report(path):
     result["next_action"] = (
         "Keep the assertion within these exact snapshots, workload, metric and supplied evidence."
         if result["claim_check"] == "supported"
-        else "Do not promote an unsupported assertion. Obtain matching original numerical and complete-call timing evidence; unknown evidence does not end optimization or authorize replay."
+        else (
+            "Do not promote an unsupported assertion. Obtain matching original"
+            " numerical and complete-call timing evidence; unknown evidence does not"
+            " end optimization or authorize replay."
+        )
     )
     return result

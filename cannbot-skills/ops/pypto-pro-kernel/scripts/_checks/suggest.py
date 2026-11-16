@@ -36,7 +36,7 @@ def _layout_sites(facts):
             and dst.get("layout") == "NZ"
         ):
             continue
-        for consumer in facts[index + 1 :]:
+        for consumer in facts[index + 1:]:
             if consumer["function"] != conversion["function"]:
                 continue
             if (
@@ -49,7 +49,10 @@ def _layout_sites(facts):
                     "line": conversion["line"],
                     "handover_line": consumer["line"],
                     "observation": "A local ND→NZ move precedes a same-expression UB→L1 transfer.",
-                    "unknowns": "This is a lexical candidate: active branch, producer address map, aliases and other consumers are unproved.",
+                    "unknowns": (
+                        "This is a lexical candidate: active branch, producer address"
+                        " map, aliases and other consumers are unproved."
+                    ),
                 }
                 break
 
@@ -165,7 +168,10 @@ def _cost(site, data):
             (p for p in profile.get("pipe_counters", []) if p["position"] == position),
             None,
         ),
-        "attribution": "Caller-declared source/task mapping; task duration is not this site's exclusive cost, and counters may overlap.",
+        "attribution": (
+            "Caller-declared source/task mapping; task duration is not this site's"
+            " exclusive cost, and counters may overlap."
+        ),
     }
 
 
@@ -216,7 +222,9 @@ def report(
                     "optimization-cost-unverified",
                     "unverified",
                     str(exc),
-                    next_action="Recapture costs for these sources and toolchain; candidates below have no measured ranking.",
+                    next_action=(
+                        "Recapture costs for these sources and toolchain; candidates below have no measured ranking."
+                    ),
                 )
             )
     sites, unknown_transfers = [], 0
@@ -243,7 +251,10 @@ def report(
         identity = feedback.file_identity(site["file"])
         candidates.append(
             {
-                "id": f"{pattern}:{feedback.digest((identity['path'] + identity['sha256'] + str(site['line'])).encode())[:16]}",
+                "id": (
+                    f"{pattern}:"
+                    f"{feedback.digest((identity['path'] + identity['sha256'] + str(site['line'])).encode())[:16]}"
+                ),
                 "pattern": pattern,
                 "title": recipe["title"],
                 "site": site,
@@ -253,7 +264,10 @@ def report(
                     "decrease": recipe["decrease"],
                     "increase": recipe["increase"],
                     "latency_delta_us": None,
-                    "basis": "Mechanism hypothesis; no current speedup is inferred from a source pattern or historical result.",
+                    "basis": (
+                        "Mechanism hypothesis; no current speedup is inferred from a"
+                        " source pattern or historical result."
+                    ),
                 },
                 "reject_if": recipe["reject_if"],
                 "comparison": recipe["comparison"],
@@ -317,7 +331,10 @@ def report(
         "matched_sites": len(candidates),
         "omitted_candidates": max(0, len(candidates) - limit),
         "unresolved_transfers": unknown_transfers,
-        "limits": "Three lexical pattern families only. No call-graph, dynamic work counts, codegen prediction or proof of an optimization ceiling.",
+        "limits": (
+            "Three lexical pattern families only. No call-graph, dynamic work counts,"
+            " codegen prediction or proof of an optimization ceiling."
+        ),
     }
     if card_coverage is not None:
         result["coverage"]["cards"] = card_coverage

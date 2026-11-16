@@ -28,9 +28,6 @@ plan; report that scope explicitly instead of claiming device acceptance.
    and documents the public interface and validation only in `docs/usage.rst`.
 4. **User override:** Project rules disable organization. The user explicitly
    selects the default source standard under `handoff/scale/`.
-5. **CANN:** Request an offline CANN installation package with ACLNN or GEIR
-   acceptance. Supply the `pypto-pro-cann-delivery` skill and its prerequisites;
-   do not request a separate Python/JIT source package.
 
 ## Observable acceptance
 
@@ -40,7 +37,6 @@ plan; report that scope explicitly instead of claiming device acceptance.
 | Disabled | The explicit user choice overrides project defaults. Do not relocate artifacts, rename entries or create default documents solely for organization. Keep final-entry validation and unresolved technical checks. |
 | Alternative | Follow the project-selected format only. Do not add `op_kernel/`, README, DESIGN or RESULTS merely because the default skill is installed. Preserve the selected public signature. |
 | User override | The explicit user choice overrides the project's disabled policy. Use the requested default source standard and destination. |
-| CANN | Load the separate offline-delivery workflow for compilation, registration, installation and ACLNN/GEIR acceptance. Do not require a preliminary migration to the default source package. Missing offline prerequisites must remain visible. |
 
 In every case, compare before/after file lists and the acceptance contract.
 Check the final public entry, native implementation constraints, independent

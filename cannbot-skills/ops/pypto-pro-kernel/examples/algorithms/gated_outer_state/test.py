@@ -78,7 +78,7 @@ def test_recurrence_and_changed_inputs(device, case):
     for value in host:
         dtype = torch.float16 if value.dtype == np.float16 else torch.float32
         backing = torch.full((value.size + 64,), -2, dtype=dtype, device=device)
-        tensor = backing[17 : 17 + value.size].view(value.shape)
+        tensor = backing[17: 17 + value.size].view(value.shape)
         backings.append(backing)
         tensors.append(tensor)
     changed = tuple(
@@ -106,4 +106,4 @@ def test_recurrence_and_changed_inputs(device, case):
         for tensor, value, backing in zip(tensors, current, backings):
             np.testing.assert_array_equal(tensor.cpu().numpy(), value)
             assert (backing[:17] == -2).all().item()
-            assert (backing[17 + value.size :] == -2).all().item()
+            assert (backing[17 + value.size:] == -2).all().item()

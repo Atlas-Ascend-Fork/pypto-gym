@@ -15,8 +15,6 @@ from pathlib import Path
 
 import pytest
 
-yaml = pytest.importorskip("yaml", reason="Card acceptance uses requirements-cards.txt")
-
 from _checks import (
     documents,
     feedback,
@@ -28,6 +26,8 @@ from _checks import (
 )
 from _checks.paths import EXAMPLES_ROOT, SKILL_ROOT
 from _checks.tests.knowledge_fixtures import make_corpus, write
+
+yaml = pytest.importorskip("yaml", reason="Card acceptance uses requirements-cards.txt")
 
 
 def relation(kind="uses_contract", target="contract:copy"):
@@ -64,7 +64,9 @@ def library(root, *, links=None, item_id="cube-01"):
     )
     write(
         root / "index.md",
-        f"# Cards\n\n## Active items\n\n| item_id | Card | status |\n|---|---|---|\n| `{item_id}` | [Fixture](cube/{item_id}-fixture.md) | `stable` |\n\n## Draft items\n",
+        "# Cards\n\n## Active items\n\n| item_id | Card | status |\n|---|---|---|\n|"
+        f" `{item_id}` | [Fixture](cube/{item_id}-fixture.md) | `stable` |\n\n## Draft"
+        " items\n",
     )
     return path
 
@@ -424,7 +426,9 @@ def test_same_mechanism_attaches_once_without_new_detectors_or_acceptance(tmp_pa
     )
     path = write(
         tmp_path / "candidate.py",
-        "import pypto_pro.language as pl\n@pl.jit\ndef kernel(groups, count):\n    for group in pl.range(groups):\n        for row in pl.range(pl.get_block_idx(), count, pl.get_block_num()):\n            consume(row)\n",
+        "import pypto_pro.language as pl\n@pl.jit\ndef kernel(groups, count):\n    for"
+        " group in pl.range(groups):\n        for row in pl.range(pl.get_block_idx(),"
+        " count, pl.get_block_num()):\n            consume(row)\n",
     )
     result = suggest.report([path], cards_root=root)
     assert len(result["candidates"]) == result["coverage"]["matched_sites"] == 1

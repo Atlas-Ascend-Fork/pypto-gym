@@ -65,8 +65,10 @@ def test_preparse_phase_does_not_infer_kernel_body_cause(stage, body):
 @pytest.mark.parametrize(
     "body",
     [
-        'not make_tile_group() depth is required when mutex_ids is "auto", None, or empty',
-        "vf.add requires dst, src0, src1 to have the same type, got dst=DT_FP16 src0=DT_FP16 src1=DT_FP32 (quoted control)",
+        'not make_tile_group() depth is required when mutex_ids is "auto", None, or'
+        " empty",
+        "vf.add requires dst, src0, src1 to have the same type, got dst=DT_FP16"
+        " src0=DT_FP16 src1=DT_FP32 (quoted control)",
         "host move: NZ destination uses align16 rows",
         "Expected a native @pl.jit Pro kernel (example text)",
     ],

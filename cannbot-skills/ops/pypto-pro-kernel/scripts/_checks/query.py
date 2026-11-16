@@ -290,7 +290,10 @@ def store_combinations(pypto_root):
     path = pypto_root / "python/pypto_pro/ir/op/block_ops.py"
     result = {
         "status": "unverified",
-        "scope": "Selected Python source declarations only; installed runtime, compilation and performance are not established.",
+        "scope": (
+            "Selected Python source declarations only; installed runtime, compilation"
+            " and performance are not established."
+        ),
         "table": "_A5_STORE_COMBOS",
         "rows": [],
     }
@@ -491,12 +494,11 @@ def report(
             feedback.diagnostic(
                 "knowledge-cards-unverified",
                 "unverified",
-                "The configured Active card source is incomplete; inspect documents.cards coverage. Invalid cards were quarantined.",
+                "The configured Active card source is incomplete; inspect"
+                " documents.cards coverage. Invalid cards were quarantined.",
             )
         )
-    declarations = [
-        row for row in declarations if "symbol:" + row["symbol"] not in ambiguous
-    ]
+    declarations = [row for row in declarations if "symbol:" + row["symbol"] not in ambiguous]
     if (
         not sources["metadata_coverage"]["complete"]
         or not result["knowledge"]["coverage"]["integrity"]["complete"]
@@ -505,7 +507,8 @@ def report(
             feedback.diagnostic(
                 "knowledge-source-partial",
                 "advisory",
-                "Invalid or ambiguous owners were quarantined; inspect metadata/integrity coverage before treating a miss as complete.",
+                "Invalid or ambiguous owners were quarantined; inspect"
+                " metadata/integrity coverage before treating a miss as complete.",
             )
         )
     if example_locator and "example" in requested["kinds"]:
@@ -633,13 +636,15 @@ def report(
         )
         if "ub-l1" in chosen:
             result["missing_facts"].append(
-                "Bind physical shape, valid extent, offset, producer address map and consumer synchronization to the concrete workload."
+                "Bind physical shape, valid extent, offset, producer address map and"
+                " consumer synchronization to the concrete workload."
             )
         for meta in matched[:2]:
             result["missing_facts"].extend(meta.get("missing_facts", []))
         if any(meta.get("candidate") for meta in matched[:2]):
             result["missing_facts"].append(
-                "Confirm applicability, realized work and generated code; measure the complete call on the current workload."
+                "Confirm applicability, realized work and generated code; measure the"
+                " complete call on the current workload."
             )
     if source:
         from . import ub_l1, group_depth
@@ -671,9 +676,7 @@ def report(
                 pypto_root,
                 declarations=declarations,
             )
-            result["related_contracts"] = [
-                route for route in result["related_contracts"] if route["id"] != "ub-l1"
-            ]
+            result["related_contracts"] = [route for route in result["related_contracts"] if route["id"] != "ub-l1"]
         depth_findings, depth_coverage = group_depth.inspect(
             source, pypto_root=pypto_root
         )
@@ -691,7 +694,8 @@ def report(
             )
     if result["related_contracts"] and not result["context"]:
         result["missing_facts"].append(
-            "Select a route whose producer, consumer and conditions match; discovery words do not establish an API declaration, native support or a root cause."
+            "Select a route whose producer, consumer and conditions match; discovery"
+            " words do not establish an API declaration, native support or a root cause."
         )
     if (
         result["knowledge"]["lookup"]["status"] != "matched"
@@ -705,14 +709,21 @@ def report(
                 "query-no-match",
                 "unverified",
                 (
-                    "Document resolution: "
-                    + result["knowledge"]["lookup"]["status"]
-                    + ". "
-                    + result["knowledge"]["lookup"].get("reason", "")
-                )
-                if document_locator
-                else "No maintained scenario, document, example program or exact declaration matched this query.",
-                next_action="Inspect the returned coverage/sections or use an exact public symbol; absence here is not API absence.",
+                    (
+                        "Document resolution: "
+                        + result["knowledge"]["lookup"]["status"]
+                        + ". "
+                        + result["knowledge"]["lookup"].get("reason", "")
+                    )
+                    if document_locator
+                    else (
+                        "No maintained scenario, document, example program or exact declaration matched this query."
+                    )
+                ),
+                next_action=(
+                    "Inspect the returned coverage/sections or use an exact public"
+                    " symbol; absence here is not API absence."
+                ),
             )
         )
     for row in result["knowledge"]["items"]:

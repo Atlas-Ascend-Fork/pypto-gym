@@ -298,12 +298,12 @@ def read(
         lo, hi = 0, end - begin
         while lo < hi:
             mid = (lo + hi + 1) // 2
-            _read_text(item, data[begin : begin + mid])
+            _read_text(item, data[begin: begin + mid])
             if _fits(result):
                 lo = mid
             else:
                 hi = mid - 1
-        _read_text(item, data[begin : begin + lo])
+        _read_text(item, data[begin: begin + lo])
         consumed = len(item["text"].encode())
         item["end_offset_bytes"] = begin + consumed
         item["request_complete"] = begin + consumed >= requested_end
@@ -319,7 +319,7 @@ def read(
                 result["next"]["fragment"] = section["fragment"]
             if max_lines is not None:
                 result["next"]["max_lines"] = max(
-                    1, max_lines - data[begin : begin + consumed].count(b"\n")
+                    1, max_lines - data[begin: begin + consumed].count(b"\n")
                 )
             result["remaining_path_index"] = index + 1
             break

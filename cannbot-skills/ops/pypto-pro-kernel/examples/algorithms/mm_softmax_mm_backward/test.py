@@ -17,6 +17,7 @@ import pytest
 import torch
 
 from .kernel import execute, make_kernels
+from .onchip import execute_onchip, make_onchip
 from .reference import reference, scalar_objective
 
 ATOL, RTOL = 2e-5, 2e-4
@@ -146,8 +147,6 @@ def test_rejects_unsupported_extents(shape):
     with pytest.raises(ValueError, match="multiples of 64"):
         make_kernels(*shape)
 
-
-from .onchip import execute_onchip, make_onchip
 
 
 def _onchip_check(shape, dtype, device, query_rows=16, scenarios=None):

@@ -80,32 +80,42 @@ def explain_message(
     if _TRANSPORT.search(body):
         rule, action = (
             "execution-transport-failed",
-            "Resolve the connection/authentication/control-socket boundary before another execution request; do not infer a kernel cause. Confirmed non-dispatch permits independently justified source fixes, kept unverified. Reconcile unknown dispatch and preserve its source before any replay.",
+            "Resolve the connection/authentication/control-socket boundary before"
+            " another execution request; do not infer a kernel cause. Confirmed"
+            " non-dispatch permits independently justified source fixes, kept"
+            " unverified. Reconcile unknown dispatch and preserve its source before any replay.",
         )
     elif _IMPORT.search(body):
         rule, action = (
             "execution-import-failed",
-            "Check the selected interpreter, environment and named import against the installed package; no kernel arithmetic or API-absence conclusion follows from an import failure.",
+            "Check the selected interpreter, environment and named import against"
+            " the installed package; no kernel arithmetic or API-absence conclusion follows from an import failure.",
         )
     elif stage in {"argument_binding", "entry_import"}:
         rule, action = (
             "native-stage-failed",
-            "Resolve the recorded argument-binding or entry-import failure and inspect the selected callable before inferring a kernel-body parser or layout defect.",
+            "Resolve the recorded argument-binding or entry-import failure and"
+            " inspect the selected callable before inferring a kernel-body parser or layout defect.",
         )
     elif body == "Expected a native @pl.jit Pro kernel":
         rule, action = (
             "native-entry-kind",
-            "Inspect the selected callable, JIT decoration and actual annotation values before layout changes. Keep wrappers separate from their wrapped entry; string annotations require a current-version dispatch probe, not a blanket future-import ban.",
+            "Inspect the selected callable, JIT decoration and actual annotation"
+            " values before layout changes. Keep wrappers separate from their"
+            " wrapped entry; string annotations require a current-version dispatch"
+            " probe, not a blanket future-import ban.",
         )
     elif re.match(r"^(?:Unsupported|Incomplete) type annotation:", body):
         rule, action = (
             "jit-annotation-type",
-            "Inspect the named parameter declaration and the selected parser's annotation syntax; scalar annotation aliases and dtype subexpressions follow different paths.",
+            "Inspect the named parameter declaration and the selected parser's"
+            " annotation syntax; scalar annotation aliases and dtype subexpressions follow different paths.",
         )
     elif _RANK.fullmatch(body):
         rule, action = (
             "tensor-rank-mismatch",
-            "Compare the selected callable's Tensor annotation with the actual launch argument; verify the executed entry before a cache hypothesis.",
+            "Compare the selected callable's Tensor annotation with the actual"
+            " launch argument; verify the executed entry before a cache hypothesis.",
         )
     elif (
         body
@@ -113,7 +123,8 @@ def explain_message(
     ):
         rule, action = (
             "tile-group-depth-required",
-            "Set the intended positive compile-time slot depth and verify each slot's address and lifetime; keep cross-core synchronization separate.",
+            "Set the intended positive compile-time slot depth and verify each"
+            " slot's address and lifetime; keep cross-core synchronization separate.",
         )
     elif re.fullmatch(
         r"vf\.add requires dst, src0, src1 to have the same type, got dst=DT_\w+ src0=DT_\w+ src1=DT_\w+",
@@ -121,7 +132,8 @@ def explain_message(
     ):
         rule, action = (
             "vf-add-operand-dtype",
-            "Trace all operand definitions and the destination's first binding. Check scalar broadcasts for an explicit dtype; preserve the required arithmetic precision.",
+            "Trace all operand definitions and the destination's first binding."
+            " Check scalar broadcasts for an explicit dtype; preserve the required arithmetic precision.",
         )
     elif (
         re.match(r"(?:move|insert):", body)
@@ -135,7 +147,8 @@ def explain_message(
     ):
         rule, action = (
             "native-transfer-contract",
-            "Resolve the named operands, physical/valid shapes, offset and selected API signature; use native parsing after the repair.",
+            "Resolve the named operands, physical/valid shapes, offset and selected"
+            " API signature; use native parsing after the repair.",
         )
         evidence["condition_status"] = "unverified"
     elif body.startswith(
@@ -197,7 +210,9 @@ def _bind_transfer_context(item, transfers):
         item["rule"] = ub_l1.PITCH
         item["context_ids"] = query.ids_for_rules([ub_l1.PITCH])
         item["next_action"] = (
-            "Check the matched Vec-to-Vec NZ move and producer's physical pitch. Use the aligned conversion control or complete direct VF-to-NZ recipe; this condition does not reject Vec-to-Mat insert or prove producer bytes."
+            "Check the matched Vec-to-Vec NZ move and producer's physical pitch. Use"
+            " the aligned conversion control or complete direct VF-to-NZ recipe; this"
+            " condition does not reject Vec-to-Mat insert or prove producer bytes."
         )
 
 
@@ -251,7 +266,7 @@ def from_output(text, *, examples_root=EXAMPLES_ROOT, transfers=()):
     lines = text.splitlines()
     for index, message in list(_records(text))[-8:]:
         location = None
-        for line in lines[index + 1 : index + 14]:
+        for line in lines[index + 1: index + 14]:
             line = re.sub(r"^E\s+", "", line)
             if bodies(line):
                 break

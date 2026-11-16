@@ -671,7 +671,10 @@ def test_transport_failure_preserves_exit_and_suppresses_source_reviews(tmp_path
 def compute(src, pred):
     return vf.reduce_sum(src, pred)
 """)
-    program = "print('unix_listener: cannot bind to path /restricted/control.sock: Operation not permitted'); raise SystemExit(255)"
+    program = (
+        "print('unix_listener: cannot bind to path /restricted/control.sock: Operation"
+        " not permitted'); raise SystemExit(255)"
+    )
     proc = subprocess.run(
         [
             sys.executable,
@@ -745,7 +748,10 @@ def test_api_gap_queries_return_only_their_owner(symbol, context_id):
 def test_observed_api_failures_route_without_matching_quoted_source(
     message, rule, context_id
 ):
-    log = f"RuntimeError: [source.cpp:8][PRO_CODEGEN]:ErrCode: F00001! Enum: ExternalError::INVALID_TYPE. {message}\n  --> candidate.py:21:4\n"
+    log = (
+        "RuntimeError: [source.cpp:8][PRO_CODEGEN]:ErrCode: F00001! Enum:"
+        f" ExternalError::INVALID_TYPE. {message}\n  --> candidate.py:21:4\n"
+    )
     found, context = runtime_diagnostics.from_output(log)
     assert [d["rule"] for d in found] == [rule]
     assert found[0]["location"] == {"file": "candidate.py", "line": 21, "column": 4}
@@ -816,7 +822,9 @@ def test_embedded_framework_head_is_not_a_diagnostic():
 
 
 def test_separate_diagnostics_keep_their_own_locations():
-    text = "move: offset must contain exactly 2 elements\n  --> first.py:7:3\nmove: shape mismatch\n  --> second.py:11:5\n"
+    text = (
+        "move: offset must contain exactly 2 elements\n  --> first.py:7:3\nmove: shape mismatch\n  --> second.py:11:5\n"
+    )
     found, _ = runtime_diagnostics.from_output(text)
     assert [(d["location"]["file"], d["location"]["line"]) for d in found] == [
         ("first.py", 7),
@@ -825,7 +833,10 @@ def test_separate_diagnostics_keep_their_own_locations():
 
 
 def test_framework_head_preserves_stage_code_and_location():
-    text = "[block_ops.py:1020][PRO_IR]:ErrCode: F00004! Enum: ExternalError::NOT_IMPLEMENTED_ERROR. move: NZ destination uses align16 rows\n  --> candidate.py:12:5\n"
+    text = (
+        "[block_ops.py:1020][PRO_IR]:ErrCode: F00004! Enum:"
+        " ExternalError::NOT_IMPLEMENTED_ERROR. move: NZ destination uses align16 rows\n  --> candidate.py:12:5\n"
+    )
     found, context = runtime_diagnostics.from_output(text)
     assert found[0]["rule"] == "native-transfer-contract"
     assert found[0]["evidence"]["module"] == "PRO_IR"
@@ -836,7 +847,10 @@ def test_framework_head_preserves_stage_code_and_location():
 
 
 def test_unknown_framework_error_retains_phase_without_irrelevant_recipe():
-    text = "[backend.cpp:4][PRO_CODEGEN]:ErrCode: F00001! Enum: ExternalError::INVALID_TYPE. vf.add operand types differ\n  --> candidate.py:10:3\n"
+    text = (
+        "[backend.cpp:4][PRO_CODEGEN]:ErrCode: F00001! Enum:"
+        " ExternalError::INVALID_TYPE. vf.add operand types differ\n  --> candidate.py:10:3\n"
+    )
     found, context = runtime_diagnostics.from_output(text)
     assert found[0]["rule"] == "framework-rejection"
     assert found[0]["evidence"]["module"] == "PRO_CODEGEN"
@@ -844,7 +858,10 @@ def test_unknown_framework_error_retains_phase_without_irrelevant_recipe():
 
 
 def test_pytest_wrapped_diagnostic_keeps_the_user_span():
-    text = "E RuntimeError: [backend.cpp:4][PRO_CODEGEN]:ErrCode: F00001! Enum: ExternalError::INVALID_TYPE. vf.add operand types differ\nE    --> candidate.py:10:3\n"
+    text = (
+        "E RuntimeError: [backend.cpp:4][PRO_CODEGEN]:ErrCode: F00001! Enum:"
+        " ExternalError::INVALID_TYPE. vf.add operand types differ\nE    --> candidate.py:10:3\n"
+    )
     found, _ = runtime_diagnostics.from_output(text)
     assert found[0]["location"] == {"file": "candidate.py", "line": 10, "column": 3}
 
@@ -888,7 +905,11 @@ def test_json_run_keeps_original_failure_and_routes_context(tmp_path):
 
 def test_generic_transfer_error_needs_source_evidence_to_select_ub_context(tmp_path):
     file = str(tmp_path / "candidate.py")
-    text = f"[block_ops.py:1174][PRO_IR]:ErrCode: F0000E! Enum: ExternalError::INVALID_ARGUMENT. offset must contain exactly 2 elements\n  --> {file}:6:5\n"
+    text = (
+        "[block_ops.py:1174][PRO_IR]:ErrCode: F0000E! Enum:"
+        " ExternalError::INVALID_ARGUMENT. offset must contain exactly 2 elements\n "
+        f" --> {file}:6:5\n"
+    )
     found, context = runtime_diagnostics.from_output(text)
     assert found[0]["rule"] == "native-transfer-contract" and not context
     sites = [

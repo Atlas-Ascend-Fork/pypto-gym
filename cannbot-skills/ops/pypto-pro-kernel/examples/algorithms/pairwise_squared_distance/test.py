@@ -69,7 +69,7 @@ def test_contract_and_reused_addresses(device, case):
         torch.full((a.size + 64,), -13, dtype=torch.float16, device=device)
         for a in host
     ]
-    tensors = [b[16 : 16 + a.size].view(a.shape) for a, b in zip(host, backings)]
+    tensors = [b[16: 16 + a.size].view(a.shape) for a, b in zip(host, backings)]
     changed = tuple(
         (a * np.float16(-0.5) + np.float16(0.25)).astype(np.float16) for a in host
     )
@@ -94,4 +94,4 @@ def test_contract_and_reused_addresses(device, case):
         for tensor, value, backing in zip(tensors, values, backings):
             np.testing.assert_array_equal(tensor.cpu().numpy(), value)
             assert (backing[:16] == -13).all().item()
-            assert (backing[16 + value.size :] == -13).all().item()
+            assert (backing[16 + value.size:] == -13).all().item()

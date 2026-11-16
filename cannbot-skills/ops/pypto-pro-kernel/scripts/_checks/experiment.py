@@ -348,8 +348,8 @@ def paired(data, metric, policy):
     require(
         isinstance(orders, list)
         and len(orders) == 2
-        and all(isinstance(o, dict) for o in orders)
-        and {o.get("order") for o in orders} == {"AB", "BA"},
+        and all(isinstance(order, dict) for order in orders)
+        and {order.get("order") for order in orders} == {"AB", "BA"},
         "Both AB and BA orders are required",
     )
     outcomes = []
@@ -527,7 +527,7 @@ def observe(state, data, evidence):
                 "rejected",
                 "Keep best; revisit the predicted cost or propose a scoped tradeoff as a new experiment.",
             )
-        elif outcomes and all(o == "improved" for o in outcomes):
+        elif outcomes and all(outcome == "improved" for outcome in outcomes):
             decision, action = (
                 "retained",
                 "Export best for delivery, or select another cost-driven candidate within the remaining budget.",
@@ -567,7 +567,8 @@ def summary(state):
             " No further candidate selections remain; unresolved directions stay open."
         )
     result["evidence_limit"] = (
-        "Verifier attestations, not independent replay. Only declared files are snapshotted; device/time/token budgets remain external."
+        "Verifier attestations, not independent replay. Only declared files are"
+        " snapshotted; device/time/token budgets remain external."
     )
     return result
 

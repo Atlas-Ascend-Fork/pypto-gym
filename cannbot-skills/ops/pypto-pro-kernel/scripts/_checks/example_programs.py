@@ -211,7 +211,7 @@ def _imports(snapshot, root):
     def absolute(name):
         for prefix in ("pro_agentkit.examples.", "examples."):
             if name.startswith(prefix):
-                return root.joinpath(*name[len(prefix) :].split("."))
+                return root.joinpath(*name[len(prefix):].split("."))
         return None
 
     for node in ast.walk(tree):
@@ -276,7 +276,7 @@ def _imports(snapshot, root):
         value = source.attribute_path(node)
         for alias in sorted(aliases, key=len, reverse=True):
             if value == alias or value and value.startswith(alias + "."):
-                return aliases[alias] + value[len(alias) :]
+                return aliases[alias] + value[len(alias):]
         return value
 
     for node in ast.walk(tree):
@@ -542,12 +542,8 @@ def collect(root, references_root, entries, document_records):
             for role, snapshot in program_entries.items()
             if (doc := _docstring(snapshot))
         ]
-        entry_refs = {
-            role: snapshot["reference"] for role, snapshot in program_entries.items()
-        }
-        read_requests = {
-            role: read_request(reference) for role, reference in entry_refs.items()
-        }
+        entry_refs = {role: snapshot["reference"] for role, snapshot in program_entries.items()}
+        read_requests = {role: read_request(reference) for role, reference in entry_refs.items()}
         selected_rows = selection.get(path.parent.relative_to(root), [])
         relations = [{"kind": "uses", "target": "symbol:" + name} for name in uses]
         contracts = contract_paths.get(path.resolve(), [])
@@ -583,7 +579,10 @@ def collect(root, references_root, entries, document_records):
                 {json.dumps(row, sort_keys=True): row for row in unresolved}.values()
             ),
             "status": "static_only",
-            "instruction": "Imports may be conditional; installed versions, optional evaluator requirements and dynamic paths must be checked in the linked source.",
+            "instruction": (
+                "Imports may be conditional; installed versions, optional evaluator"
+                " requirements and dynamic paths must be checked in the linked source."
+            ),
         }
         manifest = {file["path"]: file["sha256"] for file in files}
         if test_config:
@@ -618,8 +617,10 @@ def collect(root, references_root, entries, document_records):
                     for row in source_statements
                 ],
                 missing_facts=[
-                    "Match the complete program's shapes, layouts, dtype, host guards and device/test conditions before adapting it.",
-                    "Test files and source statements do not establish current native, numerical or performance acceptance.",
+                    "Match the complete program's shapes, layouts, dtype, host"
+                    " guards and device/test conditions before adapting it.",
+                    "Test files and source statements do not establish current"
+                    " native, numerical or performance acceptance.",
                 ],
                 relations=relations,
                 program={
@@ -639,16 +640,21 @@ def collect(root, references_root, entries, document_records):
                 negative_controls=negative,
                 validation={
                     "status": "not_established",
-                    "test_argv": [
-                        "python",
-                        "-m",
-                        "pytest",
-                        str(path.parent / "test.py"),
-                        "-q",
-                    ]
-                    if "test" in program_entries
-                    else None,
-                    "source_statements": "Resolve the program to inspect separately identified kernel/reference/test statements; no execution manifest is inferred.",
+                    "test_argv": (
+                        [
+                            "python",
+                            "-m",
+                            "pytest",
+                            str(path.parent / "test.py"),
+                            "-q",
+                        ]
+                        if "test" in program_entries
+                        else None
+                    ),
+                    "source_statements": (
+                        "Resolve the program to inspect separately identified"
+                        " kernel/reference/test statements; no execution manifest is inferred."
+                    ),
                 },
                 _uses=uses,
                 _negative_only=set(uses) - ordinary_uses,
@@ -762,7 +768,7 @@ def _recovery_terms(text):
     for word in knowledge.words(text) - _DISCOVERY_WORDS:
         if re.fullmatch(r"[\u4e00-\u9fff]+", word):
             terms.update(
-                (word[index : index + 2], word[index : index + 2])
+                (word[index: index + 2], word[index: index + 2])
                 for index in range(len(word) - 1)
             )
         elif not word.isdecimal():
@@ -840,9 +846,7 @@ def recovery_programs(records, text, filters, *, limit=3):
         coherent = len(identity_clues) >= 2 or scenario_clues >= 2
         if technical_context and not coherent:
             continue
-        overlap = {
-            word for word, normalized in requested.items() if normalized in words
-        }
+        overlap = {word for word, normalized in requested.items() if normalized in words}
         normalized = {requested[word] for word in overlap}
         if not coherent and not (
             len(identity_overlap) >= 2

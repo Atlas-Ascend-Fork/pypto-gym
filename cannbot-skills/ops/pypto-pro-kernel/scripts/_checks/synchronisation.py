@@ -356,14 +356,16 @@ def inspect(path: Path, *, pypto_root: Path = PYPTO_ROOT):
             if proven:
                 coverage["proven_handover"] += 1
                 message = (
-                    f"{name}: adjacent MTE2 load and MTE3 store access the same bare Vec Tile without a handover. "
-                    "Automatic mutex insertion has no tile-group ID for it; use matched ordering or a protected Tile group."
+                    f"{name}: adjacent MTE2 load and MTE3 store access the same bare"
+                    " Vec Tile without a handover. Automatic mutex insertion has no"
+                    " tile-group ID for it; use matched ordering or a protected Tile group."
                 )
             else:
                 coverage["unverified"] += 1
                 message = (
-                    f"{name or 'Bare Tile'}: buffer ordering is unverified. Inspect actual read/write pipes, aliases, "
-                    "manual event pairs and reuse in the generated IR; a declaration or auto_mutex option alone does not establish a race."
+                    f"{name or 'Bare Tile'}: buffer ordering is unverified. Inspect"
+                    " actual read/write pipes, aliases, manual event pairs and reuse"
+                    " in the generated IR; a declaration or auto_mutex option alone does not establish a race."
                 )
             found.append(
                 Finding(source.path, call.lineno, RULE, message, advisory=not proven)

@@ -2,13 +2,11 @@
 
 This document owns the native implementation and validation requirements for an operator handoff. Select the delivery target and organization policy before changing artifacts. Explicit user requirements override project delivery rules; those rules override the default. After functionality, precision and performance meet the agreed requirements, follow the selected policy:
 
-- **Default Python/JIT source organization:** load [pypto-pro-op-standard](../../../pypto-pro-op-standard/SKILL.md) for layout, naming, interface packaging and documentation.
+- **Default Python/JIT source organization:** load [operator source delivery standard](op-standard.md) for layout, naming, interface packaging and documentation.
 - **Disabled organization:** preserve the existing artifact organization. Do not move files, rename entries or create the default documents merely to conform to the default standard.
 - **Alternative source standard:** use the selected standard's layout, naming, interface packaging and documentation only; do not also impose the default format.
 
 Users or project rules may disable or replace source organization. All three paths preserve operator semantics, native implementation constraints, the independent golden, the original precision contract and the agreed functionality and performance acceptance requirements. Verify the final public entry in every path and revalidate affected checks when implementation, call paths or performance change. Disabling organization does not waive an unresolved technical requirement.
-
-CANN offline compilation, registration, installation and ACLNN/GEIR acceptance belong to `pypto-pro-cann-delivery`. Use that skill from its installed or supplied location without first converting the kernel to the default Python/JIT source layout. If that skill is unavailable, report the missing entry rather than substituting source packaging. Installing a skill makes it available; it does not select a delivery policy.
 
 ## Extract a deliverable package
 
@@ -51,4 +49,4 @@ Verify the public entry from its final location and run the agreed tests for eve
 
 ## Packaging
 
-For a requested Python/JIT source archive, use an explicit allowlist of the selected standard's deliverables, or the existing project layout when organization is disabled, plus required standalone dependencies. Do not stage a disabled or alternative handoff through the default layout. Exclude obsolete layouts, compiled kernels, objects, shared libraries, bytecode, caches, profiler captures, temporary probes and debug logs from source archives. Extract the archive into a clean directory and verify its imports and documented test entry. CANN offline package contents and binary validation follow `pypto-pro-cann-delivery`, not this source-archive exclusion list. Keep generated evidence outside tracked source; do not add history ledgers or per-attempt records.
+For a requested Python/JIT source archive, use an explicit allowlist of the selected standard's deliverables, or the existing project layout when organization is disabled, plus required standalone dependencies. Do not stage a disabled or alternative handoff through the default layout. Exclude obsolete layouts, compiled kernels, objects, shared libraries, bytecode, caches, profiler captures, temporary probes and debug logs from source archives. Extract the archive into a clean directory and verify its imports and documented test entry. Keep generated evidence outside tracked source; do not add history ledgers or per-attempt records.

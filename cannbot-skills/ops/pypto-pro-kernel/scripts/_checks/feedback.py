@@ -193,7 +193,8 @@ def print_result(result, *, json_output=True, details=False):
         for item in knowledge["items"]:
             reference = item["reference"]
             print(
-                f"{item['id']} [{item['kind']}; {item['match']['reason']}; applicability={item['applicability']['status']}]"
+                f"{item['id']} [{item['kind']}; {item['match']['reason']};"
+                f" applicability={item['applicability']['status']}]"
             )
             print(
                 f"  {reference['path']}:{reference.get('line', 1)} sha256={reference['sha256']}"

@@ -110,7 +110,7 @@ class _Sources:
             self.enums = {}
             for match in re.finditer(r'py::enum_<[^>]+>\s*\(\s*\w+,\s*"(\w+)"', text):
                 name = match[1]
-                body = text[match.end() :].split(";", 1)[0]
+                body = text[match.end():].split(";", 1)[0]
                 members = list(re.finditer(r'\.value\(\s*"(\w+)"\s*,', body))
                 if not members:
                     raise ValueError(f"Cannot read C++ enum members for {name}")
@@ -151,9 +151,7 @@ class _Sources:
             if isinstance(parent, ast.Module):
                 return self.resolve(owner, node.attr)
             if isinstance(parent, ast.ClassDef):
-                members = [
-                    member for member in parent.body if node.attr in _names(member)
-                ]
+                members = [member for member in parent.body if node.attr in _names(member)]
                 if len(members) == 1:
                     return owner, relative, members[0]
         raise ValueError(f"Unresolved declaration reference: {ast.unparse(node)}")
@@ -613,7 +611,8 @@ def generate(pypto_root: Path = PYPTO_ROOT) -> str:
         "# gemm.md, datamove.md, crosscore-sync.md, fixpipe.md and support.md.",
         "# Enum member names come from Python bindings; numeric encodings are omitted.",
         *[
-            f"# Partial stub: {item['path']}; complete prefix through line {item['parsed_through_line']}; later declarations unverified."
+            f"# Partial stub: {item['path']}; complete prefix through line"
+            f" {item['parsed_through_line']}; later declarations unverified."
             for item in sources.partial_stubs.values()
         ],
         "",

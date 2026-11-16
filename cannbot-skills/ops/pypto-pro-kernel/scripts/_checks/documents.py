@@ -216,7 +216,8 @@ def collect(
                                 relations=relations,
                                 section_count=len(headings),
                                 missing_facts=[
-                                    "Documentation and examples are source statements; compare the selected declaration, installation and scoped execution evidence."
+                                    "Documentation and examples are source statements;"
+                                    " compare the selected declaration, installation and scoped execution evidence."
                                 ],
                                 _text=text,
                                 _headings=headings,
@@ -325,7 +326,8 @@ def collect(
                         {"kind": "describes", "target": "symbol:" + row["symbol"]}
                     ],
                     missing_facts=[
-                        "A source docstring is separate from official usage documentation and installed execution behavior."
+                        "A source docstring is separate from official usage"
+                        " documentation and installed execution behavior."
                     ],
                     _text=doc["text"],
                     _headings=[],

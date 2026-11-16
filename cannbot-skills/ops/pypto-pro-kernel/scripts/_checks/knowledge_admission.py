@@ -159,7 +159,10 @@ def _relations(result, records, roots, sources):
         "checked": checked,
         "unresolved": dict(sorted(unresolved.items())),
         "unresolved_items": unresolved_items,
-        "scope": "Integrated object relations and Markdown fragments; inferred source mentions and deferred diagnostic/evidence providers are not API absence.",
+        "scope": (
+            "Integrated object relations and Markdown fragments; inferred source"
+            " mentions and deferred diagnostic/evidence providers are not API absence."
+        ),
     }
 
 
@@ -232,7 +235,9 @@ def _routes(
                     "owners": sorted(unique),
                     "references": [unique[key]["reference"] for key in sorted(unique)],
                     "status": "conditional_alternatives",
-                    "instruction": "Inspect each owner's conditions; shared routing words do not prove a semantic contradiction.",
+                    "instruction": (
+                        "Inspect each owner's conditions; shared routing words do not prove a semantic contradiction."
+                    ),
                 }
             )
     checked = 0
@@ -463,6 +468,9 @@ def report(*, pypto_root=PYPTO_ROOT, examples_root=EXAMPLES_ROOT, cards_root=Non
         "queryability": routing,
         "maintenance": gates,
         "source_reconciliation": "not_assessed",
-        "evidence_limit": "Knowledge admission checks structure, source identity and declared routing only; it does not establish installed support, numerical correctness, performance or model effectiveness.",
+        "evidence_limit": (
+            "Knowledge admission checks structure, source identity and declared routing"
+            " only; it does not establish installed support, numerical correctness, performance or model effectiveness."
+        ),
     }
     return feedback.finish(result)

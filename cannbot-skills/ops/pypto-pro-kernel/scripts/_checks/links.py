@@ -129,9 +129,7 @@ def fragment_range(text: str, fragment: str):
         raise ValueError("Expected a nonempty Markdown fragment up to 2048 characters")
     fragment = unquote(fragment.removeprefix("#"))
     headings = heading_locations(text)
-    locations = [
-        dict(heading) for heading in headings if heading["fragment"] == fragment
-    ]
+    locations = [dict(heading) for heading in headings if heading["fragment"] == fragment]
     for lineno, line in prose_lines(text):
         if fragment not in {
             html.unescape(value) for value in _ANCHOR.findall(_CODE.sub("", line))
@@ -143,7 +141,7 @@ def fragment_range(text: str, fragment: str):
             )
             lines = text.splitlines()
             adjacent = following and not any(
-                part.strip() for part in lines[lineno : following["line"] - 1]
+                part.strip() for part in lines[lineno: following["line"] - 1]
             )
             locations.append(
                 {

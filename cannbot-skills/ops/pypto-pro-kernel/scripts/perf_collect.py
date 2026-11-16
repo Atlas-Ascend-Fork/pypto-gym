@@ -742,9 +742,7 @@ def _parse_environment():
 
 def _coverage(parsed, groups, collection):
     """Separate requested-but-absent groups from groups that were never requested."""
-    requested = [
-        item for item in (collection or {}).get("metrics") or [] if item in METRICS
-    ]
+    requested = [item for item in (collection or {}).get("metrics") or [] if item in METRICS]
     if not requested:
         return {
             "requested": None,
@@ -1282,9 +1280,7 @@ def collect_msopprof_op(app, *, output_dir, kernel_name=None, aic_metrics="PipeU
             f"expected one new OPPROF_* directory under {out}, found {len(captures)}"
         )
     capture = Path(captures[0])
-    requested = [
-        item.strip() for item in (aic_metrics or "").split(",") if item.strip()
-    ]
+    requested = [item.strip() for item in (aic_metrics or "").split(",") if item.strip()]
     payload = _collection_payload(
         backend, collector, argv, app,
         metrics=requested,

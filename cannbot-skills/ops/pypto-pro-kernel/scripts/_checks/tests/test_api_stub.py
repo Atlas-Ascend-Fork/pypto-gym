@@ -208,7 +208,8 @@ def test_namespace_member_aliases_preserve_the_actual_declaration(
             "from ._system_api import System as system",
         )
         (source / "python/pypto_pro/language/_system_api.py").write_text(
-            "class System:\n    @staticmethod\n    def lock(*, pipe, event_id: int = 0):\n        raise RuntimeError('must not execute')\n"
+            "class System:\n    @staticmethod\n    def lock(*, pipe, event_id: int ="
+            " 0):\n        raise RuntimeError('must not execute')\n"
         )
     initializer.write_text(text)
     tree = ast.parse(api_stub.generate(source))
@@ -255,7 +256,8 @@ def test_only_complete_named_stub_declarations_survive_a_later_syntax_error(sour
     )
     stub = source / "python/pypto_pro/language/broken.pyi"
     stub.write_text(
-        "from typing import Final\nclass Good:\n    value: Final[int]\n\nclass Broken:\n    def incomplete(self):\n    ...\n"
+        "from typing import Final\nclass Good:\n    value: Final[int]\n\nclass"
+        " Broken:\n    def incomplete(self):\n    ...\n"
     )
     generated = api_stub.generate(source)
     assert named(ast.parse(generated), "Good").body[0].target.id == "value"

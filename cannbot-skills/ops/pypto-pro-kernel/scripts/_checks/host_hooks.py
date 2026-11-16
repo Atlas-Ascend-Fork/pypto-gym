@@ -105,7 +105,7 @@ def pre_tool(payload, *, policy_path, python=None):
             or words[index] == "query"
             and any(
                 word == "--task" or word.startswith("--task=")
-                for word in words[index + 1 :]
+                for word in words[index + 1:]
             )
         ):
             context_cli = words[index]
@@ -125,8 +125,9 @@ def pre_tool(payload, *, policy_path, python=None):
                 "permissionDecision": "deny",
                 "permissionDecisionReason": (
                     reason
-                    + f" Syntax: {sys.executable} {entry} search --path DIR --pattern TEXT; "
-                    "or read --path FILE --start-line N --max-lines N. Query a specific unresolved API first. Partial search does not prove absence."
+                    + f" Syntax: {sys.executable} {entry} search --path DIR --pattern"
+                    " TEXT; or read --path FILE --start-line N --max-lines N. Query"
+                    " a specific unresolved API first. Partial search does not prove absence."
                 )[:700],
             }
         }
@@ -189,14 +190,16 @@ def pre_tool(payload, *, policy_path, python=None):
         word in OPERATORS or "$" in word or "`" in word for word in words
     ):
         return deny(
-            "Split compound source reads into explicit scoped operations; shell expansion is not interpreted by the context adapter."
+            "Split compound source reads into explicit scoped operations; shell"
+            " expansion is not interpreted by the context adapter."
         )
     if context_cli:
         if context_cli in {"api", "surface"}:
             if "--help" in words or "-h" in words:
                 return {}
             return deny(
-                "Bulk API inventories are outside this context profile; use query with the exact API or conditional route already returned."
+                "Bulk API inventories are outside this context profile; use query with"
+                " the exact API or conditional route already returned."
             )
         fixed, index = [], 0
         while index < len(words):
@@ -226,7 +229,7 @@ def pre_tool(payload, *, policy_path, python=None):
         while index < len(arguments):
             item = arguments[index]
             if item == "--":
-                arguments = arguments[:index] + arguments[index + 1 :]
+                arguments = arguments[:index] + arguments[index + 1:]
                 break
             if item == "--files":
                 files = True
@@ -261,7 +264,8 @@ def pre_tool(payload, *, policy_path, python=None):
             paths += remainder
         if not paths:
             return deny(
-                "Source search requires an explicit directory or file; implicit whole-workspace enumeration is disabled."
+                "Source search requires an explicit directory or file; implicit"
+                " whole-workspace enumeration is disabled."
             )
         rewritten += ["search", "--policy", str(Path(policy_path).resolve()), *options]
         if files:

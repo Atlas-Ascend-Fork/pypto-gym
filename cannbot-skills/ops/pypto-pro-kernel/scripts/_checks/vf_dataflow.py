@@ -48,7 +48,7 @@ def inspect(path: Path, *, pypto_root=PYPTO_ROOT):
     calls = []
     api_policy.inspect(path, pypto_root=pypto_root, resolved_calls=calls)
     operations = {
-        (node.lineno, node.col_offset): name[len(api_policy.VF_PREFIX) :]
+        (node.lineno, node.col_offset): name[len(api_policy.VF_PREFIX):]
         for node, name in calls
         if name.startswith(api_policy.VF_PREFIX)
     }
@@ -56,7 +56,10 @@ def inspect(path: Path, *, pypto_root=PYPTO_ROOT):
     coverage = {
         "checked_consumers": 0,
         "unverified_calls": 0,
-        "limits": "Straight-line local VF bindings only; no helper, branch, loop, dtype, physical-footprint or numerical proof.",
+        "limits": (
+            "Straight-line local VF bindings only; no helper, branch, loop, dtype,"
+            " physical-footprint or numerical proof."
+        ),
     }
 
     def keyword(call, name, default=None, position=None):
@@ -195,12 +198,14 @@ def inspect(path: Path, *, pypto_root=PYPTO_ROOT):
                         source.path,
                         node.lineno,
                         WIDENING_RULE,
-                        f"FP16 UNPK → FP32 ZERO conversion at line {cast_line} uses a b16 prefix "
-                        "that may cover fewer logical values than this b32 consumer. The same unsaturated "
-                        "count n>1 converts only ceil(n/2) values. If all consumer lanes need converted data, "
-                        "reuse its b32 predicate or derive a b16 predicate covering the selected even halfwords. "
-                        "Full/saturated predicates and intentionally unused lanes are legal; verify actual needed lanes "
-                        "and the caller's FP16 source at the widening contract before changing code.",
+                        f"FP16 UNPK → FP32 ZERO conversion at line {cast_line} uses a"
+                        " b16 prefix that may cover fewer logical values than this b32"
+                        " consumer. The same unsaturated count n>1 converts only"
+                        " ceil(n/2) values. If all consumer lanes need converted data,"
+                        " reuse its b32 predicate or derive a b16 predicate covering"
+                        " the selected even halfwords. Full/saturated predicates and"
+                        " intentionally unused lanes are legal; verify actual needed"
+                        " lanes and the caller's FP16 source at the widening contract before changing code.",
                         advisory=True,
                     )
                 )
@@ -334,9 +339,11 @@ def inspect(path: Path, *, pypto_root=PYPTO_ROOT):
                                 source.path,
                                 node.lineno,
                                 REDUCTION_RULE,
-                                "A non-datablock reduction reaches lane-wise arithmetic without a visible broadcast. "
-                                "If this consumer needs the row scalar in multiple lanes, bind the reduction result then use vf.full; "
-                                "a lane-0-only consumer is legal. Review the complete connected chain before another device request.",
+                                "A non-datablock reduction reaches lane-wise arithmetic"
+                                " without a visible broadcast. If this consumer needs"
+                                " the row scalar in multiple lanes, bind the reduction"
+                                " result then use vf.full; a lane-0-only consumer is"
+                                " legal. Review the complete connected chain before another device request.",
                                 advisory=True,
                             )
                         )
@@ -352,10 +359,13 @@ def inspect(path: Path, *, pypto_root=PYPTO_ROOT):
                                     source.path,
                                     node.lineno,
                                     CHAIN_RULE,
-                                    "The same reduction consumer depends on a default/compact load and FP32 ZERO cast. "
-                                    "Verify the caller's source dtype and intended element order: for contiguous FP16 widening, "
-                                    "check UNPK and physical predicate coverage as well as reduction broadcasting. "
-                                    "FP32 input or intentional half-element selection is not a widening defect.",
+                                    "The same reduction consumer depends on a"
+                                    " default/compact load and FP32 ZERO cast. Verify"
+                                    " the caller's source dtype and intended element"
+                                    " order: for contiguous FP16 widening, check UNPK"
+                                    " and physical predicate coverage as well as"
+                                    " reduction broadcasting. FP32 input or intentional"
+                                    " half-element selection is not a widening defect.",
                                     advisory=True,
                                 )
                             )

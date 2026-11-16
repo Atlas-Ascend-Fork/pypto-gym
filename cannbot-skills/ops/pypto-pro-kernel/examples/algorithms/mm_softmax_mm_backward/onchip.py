@@ -143,27 +143,58 @@ def make_onchip(rows, features, columns, channels, dtype_name="float16", query_r
         pl.store(ds_hi, dh, [row, 0])
         pl.store(ds_lo, low_d, [row, 0])
 
-    @pl.jit(arch="a5", auto_mutex=True, name=f"mm_softmax_mm_backward_front_r{query_rows}", pipeline=pl.pipeline.PipelineConfig(preload=0))
+    @pl.jit(
+        arch="a5", auto_mutex=True, name=f"mm_softmax_mm_backward_front_r{query_rows}",
+        pipeline=pl.pipeline.PipelineConfig(preload=0),
+    )
     def front(
         a: pl.Tensor[[rows, features], dtype], b: pl.Tensor[[features, columns], dtype],
         c: pl.Tensor[[columns, channels], dtype], g: pl.Tensor[[rows, channels], dtype],
         p_hi: pl.Tensor[[rows, columns], dtype], p_lo: pl.Tensor[[rows, columns], dtype],
         ds_hi: pl.Tensor[[rows, columns], dtype], ds_lo: pl.Tensor[[rows, columns], dtype],
     ):
-        a_g = pl.make_tile_group(type=pl.TileType(shape=[query_rows, features], dtype=dtype, target_memory=pl.MemorySpace.Mat), addrs=0, mutex_ids="auto", depth=1)
-        b_g = pl.make_tile_group(type=pl.TileType(shape=[features, columns], dtype=dtype, target_memory=pl.MemorySpace.Mat), addrs=2 * query_rows * features, mutex_ids="auto", depth=1)
-        g_g = pl.make_tile_group(type=pl.TileType(shape=[query_rows, channels], dtype=dtype, target_memory=pl.MemorySpace.Mat), addrs=2 * (query_rows * features + features * columns), mutex_ids="auto", depth=1)
-        c_g = pl.make_tile_group(type=pl.TileType(shape=[columns, channels], dtype=dtype, target_memory=pl.MemorySpace.Mat), addrs=2 * (query_rows * features + features * columns + query_rows * channels), mutex_ids="auto", depth=1)
-        left = pl.make_tile_group(type=pl.TileType(shape=[query_rows, 64], dtype=dtype, target_memory=pl.MemorySpace.Left), addrs=0, mutex_ids="auto", depth=1)
-        right = pl.make_tile_group(type=pl.TileType(shape=[64, columns], dtype=dtype, target_memory=pl.MemorySpace.Right), addrs=0, mutex_ids="auto", depth=1)
-        acc_g = pl.make_tile_group(type=pl.TileType(shape=[query_rows, columns], dtype=FP32, target_memory=pl.MemorySpace.Acc), addrs=0, mutex_ids="auto", depth=1)
-        shared_score = pl.make_tile_group(type=pl.TileType(shape=[half, columns], dtype=FP32, target_memory=pl.MemorySpace.Vec), addrs=0, mutex_ids="auto", depth=1, fwd_ids=[0], bwd_ids=[1])
-        shared_dp = pl.make_tile_group(type=pl.TileType(shape=[half, columns], dtype=FP32, target_memory=pl.MemorySpace.Vec), addrs=4 * half * columns, mutex_ids="auto", depth=1, fwd_ids=[2], bwd_ids=[3])
-        p_g = pl.make_tile_group(type=pl.TileType(shape=[half, columns], dtype=FP32, target_memory=pl.MemorySpace.Vec), addrs=8 * half * columns, mutex_ids="auto", depth=1)
-        ph_g = pl.make_tile_group(type=pl.TileType(shape=[half, columns], dtype=dtype, target_memory=pl.MemorySpace.Vec), addrs=12 * half * columns, mutex_ids="auto", depth=1)
-        pl_g = pl.make_tile_group(type=pl.TileType(shape=[half, columns], dtype=dtype, target_memory=pl.MemorySpace.Vec), addrs=14 * half * columns, mutex_ids="auto", depth=1)
-        dh_g = pl.make_tile_group(type=pl.TileType(shape=[half, columns], dtype=dtype, target_memory=pl.MemorySpace.Vec), addrs=16 * half * columns, mutex_ids="auto", depth=1)
-        dl_g = pl.make_tile_group(type=pl.TileType(shape=[half, columns], dtype=dtype, target_memory=pl.MemorySpace.Vec), addrs=18 * half * columns, mutex_ids="auto", depth=1)
+        a_g = pl.make_tile_group(
+            type=pl.TileType(shape=[query_rows, features], dtype=dtype, target_memory=pl.MemorySpace.Mat), addrs=0,
+            mutex_ids="auto", depth=1)
+        b_g = pl.make_tile_group(
+            type=pl.TileType(shape=[features, columns], dtype=dtype, target_memory=pl.MemorySpace.Mat),
+            addrs=2 * query_rows * features, mutex_ids="auto", depth=1)
+        g_g = pl.make_tile_group(
+            type=pl.TileType(shape=[query_rows, channels], dtype=dtype, target_memory=pl.MemorySpace.Mat),
+            addrs=2 * (query_rows * features + features * columns), mutex_ids="auto", depth=1)
+        c_g = pl.make_tile_group(
+            type=pl.TileType(shape=[columns, channels], dtype=dtype, target_memory=pl.MemorySpace.Mat),
+            addrs=2 * (query_rows * features + features * columns + query_rows * channels), mutex_ids="auto", depth=1)
+        left = pl.make_tile_group(
+            type=pl.TileType(shape=[query_rows, 64], dtype=dtype, target_memory=pl.MemorySpace.Left), addrs=0,
+            mutex_ids="auto", depth=1)
+        right = pl.make_tile_group(
+            type=pl.TileType(shape=[64, columns], dtype=dtype, target_memory=pl.MemorySpace.Right), addrs=0,
+            mutex_ids="auto", depth=1)
+        acc_g = pl.make_tile_group(
+            type=pl.TileType(shape=[query_rows, columns], dtype=FP32, target_memory=pl.MemorySpace.Acc), addrs=0,
+            mutex_ids="auto", depth=1)
+        shared_score = pl.make_tile_group(
+            type=pl.TileType(shape=[half, columns], dtype=FP32, target_memory=pl.MemorySpace.Vec), addrs=0,
+            mutex_ids="auto", depth=1, fwd_ids=[0], bwd_ids=[1])
+        shared_dp = pl.make_tile_group(
+            type=pl.TileType(shape=[half, columns], dtype=FP32, target_memory=pl.MemorySpace.Vec),
+            addrs=4 * half * columns, mutex_ids="auto", depth=1, fwd_ids=[2], bwd_ids=[3])
+        p_g = pl.make_tile_group(
+            type=pl.TileType(shape=[half, columns], dtype=FP32, target_memory=pl.MemorySpace.Vec),
+            addrs=8 * half * columns, mutex_ids="auto", depth=1)
+        ph_g = pl.make_tile_group(
+            type=pl.TileType(shape=[half, columns], dtype=dtype, target_memory=pl.MemorySpace.Vec),
+            addrs=12 * half * columns, mutex_ids="auto", depth=1)
+        pl_g = pl.make_tile_group(
+            type=pl.TileType(shape=[half, columns], dtype=dtype, target_memory=pl.MemorySpace.Vec),
+            addrs=14 * half * columns, mutex_ids="auto", depth=1)
+        dh_g = pl.make_tile_group(
+            type=pl.TileType(shape=[half, columns], dtype=dtype, target_memory=pl.MemorySpace.Vec),
+            addrs=16 * half * columns, mutex_ids="auto", depth=1)
+        dl_g = pl.make_tile_group(
+            type=pl.TileType(shape=[half, columns], dtype=dtype, target_memory=pl.MemorySpace.Vec),
+            addrs=18 * half * columns, mutex_ids="auto", depth=1)
         group = pl.get_block_idx() // pl.get_subblock_num()
         for tile in pl.range(group, rows // query_rows, pl.get_block_num()):
             with pl.section_cube():
@@ -181,7 +212,10 @@ def execute_onchip(kernels, a, b, c, upstream, outputs, workspace):
     """Enqueue four native tasks; workspace=(P_hi,P_lo,dS_hi,dS_lo)."""
     if any(value.ndim != 2 or not value.is_contiguous() for value in (a, b, c, upstream)):
         raise ValueError("inputs must be contiguous two-dimensional tensors")
-    if str(a.dtype) not in ("torch.float16", "torch.bfloat16") or any(value.dtype != a.dtype for value in (b, c, upstream)):
+    if (
+        str(a.dtype) not in ("torch.float16", "torch.bfloat16")
+        or any(value.dtype != a.dtype for value in (b, c, upstream))
+    ):
         raise ValueError("inputs must have one common FP16 or BF16 dtype")
     if a.shape[1] != b.shape[0] or b.shape[1] != c.shape[0] or upstream.shape != (a.shape[0], c.shape[1]):
         raise ValueError("input matrix-chain dimensions do not match")

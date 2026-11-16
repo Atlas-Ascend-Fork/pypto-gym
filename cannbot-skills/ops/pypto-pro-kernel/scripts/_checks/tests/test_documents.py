@@ -41,10 +41,16 @@ def pto_assert(condition):
     """Abort the kernel on failure."""
     raise RuntimeError("never execute")
 ''',
-        "docs/zh/api/pro_api/insert.md": "# pypto_pro.language.insert\r\n\r\n## 约束说明\r\nKeep the offset in bounds.\r\n\r\n## 调用示例\r\n```python\r\ncarry = vf.create_mask()\r\npl.insert(dst, src, [0, 0])\r\n```\r\n\r\n## 返回值\r\nNone\r\n",
+        "docs/zh/api/pro_api/insert.md": (
+            "# pypto_pro.language.insert\r\n\r\n## 约束说明\r\nKeep the offset in"
+            " bounds.\r\n\r\n## 调用示例\r\n```python\r\ncarry ="
+            " vf.create_mask()\r\npl.insert(dst, src, [0, 0])\r\n```\r\n\r\n## 返回值\r\nNone\r\n"
+        ),
         "docs/zh/api/pro_api/move.md": "# pypto_pro.language.move\n\nMove data between compatible tiles.\n",
         "docs/zh/api/pro_api/pto_assert.md": "# pypto_pro.language.pto_assert\n\nLogs only; execution continues.\n",
-        "docs/zh/guide/programming_guide/pro/handover.md": "# 跨核交接\n\n## 跨核中间数据传递\nUse pl.insert with explicit ownership.\n\n## 同步\nOrder the producer and consumer.\n",
+        "docs/zh/guide/programming_guide/pro/handover.md": (
+            "# 跨核交接\n\n## 跨核中间数据传递\nUse pl.insert with explicit ownership.\n\n## 同步\nOrder the producer and consumer.\n"
+        ),
         "docs/zh/guide/quick_start/pro/start.md": "# First kernel\n\nUse pl.move for this example.\n",
     }
     for name, text in files.items():
@@ -311,7 +317,7 @@ def test_official_example_fragment_preserves_raw_crlf_and_reference_hash(corpus)
         (root / "docs/zh/api/pro_api/insert.md").read_bytes().splitlines(keepends=True)
     )
     assert content(result).encode() == b"".join(
-        lines[expected["start_line"] - 1 : expected["end_line"]]
+        lines[expected["start_line"] - 1: expected["end_line"]]
     )
     assert "carry = vf.create_mask()" in content(result)
     assert (

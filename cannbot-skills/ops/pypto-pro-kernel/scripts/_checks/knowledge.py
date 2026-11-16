@@ -241,9 +241,10 @@ def _symbol_intent(meta, text):
             if alias.isascii():
                 phrase = r"(?<![a-z0-9_])" + phrase + r"(?![a-z0-9_])"
             for match in re.finditer(phrase, clause):
-                before, after = clause[: match.start()], clause[match.end() :]
+                before, after = clause[: match.start()], clause[match.end():]
                 if re.search(
-                    r"(?:\b(?:not|no|without|exclude|excluding|ignore|ignoring)|不是|并非|不涉及|没有|排除|忽略)\s*(?:(?:the|any)\s+)?$",
+                    r"(?:\b(?:not|no|without|exclude|excluding|ignore|ignoring)"
+                    r"|不是|并非|不涉及|没有|排除|忽略)\s*(?:(?:the|any)\s+)?$",
                     before,
                 ):
                     continue
@@ -317,7 +318,10 @@ def applicability(declared, filters):
         "matched_filters": matched,
         "unknown_filters": unknown,
         "conflicting_filters": conflicts,
-        "evidence_limit": "Routing conditions only; shape, consumers and installation/native/numerical/performance support remain unverified.",
+        "evidence_limit": (
+            "Routing conditions only; shape, consumers and"
+            " installation/native/numerical/performance support remain unverified."
+        ),
     }
 
 
@@ -426,16 +430,15 @@ def objects(entries, declarations, examples_root):
                 conditions=conditions,
                 missing_facts=list(meta.get("missing_facts", []))
                 or [
-                    "Confirm the contract's conditions against the workload, selected installation and execution evidence."
+                    "Confirm the contract's conditions against the workload, selected"
+                    " installation and execution evidence."
                 ],
                 relations=relations,
                 facets=facets(meta),
                 aliases=meta.get("aliases", []),
             )
         )
-    by_symbol = {
-        row.get("symbol"): row for row in result if row["kind"] in SYMBOL_KINDS
-    }
+    by_symbol = {row.get("symbol"): row for row in result if row["kind"] in SYMBOL_KINDS}
     for meta, _, _ in entries:
         for name in meta.get("symbols", []):
             row = by_symbol.get(symbol(name) or name)
@@ -785,7 +788,7 @@ def discover(
                 "item_unavailable",
                 "Knowledge cursor item is unavailable; restart this read-only query",
             ) from error
-    page = matches[start : start + requested["limit"]]
+    page = matches[start: start + requested["limit"]]
     following = None
     if page and start + len(page) < len(matches):
         value = {
@@ -887,18 +890,31 @@ def discover(
         },
         "source_reconciliation": {
             "status": "not_assessed",
-            "instruction": "Compare official documentation, selected declarations/docstrings and source-bound behavior separately; conflicting statements remain unresolved. No current installation or execution evidence is inferred.",
+            "instruction": (
+                "Compare official documentation, selected declarations/docstrings and"
+                " source-bound behavior separately; conflicting statements remain"
+                " unresolved. No current installation or execution evidence is inferred."
+            ),
         },
         **(
             {
                 "recovery": {
                     "status": "related_program_sources_only",
                     "items": recovery,
-                    "evidence_limit": "Word overlap only, not a matching result or an applicability judgment. Resolve an original program to check its conditions, roles and dependencies; unmatched words and unstated conditions remain unresolved.",
+                    "evidence_limit": (
+                        "Word overlap only, not a matching result or an applicability"
+                        " judgment. Resolve an original program to check its"
+                        " conditions, roles and dependencies; unmatched words and"
+                        " unstated conditions remain unresolved."
+                    ),
                 }
             }
             if recovery
             else {}
         ),
-        "evidence_limit": "Discovery over declared sources only. Unknown filters and source examples are not support or execution acceptance; no match is not API absence. Diagnostic and observation adapters are not integrated.",
+        "evidence_limit": (
+            "Discovery over declared sources only. Unknown filters and source examples"
+            " are not support or execution acceptance; no match is not API absence."
+            " Diagnostic and observation adapters are not integrated."
+        ),
     }

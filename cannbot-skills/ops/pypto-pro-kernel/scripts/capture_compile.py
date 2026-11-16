@@ -46,9 +46,7 @@ def _inputs(arguments):
 
 
 def _output(arguments):
-    values = [
-        arguments[i + 1] for i, value in enumerate(arguments[:-1]) if value == "-o"
-    ]
+    values = [arguments[i + 1] for i, value in enumerate(arguments[:-1]) if value == "-o"]
     return Path(values[0]).resolve() if len(values) == 1 else None
 
 

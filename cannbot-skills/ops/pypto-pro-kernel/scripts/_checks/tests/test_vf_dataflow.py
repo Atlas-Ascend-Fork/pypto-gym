@@ -54,7 +54,8 @@ def test_connected_conversion_and_reduction_are_reviewed_together(tmp_path):
         "    one = v.update_mask(1, dtype=pl.DT_FP32)\n    y = v.sub(wide, total, one)\n",
         "    one = v.create_mask(pattern=pl.MaskPattern.VL1, dtype=pl.DT_FP32)\n    y = v.sub(wide, total, one)\n",
         "    empty = v.update_mask(0, dtype=pl.DT_FP32)\n    y = v.sub(wide, total, empty)\n",
-        "    other = v.reduce_sum(wide, m)\n    combined = v.add(total, other, m)\n    combined = v.full(combined, m)\n    y = v.sub(wide, combined, m)\n",
+        "    other = v.reduce_sum(wide, m)\n    combined = v.add(total, other, m)\n"
+        "    combined = v.full(combined, m)\n    y = v.sub(wide, combined, m)\n",
         "    v.store_align(dst, total, m)\n",
     ],
 )
@@ -194,7 +195,10 @@ def test_direct_lane_consumers_are_reviewed(tmp_path, consumer):
 
 
 def test_recast_or_broadcast_is_not_a_direct_unpk_edge(tmp_path):
-    body = "    again = v.astype(wide, convert, dtype=FP32, layout=pl.CastLayout.ZERO)\n    out = v.muls(again, 2.0, compute)\n"
+    body = (
+        "    again = v.astype(wide, convert, dtype=FP32, layout=pl.CastLayout.ZERO)\n  "
+        "  out = v.muls(again, 2.0, compute)\n"
+    )
     assert widening(tmp_path, body=body)[0] == []
     assert widening(tmp_path, body="    out = v.full(wide, compute)\n")[0] == []
 

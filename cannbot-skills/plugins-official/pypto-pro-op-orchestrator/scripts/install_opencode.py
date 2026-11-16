@@ -69,10 +69,6 @@ ORCHESTRATOR = filesystem_path(Path(__file__).resolve().parents[1])
 PLUGIN = "pypto-pro-op-orchestrator"
 SKILLS = (
     "pypto-pro-kernel",
-    "pypto-pro-op-standard",
-    "pypto-benchmark-fracture-aggregator",
-    "pypto-fracture-point-detector",
-    "pypto-session-dfx-report",
 )
 AGENTS = tuple(
     f"pypto-pro-op-{role}"

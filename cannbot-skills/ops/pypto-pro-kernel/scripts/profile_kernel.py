@@ -524,7 +524,7 @@ def compare_configurations(
         )
         for position, (name, _) in enumerate(sequence):
             pairs = tuple(
-                call[position * pair_tasks : (position + 1) * pair_tasks]
+                call[position * pair_tasks: (position + 1) * pair_tasks]
                 for call in rounds
             )
             results[name].append(

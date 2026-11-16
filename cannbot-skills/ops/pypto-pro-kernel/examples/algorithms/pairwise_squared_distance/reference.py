@@ -16,7 +16,7 @@ def reference(x, z):
     z = np.asarray(z, dtype=np.float64)
     result = np.empty((x.shape[0], z.shape[0]), dtype=np.float64)
     for begin in range(0, len(x), 16):
-        result[begin : begin + 16] = (
-            (x[begin : begin + 16, None, :] - z[None, :, :]) ** 2
+        result[begin: begin + 16] = (
+            (x[begin: begin + 16, None, :] - z[None, :, :]) ** 2
         ).sum(-1)
     return result

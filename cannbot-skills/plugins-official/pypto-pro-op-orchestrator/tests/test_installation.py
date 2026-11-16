@@ -15,7 +15,6 @@ import importlib.util
 import json
 import os
 from pathlib import Path
-import re
 import shutil
 import subprocess
 import sys
@@ -192,27 +191,29 @@ class ActualResourceTest(unittest.TestCase):
             result = installer.install(project)
             config = project / ".opencode"
             self.assert_skill_bundle(config, expected_skill_files())
-            standard = config / "skills/pypto-pro-op-standard/SKILL.md"
+            self.assertEqual(set(result["skills"]), {"pypto-pro-kernel"})
+            for excluded in (
+                "pypto-pro-cann-delivery",
+                "pypto-pro-precision-debug",
+                "pypto-benchmark-fracture-aggregator",
+                "pypto-fracture-point-detector",
+                "pypto-session-dfx-report",
+            ):
+                self.assertFalse((config / "skills" / excluded).exists(), excluded)
+            kernel = config / "skills/pypto-pro-kernel"
+            delivery_path = "references/workflows/delivery.md"
+            delivery = kernel / delivery_path
+            standard = kernel / "references/workflows/op-standard.md"
             for entry in (project / "AGENTS.md", config / "agents" / f"{installer.PLUGIN}.md"):
-                self.assertIn(installer.display_path(standard), entry.read_text(encoding="utf-8"))
-            reference = "references/precision_compare.py"
+                self.assertIn(installer.display_path(kernel / "SKILL.md"), entry.read_text(encoding="utf-8"))
+            reference = "../../scripts/precision_compare.py"
             self.assertIn(f"]({reference})", standard.read_text(encoding="utf-8"))
             self.assertTrue((standard.parent / reference).is_file())
-            kernel = config / "skills/pypto-pro-kernel"
-            for relative in (
-                "SKILL.md",
-                "references/workflows/delivery.md",
-            ):
-                document = kernel / relative
-                links = re.findall(
-                    r"\]\(([^)\s]+/pypto-pro-op-standard/SKILL\.md)\)",
-                    document.read_text(encoding="utf-8"),
-                )
-                self.assertTrue(links, relative)
-                for target in links:
-                    resolved = (document.parent / target).resolve()
-                    self.assertEqual(resolved, standard.resolve())
-                    self.assertTrue(resolved.is_file())
+            self.assertIn(f"]({delivery_path})", (kernel / "SKILL.md").read_text(encoding="utf-8"))
+            target = "op-standard.md"
+            self.assertIn(f"]({target})", delivery.read_text(encoding="utf-8"))
+            self.assertEqual((delivery.parent / target).resolve(), standard.resolve())
+            self.assertTrue(standard.is_file())
             for obsolete in (
                 "hooks",
                 "plugins",
@@ -264,7 +265,8 @@ class ActualResourceTest(unittest.TestCase):
                     installer.install(project)
                     self.assertIn(choice + contract, (project / "AGENTS.md").read_text(encoding="utf-8"))
                     self.assertEqual(snapshot_user_files(project), original)
-                    self.assertTrue((project / ".opencode/skills/pypto-pro-op-standard/SKILL.md").is_file())
+                    kernel = project / ".opencode/skills/pypto-pro-kernel"
+                    self.assertTrue((kernel / "references/workflows/op-standard.md").is_file())
 
 
 class InstallationTest(unittest.TestCase):
@@ -326,6 +328,28 @@ class InstallationTest(unittest.TestCase):
         previous["owned_files"][relative] = installer.digest(content)
         (self.config / installer.RECEIPT).write_bytes(installer.json_bytes(previous))
         return relative, content
+
+    def test_refresh_retires_previously_installed_diagnostic_skills(self):
+        legacy = (
+            "pypto-benchmark-fracture-aggregator",
+            "pypto-fracture-point-detector",
+            "pypto-session-dfx-report",
+        )
+        for name in legacy:
+            write(self.plugin.parents[1] / "ops" / name / "SKILL.md", f"{name}\n")
+        with mock.patch.object(installer, "SKILLS", (*installer.SKILLS, *legacy)):
+            self.install()
+        user_file = self.config / "skills" / legacy[0] / "user.md"
+        write(user_file, "User content\n")
+
+        result = self.install()
+        for name in legacy:
+            relative = f"skills/{name}/SKILL.md"
+            self.assertFalse((self.config / relative).exists())
+            self.assertEqual((Path(result["backup"]) / relative).read_text(), f"{name}\n")
+        self.assertEqual(user_file.read_text(), "User content\n")
+        receipt = installer.read_json(self.config / installer.RECEIPT)
+        self.assertEqual(receipt["installed_skills"], list(installer.SKILLS))
 
     def test_obsolete_owned_resource_is_backed_up_and_user_neighbors_survive(self):
         relative, content = self.seed_obsolete_resource()

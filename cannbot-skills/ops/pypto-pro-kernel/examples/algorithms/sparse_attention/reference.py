@@ -47,7 +47,7 @@ def reference(query, key, value, indices, scale, layout="BSND", causal=False):
             for first in range(0, query_rows, 16):
                 end = min(query_rows, first + 16)
                 rows = selected[b, head, first:end]
-                queries = q[b, head * group : (head + 1) * group, first:end].transpose(
+                queries = q[b, head * group: (head + 1) * group, first:end].transpose(
                     0, 1
                 )
                 keys, values = k[b, head, rows], v[b, head, rows]
@@ -68,7 +68,7 @@ def reference(query, key, value, indices, scale, layout="BSND", causal=False):
                     nonempty, denominator, torch.ones_like(denominator)
                 )
                 output = torch.einsum("qhk,qkd->qhd", weights, values)
-                result[b, head * group : (head + 1) * group, first:end] = (
+                result[b, head * group: (head + 1) * group, first:end] = (
                     output.transpose(0, 1)
                 )
     return result.transpose(1, 2).contiguous() if layout == "BSND" else result
@@ -102,9 +102,7 @@ def representative_inputs(case):
         .int()
     )
     if layout == "BNSD":
-        query, key, indices = [
-            x.transpose(1, 2).contiguous() for x in (query, key, indices)
-        ]
+        query, key, indices = [x.transpose(1, 2).contiguous() for x in (query, key, indices)]
     value = key[..., :dv].contiguous()
     return query, key, value, indices, dk**-0.5, layout, causal
 

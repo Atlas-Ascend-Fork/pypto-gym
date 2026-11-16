@@ -264,7 +264,7 @@ def test_program_recovery_preserves_exclusions_filters_and_source_refresh(librar
         '"""Gather indexed matrix operands with a repeated row selector.\nexample-query: '
         + json.dumps(metadata)
         + '\n"""\n'
-        + before[before.index("import ") :]
+        + before[before.index("import "):]
     )
     text = "gathered dot product matrix multiplication repeated row selector"
     (row,) = discover(library, text=text)["recovery"]["items"]
@@ -377,7 +377,8 @@ def test_named_api_is_not_replaced_with_partial_program_clues(symbol, tmp_path):
     "text,expected",
     [
         (
-            "VF Vector per-column reduction across rows for contiguous 2D FP32 input; inspect suitable complete example and explicit buffers/stages",
+            "VF Vector per-column reduction across rows for contiguous 2D FP32"
+            " input; inspect suitable complete example and explicit buffers/stages",
             "column_statistics",
         ),
         (

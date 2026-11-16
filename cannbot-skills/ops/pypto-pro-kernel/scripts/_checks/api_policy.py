@@ -292,9 +292,9 @@ def inspect(
                 resolved_calls.append((node, name))
             if observed_calls is not None and name and name.startswith(PL_MODULE + "."):
                 symbol = (
-                    "vf." + name[len(VF_PREFIX) :]
+                    "vf." + name[len(VF_PREFIX):]
                     if name.startswith(VF_PREFIX)
-                    else "pl." + name[len(PL_MODULE) + 1 :]
+                    else "pl." + name[len(PL_MODULE) + 1:]
                 )
                 observed_calls.append({"symbol": symbol, "line": node.lineno})
             if (

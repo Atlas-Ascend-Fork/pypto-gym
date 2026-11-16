@@ -233,7 +233,10 @@ def inspect_program(program, target, sources):
                         "destination": dst,
                         "location": location,
                         "target": target,
-                        "scope": "native descriptors; runtime valid-shape mutations, producer bytes and synchronization remain unproved",
+                        "scope": (
+                            "native descriptors; runtime valid-shape mutations,"
+                            " producer bytes and synchronization remain unproved"
+                        ),
                     }
                 )
         for field in fields:

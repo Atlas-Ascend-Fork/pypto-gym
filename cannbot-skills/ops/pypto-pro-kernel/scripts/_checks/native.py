@@ -118,9 +118,7 @@ def entry_metadata(kernel, path):
             getattr(kernel, "_func", kernel) if result["tile_interface"] else kernel
         )
         hints = getattr(original, "__annotations__", {})
-        result["string_annotations"] = {
-            str(k): v[:400] for k, v in list(hints.items())[:8] if isinstance(v, str)
-        }
+        result["string_annotations"] = {str(k): v[:400] for k, v in list(hints.items())[:8] if isinstance(v, str)}
         declaration = _entry_declaration(original, path)
         if declaration:
             result["declaration"] = declaration
@@ -153,7 +151,10 @@ def report(spec_path, *, pypto_root=PYPTO_ROOT, examples_root=EXAMPLES_ROOT):
                 "native-capability-unavailable",
                 "unverified",
                 str(exc),
-                next_action="Run native preflight in the matching installed PyPTO environment; source-only checks remain available.",
+                next_action=(
+                    "Run native preflight in the matching installed PyPTO environment;"
+                    " source-only checks remain available."
+                ),
             )
         ]
         return result
@@ -233,7 +234,9 @@ def report(spec_path, *, pypto_root=PYPTO_ROOT, examples_root=EXAMPLES_ROOT):
         result["coverage"]["ub_l1"] = {
             "native_transfer_sites": len(transfers),
             "uninspected_node_kinds": list(snapshot.unknown_nodes),
-            "limits": "Descriptor checks only; no device codegen, execution, numerical validation or full lifetime analysis.",
+            "limits": (
+                "Descriptor checks only; no device codegen, execution, numerical validation or full lifetime analysis."
+            ),
         }
         if snapshot.unknown_nodes:
             result["diagnostics"].append(

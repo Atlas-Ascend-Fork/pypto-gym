@@ -1,6 +1,6 @@
 {
   "name": "pypto-pro-op-orchestrator",
-  "description": "PyPTO-Pro 算子开发与性能优化工作流。",
+  "description": "PyPTO-Pro 算子开发、验证、调试、性能优化与交付工作流。",
   "version": "3.0.0",
   "author": {
     "name": "CANNBot"

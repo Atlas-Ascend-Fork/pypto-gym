@@ -124,7 +124,10 @@ def test_missing_native_runtime_is_explicit_and_blocks_the_child(tmp_path):
     spec = tmp_path / "spec.json"
     spec.write_text(json.dumps({"entry": "candidate.py:kernel", "args": []}))
     entry = SKILL_ROOT / "scripts/check.py"
-    wrapper = "import sys,runpy\nsys.modules['torch']=None\nsys.path.insert(0,sys.argv[1])\nsys.argv=sys.argv[2:]\nrunpy.run_path(sys.argv[0],run_name='__main__')"
+    wrapper = (
+        "import sys,runpy\nsys.modules['torch']=None\nsys.path.insert(0,sys.argv[1])\nsys.argv=sys.argv[2:]\n"
+        "runpy.run_path(sys.argv[0],run_name='__main__')"
+    )
     process = subprocess.run(
         [
             sys.executable,

@@ -230,10 +230,7 @@ def _tables():
     for op in ("load", "store", "move"):
         by_arch = registry.get(op)
         assert isinstance(by_arch, dict), f"{op} 未提供按架构登记的组合表"
-        selected = [
-            pair for arch, pair in by_arch.items()
-            if getattr(arch, "name", None) == "DAV_3510"
-        ]
+        selected = [pair for arch, pair in by_arch.items() if getattr(arch, "name", None) == "DAV_3510"]
         assert len(selected) == 1, f"{op} 应恰好登记一份 DAV_3510 普通/量化组合表"
         pair = selected[0]
         assert isinstance(pair, tuple) and len(pair) == 2, f"{op} 的普通/量化表登记格式发生变化"

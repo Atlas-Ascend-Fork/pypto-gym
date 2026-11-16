@@ -104,7 +104,9 @@ def _make_product(rows, reduction, columns, dtype, trans_a=False, trans_b=False,
 
     if residual == "none":
         @pl.jit(arch="a5", auto_mutex=True)
-        def product(a: pl.Tensor[a_shape, dtype], b: pl.Tensor[b_shape, dtype], output: pl.Tensor[[rows, columns], FP32]):
+        def product(
+            a: pl.Tensor[a_shape, dtype], b: pl.Tensor[b_shape, dtype], output: pl.Tensor[[rows, columns], FP32],
+        ):
             product_body(a, b, b, output)
         return product
 
@@ -119,7 +121,9 @@ def _make_product(rows, reduction, columns, dtype, trans_a=False, trans_b=False,
 
 def make_kernels(rows, features, columns, channels, dtype_name="float16"):
     """Return score, normalize, dP, softmax-backward, dA, dB and dC entries."""
-    if any(type(size) is not int or size < 64 or size > 1024 or size % 64 for size in (rows, features, columns, channels)):
+    if any(
+        type(size) is not int or size < 64 or size > 1024 or size % 64 for size in (rows, features, columns, channels)
+    ):
         raise ValueError("M, K, N and D must be multiples of 64 in [64,1024]")
     if dtype_name not in ("float16", "bfloat16"):
         raise ValueError("dtype_name must be float16 or bfloat16")
@@ -164,10 +168,18 @@ def make_kernels(rows, features, columns, channels, dtype_name="float16"):
         scores: pl.Tensor[[rows, columns], FP32], probabilities: pl.Tensor[[rows, columns], FP32],
         high: pl.Tensor[[rows, columns], dtype], low: pl.Tensor[[rows, columns], dtype],
     ):
-        score_g = pl.make_tile_group(type=pl.TileType(shape=[1, columns], dtype=FP32, target_memory=pl.MemorySpace.Vec), addrs=0, mutex_ids="auto", depth=1)
-        p_g = pl.make_tile_group(type=pl.TileType(shape=[1, columns], dtype=FP32, target_memory=pl.MemorySpace.Vec), addrs=4 * columns, mutex_ids="auto", depth=1)
-        high_g = pl.make_tile_group(type=pl.TileType(shape=[1, columns], dtype=dtype, target_memory=pl.MemorySpace.Vec), addrs=8 * columns, mutex_ids="auto", depth=1)
-        low_g = pl.make_tile_group(type=pl.TileType(shape=[1, columns], dtype=dtype, target_memory=pl.MemorySpace.Vec), addrs=10 * columns, mutex_ids="auto", depth=1)
+        score_g = pl.make_tile_group(
+            type=pl.TileType(shape=[1, columns], dtype=FP32, target_memory=pl.MemorySpace.Vec), addrs=0,
+            mutex_ids="auto", depth=1)
+        p_g = pl.make_tile_group(
+            type=pl.TileType(shape=[1, columns], dtype=FP32, target_memory=pl.MemorySpace.Vec), addrs=4 * columns,
+            mutex_ids="auto", depth=1)
+        high_g = pl.make_tile_group(
+            type=pl.TileType(shape=[1, columns], dtype=dtype, target_memory=pl.MemorySpace.Vec), addrs=8 * columns,
+            mutex_ids="auto", depth=1)
+        low_g = pl.make_tile_group(
+            type=pl.TileType(shape=[1, columns], dtype=dtype, target_memory=pl.MemorySpace.Vec), addrs=10 * columns,
+            mutex_ids="auto", depth=1)
         with pl.section_vector():
             for row in pl.range(pl.get_block_idx(), rows, pl.get_block_num()):
                 src, dst = score_g.current(), p_g.current()
@@ -200,13 +212,24 @@ def make_kernels(rows, features, columns, channels, dtype_name="float16"):
     @pl.jit(arch="a5", auto_mutex=True)
     def softmax_backward(
         probabilities: pl.Tensor[[rows, columns], FP32], grad_probabilities: pl.Tensor[[rows, columns], FP32],
-        grad_scores: pl.Tensor[[rows, columns], FP32], high: pl.Tensor[[rows, columns], dtype], low: pl.Tensor[[rows, columns], dtype],
+        grad_scores: pl.Tensor[[rows, columns], FP32], high: pl.Tensor[[rows, columns], dtype],
+        low: pl.Tensor[[rows, columns], dtype],
     ):
-        p_g = pl.make_tile_group(type=pl.TileType(shape=[1, columns], dtype=FP32, target_memory=pl.MemorySpace.Vec), addrs=0, mutex_ids="auto", depth=1)
-        dp_g = pl.make_tile_group(type=pl.TileType(shape=[1, columns], dtype=FP32, target_memory=pl.MemorySpace.Vec), addrs=4 * columns, mutex_ids="auto", depth=1)
-        ds_g = pl.make_tile_group(type=pl.TileType(shape=[1, columns], dtype=FP32, target_memory=pl.MemorySpace.Vec), addrs=8 * columns, mutex_ids="auto", depth=1)
-        high_g = pl.make_tile_group(type=pl.TileType(shape=[1, columns], dtype=dtype, target_memory=pl.MemorySpace.Vec), addrs=12 * columns, mutex_ids="auto", depth=1)
-        low_g = pl.make_tile_group(type=pl.TileType(shape=[1, columns], dtype=dtype, target_memory=pl.MemorySpace.Vec), addrs=14 * columns, mutex_ids="auto", depth=1)
+        p_g = pl.make_tile_group(
+            type=pl.TileType(shape=[1, columns], dtype=FP32, target_memory=pl.MemorySpace.Vec), addrs=0,
+            mutex_ids="auto", depth=1)
+        dp_g = pl.make_tile_group(
+            type=pl.TileType(shape=[1, columns], dtype=FP32, target_memory=pl.MemorySpace.Vec), addrs=4 * columns,
+            mutex_ids="auto", depth=1)
+        ds_g = pl.make_tile_group(
+            type=pl.TileType(shape=[1, columns], dtype=FP32, target_memory=pl.MemorySpace.Vec), addrs=8 * columns,
+            mutex_ids="auto", depth=1)
+        high_g = pl.make_tile_group(
+            type=pl.TileType(shape=[1, columns], dtype=dtype, target_memory=pl.MemorySpace.Vec), addrs=12 * columns,
+            mutex_ids="auto", depth=1)
+        low_g = pl.make_tile_group(
+            type=pl.TileType(shape=[1, columns], dtype=dtype, target_memory=pl.MemorySpace.Vec), addrs=14 * columns,
+            mutex_ids="auto", depth=1)
         with pl.section_vector():
             for row in pl.range(pl.get_block_idx(), rows, pl.get_block_num()):
                 p, dp, ds = p_g.current(), dp_g.current(), ds_g.current()
