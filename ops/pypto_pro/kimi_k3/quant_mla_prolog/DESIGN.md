@@ -190,8 +190,8 @@ Cube 的矩阵乘都在 `section_cube`（`matmul_mx` 的操作数空间是 L0A/L
 
 ## 流水设计
 
-`@pl.jit(auto_mutex=True, tiling_key=MlaKey, pipeline=pl.pipeline.PipelineConfig(preload=4))`。
-4 个 `@pl.pipeline.stage`：
+`@pl.jit(auto_mutex=True, tiling_key=MlaKey)`。4 个 stage 是普通函数，由 kernel 体
+在对应 section 内直接调用：
 
 | stage | 相位 | 职责 |
 | --- | --- | --- |
@@ -207,8 +207,13 @@ kernel 签名类型，不能在运行期分支。
 `qa_partial`、vec1→M4 的 `qa_mx`、M6/M7 流水循环前的两侧对齐。MIX 模式下 cube 段与
 vector 段各要调用一次 `sync_all`，且必须在循环外，源码共 6 处调用。M4→M6 这道必须
 是 MIX 而不是 AIC 内部同步：M4 按 n 段分核写 `q_head`，一个 head 的 NoPE 128 列跨
-多个 n 段、落在不同核上，M6 按 head 分核必然读到别核写的列。M6→M7 的逐拍交接走框架
-自动 `fwd_ids` / `bwd_ids` 事件，不占屏障。
+多个 n 段、落在不同核上，M6 按 head 分核必然读到别核写的列。M6→M7 的逐拍交接用
+跨核事件（`pl.system.wait/set_cross_core`，MIX 同 block 默认模式），不占屏障：`q_latent`
+走每核私有的 GM 双槽（`ws` 按核切 `WS_PER_CORE`），fwd 事件号 = 槽号（Cube 写完 `set`、
+Vector 读前 `wait`），bwd 事件号 = 2 + 槽号（Vector 读空 `set`、Cube 覆写前 `wait`）。
+消费比生产晚一拍：循环前消费侧先 `set` 两个 bwd 放行空槽，循环内 Vector 消费上一拍，
+循环后单独补一段消费尾拍，Cube 侧最后等两个 bwd 再收尾。事件 id 0~3 与 MIX 屏障
+（11~13）不冲突，`wait`/`set` 逐次配对、跨拍不留残留。
 
 **跨 section 的中间量只能走 GM。** Cube 只能从 L1 取操作数、L1 靠 `pl.load` 从 GM
 搬，所以 vector 段算出的东西要进 cube 必须经 GM 一圈：`qa_partial[1,·,1536]` 与

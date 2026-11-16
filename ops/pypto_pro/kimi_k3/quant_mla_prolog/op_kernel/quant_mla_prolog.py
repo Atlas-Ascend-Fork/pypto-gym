@@ -104,7 +104,7 @@ BASE_N_WKB = 128           # N 分段：512/128 = 4 段。L0B 的 [128,128] BF16
                            # 32768B 单槽即整容量
 N_SEG_WKB = KV_LORA // BASE_N_WKB   # 4
 
-GM_DEPTH_WKB = 2            # 跨核 GM buffer depth（写它的 stage 是奇数编号，契约 ≥ 2）
+GM_DEPTH_WKB = 2            # 跨核 GM 槽数：双槽让 Cube 最多领先 Vector 一拍
 MW_WKB = 32                 # M6/M7 的 m 粒度，与全局 m 解耦
 
 # L1 地址图按 M 计算（结构见 DESIGN.md）；WSC_BYTES 是 2×4096、别按元素数重算
@@ -557,9 +557,10 @@ def q_epilogue_vf(nope_tile, rope_tile, out_tile, scale_tile):
     vf.mem_bar()
 
 
-# M6/M7 的自动 CV 并行流水 stage：一拍 = 一个 (head, m 块)，q_latent 走跨核
+# M6/M7 的 CV 并行流水 stage：一拍 = 一个 (head, m 块)，q_latent 走跨核
 # GM buffer。末拍部分核无 head 由体内 `h < N_HEADS` 兜（if 控制整个 stage 须为
-# 编译期常量）。
+# 编译期常量）。stage 是普通函数、由 kernel 体在 section 内调用；M6→M7 的
+# 槽交接用跨核事件（见 _q_epi_consume 与 M6/M7 循环体）。
 
 
 def _mm_k0_seg(k0, k1, n_width, sc_base, base_k, scale_k, k1_seg,
@@ -644,7 +645,6 @@ def _mm_side(k1, n, n_width, base_k, m_rows, m_idx, xl, sxl, w_gm, w_fracs,
                  phase=pl.STPhase.Final)
 
 
-@pl.pipeline.stage
 def stage_w_mm(tick, core_id, num_cores, m_rows, n_blocks,
                base_k, tokens,
                x, descale_x, x_a, x_b, sx_l1,
@@ -712,7 +712,6 @@ def _head_tile_index(tick, core_id, num_cores, n_blocks):
     return h, gt - h * n_blocks, per_core
 
 
-@pl.pipeline.stage
 def stage_wkb(tick, core_id, num_cores, mw, n_blocks, q_head, wkb,
               wkb_l1, qh_l1, a_wkb, b_wkb, l0c_wkb, ql_gm):
     """Cube：一个 (head, 32 行块) 的 WKB latent 投影，写进跨核 GM slot。"""
@@ -745,7 +744,6 @@ def stage_wkb(tick, core_id, num_cores, mw, n_blocks, q_head, wkb,
                         order=[1, 2])
 
 
-@pl.pipeline.stage
 def stage_q_epi(tick, core_id, num_cores, sub_id, sub_num, m_rows, n_blocks,
                 q_head, ql_gm, nope_ub, rope_ub, q_ub, dsq_ub,
                 q_out, descale_q):
@@ -769,7 +767,6 @@ def stage_q_epi(tick, core_id, num_cores, sub_id, sub_num, m_rows, n_blocks,
             pl.store(descale_q, db, [row0 + t, h])
 
 
-@pl.pipeline.stage
 def stage_q_epi_c0(tick, core_id, num_cores, sub_id, sub_num, m_rows,
                    n_blocks, q_head, ql_gm, nope_ub, rope_ub, q_out):
     """Vector：C0 的 Q epilogue —— 纯 concat 搬运、无量化。"""
@@ -784,6 +781,32 @@ def stage_q_epi_c0(tick, core_id, num_cores, sub_id, sub_num, m_rows,
             pl.load(rb, q_head, [row0 + t, h * HEAD_DIM + QK_NOPE])
             pl.store(q_out, nb, [row0 + t, h * FEATURES])
             pl.store(q_out, rb, [row0 + t, h * FEATURES + KV_LORA])
+
+
+def _q_epi_consume(sched, q_head, ql_gm, nope_ub, rope_ub, q_ub, dsq_ub,
+                   q_out, descale_q, quant_mode_c):
+    """M7 消费一拍：等 fwd → 取 ptick 对应槽的视图 → 量化落盘 → set bwd。
+
+    相关的调度标量打包成一组传参：sched = (ptick, core_id, nc, sub_id,
+    sub_num, mw, nb)，即拍号与分核拓扑。流水循环内与收尾段共用的交接
+    协议，fwd/bwd 事件号与槽号的关系见 ql_gm 声明处。只含 ``pl.*``，
+    发射序列与内联时相同；调用点保证 ptick ≥ 0。quant_mode_c 是装饰期
+    常量，选枝在编译期折叠（同 _module5 的写法）。
+    """
+    ptick, core_id, nc, sub_id, sub_num, mw, nb = sched
+    pslot = ptick % 2
+    pl.system.wait_cross_core(pipe=pl.PipeType.MTE2, event_id=pslot)
+    ql_slot = pl.make_tensor(
+        pl.addptr(pl.make_ptr(ql_gm), pslot * (MW_WKB * KV_LORA)),
+        [MW_WKB, KV_LORA])
+    if quant_mode_c:
+        stage_q_epi(ptick, core_id, nc, sub_id, sub_num, mw, nb,
+                    q_head, ql_slot, nope_ub, rope_ub, q_ub, dsq_ub,
+                    q_out, descale_q)
+    else:
+        stage_q_epi_c0(ptick, core_id, nc, sub_id, sub_num, mw, nb,
+                       q_head, ql_slot, nope_ub, rope_ub, q_out)
+    pl.system.set_cross_core(pipe=pl.PipeType.MTE2, event_id=2 + pslot)
 
 
 # M3 / M4 / M5 的段体（kernel 体在对应 section 内调用，屏障由 section 持有）
@@ -1052,8 +1075,7 @@ def _cache(quant_mode_c, i):
     return _cache_tables(quant_mode_c)[i]
 
 
-@pl.jit(auto_mutex=True, tiling_key=MlaKey, name="quant_mla_prolog",
-        pipeline=pl.pipeline.PipelineConfig(preload=4))
+@pl.jit(auto_mutex=True, tiling_key=MlaKey, name="quant_mla_prolog")
 def quant_mla_prolog_kernel(
     x: pl.Tensor[[pl.DYNAMIC, DIM], pl.DT_FP8E4M3FN],
     descale_x: pl.Tensor[[pl.DYNAMIC, pl.DYNAMIC, 2], pl.DT_FP8E8M0],
@@ -1364,14 +1386,14 @@ def quant_mla_prolog_kernel(
         addrs=_lr(MRows, "l0c_wkb"), mutex_ids=[13, 14])
 
 
-    # M6→M7 跨核共享 GM buffer：每核切自己的区域（Cube 与 Vector 同核号）；
-    # fwd/bwd 由框架自动插。事件 id 0~3 不与屏障冲突（MIX 屏障占 11~13）。
+    # M6→M7 跨核共享 GM buffer：每核切自己的区域（Cube 与 Vector 同核号），
+    # GM_DEPTH_WKB 个槽按 tick 奇偶轮转。槽交接用 fwd/bwd 跨核事件：
+    # fwd 事件号 = 槽号（Cube 写完 set），bwd 事件号 = 2 + 槽号（Vector 读空
+    # set），事件插入点见 M6/M7 循环体。事件 id 0~3 不与屏障冲突（MIX 屏障
+    # 占 11~13）。
     ws_core = pl.addptr(ws, core_id * WS_PER_CORE)
     ql_gm = pl.make_tensor(
         ws_core, [MW_WKB, KV_LORA], dtype=pl.DT_BF16,
-        depth=GM_DEPTH_WKB,
-        fwd_ids=[0, 1],
-        bwd_ids=[2, 3],
     )
 
     tokens = x.shape[0]
@@ -1457,28 +1479,52 @@ def quant_mla_prolog_kernel(
 
         pl.system.sync_all()
 
-    # M6 + M7：自动 CV 并行流水，一拍 = 一个 (head, m 块)；M 粒度与全局解耦
+    # M6 + M7：CV 并行流水，一拍 = 一个 (head, m 块)；M 粒度与全局解耦。
+    # Cube 生产、Vector 消费同一拍的 q_latent，生产最多领先消费一拍（双槽）。
     mw_wkb = min(MW_WKB, MRows)
     nb_wkb = capacity // mw_wkb
-    # 拍数不能是 0：零拍让收尾同步配不上，A5 上挂成 aicore timeout 而 rc 仍 0
+    # 拍数不能是 0：收尾按最后一拍消费，零拍会把事件序挂死（A5 上 aicore
+    # timeout 而 rc 仍 0）
     n_ticks_wkb = (N_HEADS * nb_wkb + nc - 1) // nc
     sub_id_q = pl.get_subblock_idx()
     sub_num_q = pl.get_subblock_num()
 
+    # 消费侧先放行两个槽的 bwd 事件，Cube 首拍的 wait 才有信号可等
+    with pl.section_vector():
+        pl.system.set_cross_core(pipe=pl.PipeType.MTE2, event_id=2)
+        pl.system.set_cross_core(pipe=pl.PipeType.MTE2, event_id=3)
+
     for tick in pl.range(0, n_ticks_wkb, 1):
         with pl.section_cube():
+            slot = tick % 2
+            pl.system.wait_cross_core(pipe=pl.PipeType.FIX, event_id=2 + slot)
+            ql_slot = pl.make_tensor(
+                pl.addptr(pl.make_ptr(ql_gm), slot * (MW_WKB * KV_LORA)),
+                [MW_WKB, KV_LORA])
             stage_wkb(tick, core_id, nc, mw_wkb, nb_wkb, q_head,
-                      wkb, wkb_l1, qh_l1, a_wkb, b_wkb, l0c_wkb, ql_gm)
+                      wkb, wkb_l1, qh_l1, a_wkb, b_wkb, l0c_wkb, ql_slot)
+            pl.system.set_cross_core(pipe=pl.PipeType.FIX, event_id=slot)
         with pl.section_vector():
-            if QuantModeC:
-                stage_q_epi(tick, core_id, nc, sub_id_q,
-                            sub_num_q, mw_wkb, nb_wkb, q_head, ql_gm,
-                            nope_ub, rope_ub, q_ub, dsq_ub,
-                            q_out, descale_q)
-            else:
-                stage_q_epi_c0(tick, core_id, nc, sub_id_q,
-                               sub_num_q, mw_wkb, nb_wkb, q_head,
-                               ql_gm, nope_ub, rope_ub, q_out)
+            # 消费比生产晚一拍：本拍消费上一拍的产物
+            if tick > 0:
+                _q_epi_consume(
+                    (tick - 1, core_id, nc, sub_id_q, sub_num_q,
+                     mw_wkb, nb_wkb),
+                    q_head, ql_gm, nope_ub, rope_ub, q_ub, dsq_ub,
+                    q_out, descale_q, QuantModeC)
+
+    # 收尾：最后一拍的产物没有下一拍去消费，单独补一段
+    with pl.section_vector():
+        _q_epi_consume(
+            (n_ticks_wkb - 1, core_id, nc, sub_id_q, sub_num_q,
+             mw_wkb, nb_wkb),
+            q_head, ql_gm, nope_ub, rope_ub, q_ub, dsq_ub,
+            q_out, descale_q, QuantModeC)
+
+    # Cube 侧等两个槽都被读空再收尾，kernel 结束时不再有未消费的写
+    with pl.section_cube():
+        pl.system.wait_cross_core(pipe=pl.PipeType.FIX, event_id=2)
+        pl.system.wait_cross_core(pipe=pl.PipeType.FIX, event_id=3)
 
 
 
