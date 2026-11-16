@@ -8,7 +8,7 @@ Owner: `../pypto/docs/zh/guide/programming_guide/pro/development/kernel_function
 
 - A kernel is a plain Python function under `@pl.jit(...)`, with `import pypto_pro.language as pl`. Tensors appear as typed parameters.
 - The body is sectioned: `with pl.section_vector():` (AIV) / `with pl.section_cube():` (AIC). A kernel with both is a mixed kernel.
-- Loops inside the body use `pl.range(...)` — the builtin `range` is rejected at parse.
+- Loops inside the body use `pl.range(...)`; `native-loop-iterator` reports a builtin `range` loop under `@pl.jit` before native parsing. Host factory loops remain ordinary Python.
 - Key `@pl.jit` kwargs: `auto_mutex` (default True), `pipeline=`, `tiling_key=`, `name=`, `sanitizer=`. Eager `kernel(x, out)` uses the stream's automatic block budget. Explicit `kernel[stream, cores]` must fit the actual stream budget for the kernel's engine mix; check that limit before tuning workers (owner: `runtime/jit.py`; [launch and ownership](../api/support.md#5-get_subblock_num-depends-on-whether-the-kernel-has-a-cube-section)).
 
 ## VF is the shipping form for vector compute

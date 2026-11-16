@@ -55,13 +55,29 @@ Transpose is represented by a call-site alias using `pl.reinterpret(..., layout=
 <!-- kernel-query: {"id":"gemm-runtime-transpose","aliases":["GEMM multi-slot transpose","trans_b group.next","GEMM 多槽转置","矩阵乘运行时槽转置"],"term_groups":[["gemm","matmul","矩阵乘"],["transpose","trans_a","trans_b","转置"],["slot","group.next","多槽"]],"when":"Transpose a matrix operand selected from a multi-slot group, especially across a delayed pipeline stage.","missing_facts":["Distinguish a call-site single-Tile transpose from a whole-group view; preserve backing storage, cursor identity, shape/layout and validshape across the producer and consumer."],"example":"algorithms/indexed_batched_gemm_onchip/kernel.py"} -->
 ### Transpose aliases on multi-slot operands
 
-On source `c46548eac0ce40350a5d19293368552c2fae3dc5`, `_gemm_lowering.py` (`pypto/python/pypto_pro/language/parser/_gemm_lowering.py` in the matching source checkout) rejects `trans_a` / `trans_b` on a runtime-selected Tile from a multi-slot group: a single-Tile alias would take its static address and pin the view to slot zero. A constant-index Tile can be transposed, but fixing the index does not preserve a rotating algorithm's slot ownership.
+On matching source `bca90a6c6e69a1b1111cfe8a43b975ba2bfcf28a`, `_gemm_lowering.py` (`pypto/python/pypto_pro/language/parser/_gemm_lowering.py` in the selected source checkout) rejects `trans_a` / `trans_b` on a runtime-selected Tile from a multi-slot group: a single-Tile alias would take its static address and pin the view to slot zero. A constant-index Tile can be transposed, but fixing the index does not preserve a rotating algorithm's slot ownership.
 
 Build the transpose view at **group level before selecting a slot**. For the verified B-operand path, an NZ `[N,K]` Mat group has a ZN `[K,N]` alias over the same bytes; Cube selects `alias.next()` and calls `pl.gemm` without `trans_b`. A whole-group `pl.reinterpret` retains backing storage and cursor management. Selecting through both aliases advances the shared cursor twice, so each owning stage must select its intended slot once. Reapply the alias's required validshape: reinterpretation does not inherit the original validshape. This metadata view does not perform an ND-to-NZ conversion or establish zero complete-call cost.
 
-Pipeline buffer tracking is a separate constraint. In this source, `_cross_core_scanner.py` (`pypto/python/pypto_pro/runtime/pipeline/_cross_core_scanner.py` in the matching source checkout) binds declared groups and follows slot/plain-name aliases; it does not automatically register a kernel-level `pl.reinterpret` result as that group's handover. Passing such an external view can lose the consumer and raise `F00007`. A coincidentally matching formal name can mask this gap. Preserve the declared group as the stage argument, then rebind that already tracked group parameter with `pl.reinterpret` inside the consumer before taking its slot. This supported pattern does not depend on the consumer parameter matching the declaration's spelling. Metadata aliasing alone is not proof of pipeline recognition.
+Pipeline buffer tracking follows parsed storage origins on this source. `_analyzer.py::probe_kernel_facts` (`pypto/python/pypto_pro/runtime/pipeline/_analyzer.py`) records the declarations reached by each actual operand; `_cross_core_scanner.py` consumes those access facts and their pipe roles. `_buffer_parser.py::_build_reinterpreted_group` (`pypto/python/pypto_pro/language/parser/_buffer_parser.py`) binds a whole-group view to its original buffer and retains its cursor. The stage parameter and local view names need not match the declaration's spelling. The verified form passes the declared group into its consumer and constructs the views there; metadata aliasing still needs a checked producer/consumer graph and emitted synchronization.
 
-The [native indexed contraction](../../examples/algorithms/indexed_batched_gemm_onchip/kernel.py) supplies that pattern: SIMT writes a local Vec tile, a real conversion and insertion produce the original NZ Mat group, and the delayed Cube stage builds its ZN group view from the declared group argument. Inspect the transformed pipeline's ready and release events against the same logical task/slot, then verify changed-input numerical cases through slot wraparound. A standalone transpose parse does not establish a correct delayed handover. The example's one-slot serial control and two-slot overlap are bounded implementations, not a claim that every alias or transpose combination is supported or faster.
+A read-only NZ panel `R[N,K]` can feed `S = X @ R.T` and `O = P @ R[:,:D]`, with independent `P` and `0 < D < K`. Inside one Cube consumer stage, `panel` is the declared Mat group, `x` and `p` are named L1 operands, and the caller supplies correctly shaped L0 groups and independent accumulators:
+
+```python
+transpose_group = pl.reinterpret(panel, shape=[K, N], layout=pl.ZN)
+rt = transpose_group.next()
+pl.set_validshape(rt, [K, N])
+pl.gemm(s, x, rt, l0a=left_s, l0b=right_s)
+
+prefix_group = pl.reinterpret(panel, shape=[N, D], layout=pl.NZ)
+rv = prefix_group.current()
+pl.set_validshape(rv, [N, D])
+pl.gemm(o, p, rv, l0a=left_o, l0b=right_o)
+```
+
+The prefix keeps the original aligned NZ row extent, slot addresses and backing pitch; only its feature-column extent shrinks. Both views read the same cursor, advanced once by `next()`. Current native validation covers serial `preload=0`, aligned non-square FP16/BF16 panels and one/two slots with changed inputs through slot wraparound. Keep the shared panel read-only until both L1-to-L0 transfers finish, and place its reverse release on MTE1 after the final reader before producer reuse. These bounds establish neither arbitrary tails or stage fan-out nor overlap or performance gains.
+
+The [complete FP16 dense path](../../examples/algorithms/sparse_attention/kernel.py) loads its key panel once and consumes its transpose and narrower prefix through its own stage/slot schedule. The [native indexed contraction](../../examples/algorithms/indexed_batched_gemm_onchip/kernel.py) supplies a gathered producer: SIMT writes a local Vec tile, conversion and insertion produce the original NZ Mat group, and Cube builds its ZN group view from the declared group argument. Inspect each transformed pipeline's ready and release events against the same logical task/slot; a standalone transpose parse does not establish a correct handover.
 
 ## From Capacity Planning to Performance Candidates
 

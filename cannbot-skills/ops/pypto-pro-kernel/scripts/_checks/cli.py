@@ -19,10 +19,12 @@ import argparse
 import contextlib
 import hashlib
 import json
+import os
 import subprocess
 import sys
+import tempfile
 import threading
-from collections import deque
+from collections import Counter, deque
 from pathlib import Path
 from .actions import GOALS
 
@@ -96,14 +98,23 @@ def python_files(targets: list[Path]) -> list[Path]:
 
 
 @reuse_parsed_sources()
-def run_rules(targets: list[Path], *, pypto_root: Path = PYPTO_ROOT) -> list[Finding]:
-    """Run `writing-style-declaration` only on `kernel.py` (the declaration is an example convention); run hardware,
-    synchronization, and SIMT rules on every `.py` file (a user's kernel file may have any name).
-    """
+def run_rules(
+    targets: list[Path], *, pypto_root: Path = PYPTO_ROOT, examples_root: Path = EXAMPLES_ROOT
+) -> list[Finding]:
+    """Apply declarations to public examples and native rules to every selected Python file."""
     findings: list[Finding] = []
-    for path in python_files(targets):
+    files = python_files(targets)
+    root = Path(examples_root).resolve()
+    example_kernels = set()
+    if any(path.name == "kernel.py" and path.resolve().is_relative_to(root) for path in files):
+        example_kernels = {
+            path.resolve()
+            for path in catalog.public_kernels(root, groups=("basic_api", *catalog.GROUPS))
+            if path.resolve().is_relative_to(root)
+        }
+    for path in files:
         findings += name_resolution.check(path)
-        if path.name == "kernel.py":
+        if path.resolve() in example_kernels:
             findings += declaration.check(path)
         findings += hardware.check(path)
         findings += tile_shape.check(path)
@@ -130,8 +141,10 @@ def run_rules(targets: list[Path], *, pypto_root: Path = PYPTO_ROOT) -> list[Fin
     return findings
 
 
-def report_rules(targets: list[Path], *, pypto_root: Path = PYPTO_ROOT) -> bool:
-    findings = run_rules(targets, pypto_root=pypto_root)
+def report_rules(
+    targets: list[Path], *, pypto_root: Path = PYPTO_ROOT, examples_root: Path = EXAMPLES_ROOT
+) -> bool:
+    findings = run_rules(targets, pypto_root=pypto_root, examples_root=examples_root)
     violations = [
         finding for finding in findings if not finding.waived and not finding.advisory
     ]
@@ -199,7 +212,8 @@ def rules_result(targets, *, pypto_root, examples_root=EXAMPLES_ROOT, findings=N
     files = python_files(targets)
     result = feedback.envelope("source_check", pypto_root, files)
     findings = (
-        run_rules(targets, pypto_root=pypto_root) if findings is None else findings
+        run_rules(targets, pypto_root=pypto_root, examples_root=examples_root)
+        if findings is None else findings
     )
     result["diagnostics"] = [feedback.finding_dict(f) for f in findings]
     transfers, resolved, unverified = [], 0, 0
@@ -314,9 +328,23 @@ def run_command(
     native_spec=None,
     json_output=False,
     details=False,
+    feedback_file=None,
 ) -> int:
     """Gate one explicit command; do not infer numerical success from its output."""
     before = source_hashes(targets)
+    if feedback_file is not None:
+        feedback_file = feedback_file.resolve()
+        if feedback_file in before or (
+            native_spec is not None and feedback_file == native_spec.resolve()
+        ):
+            raise ValueError("The feedback file cannot overwrite a checked source or native spec")
+        if feedback_file.suffix == ".py" and any(
+            path.is_dir() and feedback_file.is_relative_to(path.resolve())
+            for path in targets
+        ):
+            raise ValueError("The feedback file cannot add a Python source to the checked set")
+        feedback_file.parent.mkdir(parents=True, exist_ok=True)
+        feedback_file.unlink(missing_ok=True)
     spec_before = feedback.file_identity(native_spec) if native_spec else None
     result = rules_result(targets, pypto_root=pypto_root, examples_root=examples_root)
     result["command"] = {"argv": command, "started": False, "exit_code": None}
@@ -360,6 +388,41 @@ def run_command(
                         )
             except (OSError, SyntaxError):
                 pass  # A missing or changed source cannot supply a review route.
+        if feedback_file is not None:
+            payload = (
+                json.dumps(feedback.presentation(result, details=details), ensure_ascii=False)
+                + "\n"
+            ).encode("utf-8")
+            with tempfile.TemporaryDirectory(
+                prefix=".kernel-feedback-", dir=feedback_file.parent
+            ) as directory:
+                temporary = Path(directory) / "feedback.json"
+                temporary.write_bytes(payload)
+                temporary.chmod(0o600)
+                os.replace(temporary, feedback_file)
+            if not json_output:
+                print(
+                    "kernel_feedback_file "
+                    + json.dumps(
+                        {
+                            "path": str(feedback_file),
+                            "sha256": feedback.digest(payload),
+                            "status": result["status"],
+                            "command": {
+                                key: result["command"][key]
+                                for key in ("started", "exit_code")
+                            },
+                            "validation": result["validation"],
+                            "diagnostic_counts": dict(
+                                Counter(item["severity"] for item in result["diagnostics"])
+                            ),
+                        },
+                        ensure_ascii=False,
+                        separators=(",", ":"),
+                    ),
+                    flush=True,
+                )
+                return
         if json_output:
             feedback.print_result(result, details=details)
         else:
@@ -882,6 +945,11 @@ def main(argv: list[str] | None = None) -> int:
     )
     execute.add_argument("--format", choices=("text", "json"), default="text")
     execute.add_argument(
+        "--feedback-file",
+        type=Path,
+        help="Write final structured feedback to this file; text mode prints a compact receipt",
+    )
+    execute.add_argument(
         "--details",
         action="store_true",
         help="Include full identity and transfer descriptor fields",
@@ -1313,6 +1381,7 @@ def main(argv: list[str] | None = None) -> int:
                 native_spec=args.native_spec,
                 json_output=args.format == "json",
                 details=args.details,
+                feedback_file=args.feedback_file,
             )
         except (OSError, SyntaxError, ValueError) as exc:
             parser.error(str(exc))
@@ -1324,7 +1393,9 @@ def main(argv: list[str] | None = None) -> int:
         feedback.print_result(result, details=args.details)
         return feedback.exit_status(result)
 
-    clean = report_rules(targets, pypto_root=args.pypto_root)
+    clean = report_rules(
+        targets, pypto_root=args.pypto_root, examples_root=args.examples_root
+    )
     if args.command is None:
         print()
         try:

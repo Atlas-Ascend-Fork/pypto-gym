@@ -6,16 +6,10 @@
 # INCLUDING BUT NOT LIMITED TO NON-INFRINGEMENT, MERCHANTABILITY, OR FITNESS FOR A PARTICULAR PURPOSE.
 # See LICENSE in the root of the software repository for the full text of the License.
 
-"""Rule `writing-style-declaration`: the first line of an example's `kernel.py` docstring must contain a “写法：”
-declaration.
+"""Check the writing-style declaration on public example kernels.
 
-Based on §7.3 of `references/tooling/example-coverage.md`: sugar/raw forms are not separate directory levels; each
-example gets one declaration line—“the declaration travels with the example, so moving a directory needs no edits; **a
-tool can assert that every example declares it**.” This check implements that statement.
-
-All 21 examples already complied when this check was written, so it pins the current convention rather than fixing an
-existing violation. A check that passes from day one still has value: from example 22 onward, the convention does not
-depend on memory.
+The caller selects examples from the configured library. Business kernels do not
+need this example-catalog convention; native checks still apply to their source.
 """
 
 from __future__ import annotations

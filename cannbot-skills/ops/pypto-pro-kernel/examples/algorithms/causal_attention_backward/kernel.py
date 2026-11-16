@@ -8,6 +8,8 @@
 
 """写法：原始。 Streamed causal-attention gradients with explicit single-slot Vec resources.
 
+example-query: {"aliases":["attention gradients","softmax backward","normalized contraction reverse"],"term_groups":[["attention","softmax","normalized contraction"],["gradient","gradients","backward","reverse"]]}
+
 Contract: contiguous q/k/v/dout[B,H,S,D] are FP16, dq/dk/dv have the same shape in FP32, and inputs/outputs do not
 overlap. P=softmax(QK.T/sqrt(D)+causal_mask), O=PV; given dO, compute the three analytic gradients. Supported B=1..2,
 H=1..4, S=1..1024, D=32/64/128, workers=1/4/16; finite inputs in [-1,1] are a precondition. The independent reference

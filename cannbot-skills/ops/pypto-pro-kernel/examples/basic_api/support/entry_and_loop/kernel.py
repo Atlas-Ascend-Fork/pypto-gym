@@ -112,7 +112,10 @@ def loop_with_a_step(
 def loop_with_python_range(
     a: pl.Tensor[[FULL_M, TN], FP32], out: pl.Tensor[[FULL_M, TN], FP32]
 ):
-    """反例：内置 `range`。和 `loop_over_blocks` **只差这一个词**。"""
+    """反例：内置 `range`。和 `loop_over_blocks` **只差这一个词**。
+
+    反例：native-loop-iterator —— 原生解析器必须拒绝这里刻意保留的内置 range。
+    """
     with pl.section_vector():
         g = pl.make_tile_group(
             type=pl.TileType(

@@ -6,6 +6,8 @@ Use when outputs retain different axes, indexed reads/writes need an ownership p
 
 For each output, identify retained/reduced axes, destination multiplicity, initializer, participating lanes and final writer. A unique final writer need not compute the whole reduction.
 
+Grouping input work by length or layout does not partition every output. An output without that group axis must combine contributions from all groups: reinitializing an accumulator and storing each group to the same GM region overwrites earlier contributions even on one Stream. Initialize once and carry the accumulation, or write group-private partials and merge them before the final commit.
+
 Indexed input reads do not imply conflicting output writes. In a gather reduction, repeated source indices can still feed disjoint output rows. Start with owners of final elements or bounded reduction slices, accumulating locally and writing each partial once; compare an edge/record-scatter mapping separately. Counting each coefficient once is not enough to choose scatter: include payload atomics, contention, access coalescing, metadata/nonlinear recomputation, partial traffic and the merge. The cost of repeated arithmetic versus atomic updates needs a measured ownership comparison, not only a sweep of atomic bucket sizes.
 
 | Structure | Candidate | Required proof |
