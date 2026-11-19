@@ -12,7 +12,7 @@
 import logging
 import os
 import sys
-
+import pytest
 import torch
 import torch_npu  # noqa: F401
 from torch.nn import CrossEntropyLoss
@@ -38,6 +38,7 @@ ATOL, RTOL = 1e-4, 7.8125e-3
 logger = logging.getLogger(__name__)
 
 
+@pytest.mark.soc("910")
 def test_liger_cross_entropy_loss():
     """基础正确性：[391, 157184] bf16 mean + backward"""
     torch.manual_seed(0)
