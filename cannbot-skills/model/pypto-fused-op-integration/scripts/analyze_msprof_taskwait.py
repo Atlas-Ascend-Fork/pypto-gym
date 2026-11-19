@@ -100,7 +100,8 @@ def _analyse_single_layer_delay(rows, prefix):
     fa_indices = [i for i, r in enumerate(rows) if "FlashAttentionScore" in r.get("OP Type", "")]
     if len(fa_indices) >= 5:
         quarter = len(fa_indices) // 4
-        anchor = fa_indices[quarter * 2:quarter * 2 + 5]  # 中间区域取 5 个
+        start = min(quarter * 2, len(fa_indices) - 5)
+        anchor = fa_indices[start:start + 5]  # 中间区域取 5 个
         _output(f"\n{'=' * 70}")
         _output(f"{prefix}Per-Layer Latency Analysis (FlashAttentionScore segments, Total FA Count={len(fa_indices)})")
         _output(f"{'Seg':>4s} {'Tasks':>6s} {'TotalDur':>8s} {'wait avg':>8s} {'median':>8s} {'max':>8s} {'min':>8s}")
