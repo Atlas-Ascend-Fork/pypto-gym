@@ -26,6 +26,7 @@ from __future__ import annotations
 import argparse
 import json
 import logging
+import math
 from pathlib import Path
 from typing import Any, Dict
 
@@ -120,6 +121,17 @@ def _validate_intermediate(idx: int, entry: Dict[str, Any], op: str) -> Dict[str
     }
 
 
+def _validate_tolerance(name: str, value: Any) -> float:
+    message = f"'{name}' must be a finite, non-negative number, got {value!r}"
+    _require(not isinstance(value, bool), message)
+    try:
+        tolerance = float(value)
+    except (TypeError, ValueError, OverflowError) as err:
+        raise SnapshotManifestError(message) from err
+    _require(math.isfinite(tolerance) and tolerance >= 0, message)
+    return tolerance
+
+
 def _validate_top_fields(raw: Dict[str, Any]) -> tuple:
     """Validate and normalize the scalar top-level fields of a manifest."""
     _require("op" in raw, "missing 'op'")
@@ -199,8 +211,8 @@ def load_manifest(path: str | Path) -> Dict[str, Any]:
         "case": case,
         "modes": modes,
         "intermediates": intermediates,
-        "atol": float(raw.get("atol", 1e-3)),
-        "rtol": float(raw.get("rtol", 1e-3)),
+        "atol": _validate_tolerance("atol", raw.get("atol", 1e-3)),
+        "rtol": _validate_tolerance("rtol", raw.get("rtol", 1e-3)),
         "notes": raw.get("notes", ""),
     }
 

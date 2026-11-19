@@ -187,8 +187,8 @@ op:     <op_name>
 module: M<digits>
 case:   <case_id_from_adversarial_suite>
 modes:  [sim, npu]                 # optional; default both
-atol:   1.0e-3
-rtol:   1.0e-3
+atol:   1.0e-3                     # finite and non-negative
+rtol:   1.0e-3                     # finite and non-negative
 
 intermediates:
   - name: <identifier>             # must NOT start with inspection_
