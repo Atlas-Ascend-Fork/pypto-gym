@@ -60,6 +60,10 @@ python3 scripts/ask_DeepSeek-V2-Lite-Chat.py --device 7 --use_acl_graph --prompt
 python3 scripts/ask_DeepSeek-V2-Lite-Chat.py --device 7 --use_acl_graph --output_length 50
 ```
 
+性能对比脚本仅在推理子进程正常退出且完整指标可解析时记录成功。即使日志已经打印吞吐量，非零退出也会记录 `success: false` 和退出码，避免将失败运行用于性能对比。
+
+在本仓库根目录运行 `python3 modeling/transformers/deepseek-v2-lite-chat/test_benchmark_child_status.py` 可验证该规则。Host 回归使用临时模型目录与真实 Python 子进程，覆盖 stdout/stderr 指标、两种融合模式、非零退出和缺失指标；不加载模型、PyPTO 或 NPU，不代表设备性能测量。
+
 ### PyPTO融合算子（动态选择策略）
 
 ```bash

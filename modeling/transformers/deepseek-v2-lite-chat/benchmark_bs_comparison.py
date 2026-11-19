@@ -72,6 +72,14 @@ def run_test(use_kv_fusion, output_length, prompt, device=7):
     
     # 解析输出
     output = result.stdout + result.stderr
+    if result.returncode != 0:
+        logging.error("Inference process exited with code %s", result.returncode)
+        logging.info("Output snippet:\n%s", output[-500:])
+        return {
+            'success': False,
+            'mode': mode_name,
+            'error': f'Inference process exited with code {result.returncode}',
+        }
     
     # 提取性能指标（更宽松的正则）
     throughput_match = re.search(r'吞吐量.*?([\d.]+).*?tokens/s', output)
