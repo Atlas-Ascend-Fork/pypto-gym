@@ -34,7 +34,7 @@ def _to_numpy_args(sample) -> list:
 def _to_numpy_safe(t: torch.Tensor) -> np.ndarray:
     """Numpy doesn't grok bfloat16 / float8; cast to float32 before exporting."""
     t = t.detach()
-    if t.dtype in (torch.bfloat16, torch.float16):
+    if t.dtype in (torch.bfloat16, torch.float16) or str(t.dtype).startswith("torch.float8_"):
         t = t.to(torch.float32)
     return t.cpu().numpy()
 

@@ -114,7 +114,7 @@ def _parse_shape(shape: str | None) -> tuple[int, ...] | None:
 
 def _to_numpy_safe(t: torch.Tensor) -> np.ndarray:
     t = t.detach()
-    if t.dtype in (torch.bfloat16, torch.float16):
+    if t.dtype in (torch.bfloat16, torch.float16) or str(t.dtype).startswith("torch.float8_"):
         t = t.to(torch.float32)
     return t.cpu().numpy()
 
