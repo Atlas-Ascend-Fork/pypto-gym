@@ -153,6 +153,7 @@ def process_model(model_id: str) -> dict:
         mlog.exception(f"LOAD FAILED for {model_id}: {e}")
         for fmt in TARGET_FORMATS:
             results[fmt] = {"status": "LOAD_FAIL", "error": str(e)}
+        (RESULTS / f"{model_id}.json").write_text(json.dumps(results, indent=2), encoding="utf-8")
         return results
 
     context = ConversionContext(
