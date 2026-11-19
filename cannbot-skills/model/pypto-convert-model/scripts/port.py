@@ -312,7 +312,7 @@ def _run_pt(path: Path, sample, device: torch.device) -> np.ndarray:
 def _run_onnx(path: Path, sample) -> np.ndarray:
     ort = import_module("onnxruntime")
     sess = ort.InferenceSession(str(path), providers=onnxruntime_providers())
-    arrs = [a.cpu().numpy() for a in sample]
+    arrs = [a.detach().cpu().numpy() for a in sample]
     inames = [i.name for i in sess.get_inputs()]
     feed = {n: arrs[i] for i, n in enumerate(inames) if i < len(arrs)}
     out = sess.run(None, feed)

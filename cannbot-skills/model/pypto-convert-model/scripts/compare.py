@@ -28,7 +28,7 @@ def _as_args(sample):
 
 
 def _to_numpy_args(sample) -> list:
-    return [a.cpu().numpy() for a in _as_args(sample)]
+    return [a.detach().cpu().numpy() for a in _as_args(sample)]
 
 
 def _to_numpy_safe(t: torch.Tensor) -> np.ndarray:
