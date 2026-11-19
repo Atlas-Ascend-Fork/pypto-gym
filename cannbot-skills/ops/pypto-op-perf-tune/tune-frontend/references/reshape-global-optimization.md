@@ -104,3 +104,34 @@ for i in pypto.loop(num_blocks, ...):
 - 仅对**原始输入**（函数参数）可替换为 `reshape(inplace=True)`，中间结果和输出 tensor 不能 inplace reshape
 - 替换后需检查循环体内所有引用该 tensor 的位置是否使用了正确的 shape
 - 替换后需在 reshape 后、使用前重新设置 `set_vec_tile_shapes` 以匹配新 shape
+
+##### 3. 整块分支的静态 valid_shape
+
+当视图的 `shape` 为常量，但 `valid_shape` 含数据依赖的符号标量时，下游仍需处理动态有效范围。若循环结构能证明某一分支中 `valid_shape == shape`，可在该分支用 `pypto.view` 重建全常量有效范围，作为编译优化的候选。此操作保留视图形状，不用于改变维度或外提 reshape。
+
+**适用条件**：`x.shape` 各维均为编译期常量；能够逐分支证明整个视图均有效；动态有效范围流入对该属性敏感的公共计算体，例如包含大量 `concat` 的计算。仅适用于普通 PyPTO 前端的 `pypto.view`。
+
+**实现示例**：[chunk_kda_varlen_kernel](../../../../../ops/pypto_tensor/ling_3_0_flash/chunk_kda/chunk_kda_impl.py) 按 `_BT` 步长遍历序列，使用 `actual_l = (L - s_idx).min(_BT)` 标记有效长度。非末次迭代满足 `L - s_idx >= _BT`，因此 `actual_l == _BT`。来源实现的 `_BT == K == V == 128`，输入为 BF16、内部计算使用 FP32；以下是其二维视图处理片段，省略公共计算体：
+
+```python
+if pypto.is_loop_end(s_idx):
+    ...  # 保留尾块的动态有效范围及 fillpad 处理
+else:
+    # 改前：直接将携带动态 valid_shape 的视图传入公共计算体。
+    # 改后：仅在已证明整块有效的分支重建常量有效范围。
+    q2 = pypto.view(q2, q2.shape, [0, 0], valid_shape=q2.shape)
+    k2 = pypto.view(k2, k2.shape, [0, 0], valid_shape=k2.shape)
+    v2 = pypto.view(v2, v2.shape, [0, 0], valid_shape=v2.shape)
+    g2 = pypto.view(g2, g2.shape, [0, 0], valid_shape=g2.shape)
+    b2 = pypto.view(b2, b2.shape, [0, 0], valid_shape=b2.shape)
+    oc, s_new = _chunk_compute(q2, k2, v2, g2, b2, s_carry, ...)
+```
+
+`offsets=[0, 0]` 表示相对于当前二维视图取整块。其他秩的视图须按其秩设置偏移。该方式利用常量有效范围提供优化机会，不意味着消除数据搬运或必然提速；来源代码注释描述了动态有效范围对 `concat` 相关优化的限制，未给出具体 pass 或前后性能数据。
+
+**边界与验证**：
+
+1. 尾块、`valid_shape < shape` 或需要向下游传播有效范围以限制 `assemble` 写出的路径不得重设；否则可能将填充区当成有效数据。结构证明不能用某次运行恰好整除代替。
+2. 在目标工具链比较改前、改后的编译产物，确认动态有效范围是否限制优化，并检查分支特化数量及新增前端节点；若编译器已能处理该范围，不应保留无收益的重建。
+3. 回归整块与尾块的正确性，并在相同输入和采集条件下比较完整调用耗时及任务数据。可从整块占主导的用例（如来源算子的 `cu_seqlens=None` 且 `T % 128 == 0`）开始测量；实测前不作收益结论。
+4. 来源算子的[测试](../../../../../tests/ops/ling_3_0_flash/chunk_kda/test_chunk_kda.py)对输出 `o` 使用 `atol=rtol=1e-2`，对状态 `S` 使用 `atol=rtol=1e-3`。这些容差仅属于该算子，其他算子按自身契约验收；设备与输入约束见[算子说明](../../../../../ops/pypto_tensor/ling_3_0_flash/chunk_kda/README.md)。

@@ -1053,7 +1053,7 @@ for n_kv_idx in pypto.loop(0, n_kv_sym, 1, name="LOOP_n_kv"):
 
 > **适用场景**：matmul 后接 reduce / matmul 后接 vector(无reduce) / 多个并发 matmul / 存在 view/assemble/reshape 链。
 > **前置条件**：F-9（baseline cube tile）和 F-10（baseline vector tile）已完成。
-> **Buffer 容量约束**：cube tile 受 L1/L0A/L0B/L0C 限制，vec tile 受 UB 限制（容量见 [shared/npu-memory-arch.md](../../shared/npu-memory-arch.md) §一）。
+> **Buffer 容量约束**：cube tile 受 L1/L0A/L0B/L0C 限制，vec tile 受 UB 限制（容量见 [shared/npu-memory-arch.md](../shared/npu-memory-arch.md) §一）。
 
 #### 诊断（脚本自动）
 

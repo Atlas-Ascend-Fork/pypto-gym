@@ -129,6 +129,7 @@ def test_paired_ratios_use_complete_calls_with_unequal_task_counts(tmp_path, ord
         capture(tmp_path, rows), repeats=3, before_tasks=2, after_tasks=1, order=order
     )
     assert result["order"] == order and result["pairs"] == 3
+    assert "raw_pairs_us" not in result
     assert result["baseline"]["median_us"] == 101
     assert result["candidate"]["median_us"] == 50
     assert result["median_ratio"] == pytest.approx(90 / 101)
@@ -186,17 +187,68 @@ def test_native_pair_callbacks_retain_each_capture_order(monkeypatch):
 
     def record_capture(callback, **options):
         callbacks.append(callback)
-        return []
+        return [(3, 4, 5)] if len(callbacks) == 1 else [(5, 3, 4)]
 
     monkeypatch.setattr(profile, "_capture_calls", record_capture)
-    monkeypatch.setattr(profile, "_paired_statistics", lambda *args: {})
-    profile.compare_native(
-        lambda: trace.append("A"), lambda: trace.append("B"), warmup=1, repeats=1
+    result = profile.compare_native(
+        lambda: trace.append("A"), lambda: trace.append("B"),
+        warmup=1, repeats=1, tasks_per_call=(2, 1), include_pairs=True,
     )
+    assert [row["raw_pairs_us"] for row in result["orders"]] == [[[7, 5]], [[5, 7]]]
     trace.clear()
     for captured in callbacks:
         captured()
     assert trace == ["A", "B", "B", "A"]
+
+
+def test_evidence_capture_rejects_swapped_task_counts_before_pairing(tmp_path, monkeypatch):
+    from contextlib import contextmanager
+    from types import SimpleNamespace
+
+    monkeypatch.setattr(profile.tempfile, "tempdir", str(tmp_path))
+    tasks = []
+
+    @contextmanager
+    def capture_profile(on_trace_ready, **options):
+        tasks.clear()
+        yield
+        capture(Path(on_trace_ready), [
+            f"{i},{us},{name}" for i, (name, us) in enumerate(tasks)
+        ], header="Start Time(us),Duration(us),Name\n")
+
+    profiler = SimpleNamespace(
+        ProfilerActivity=SimpleNamespace(NPU="npu"),
+        profile=capture_profile,
+        tensorboard_trace_handler=lambda directory, **kwargs: directory,
+    )
+    torch = SimpleNamespace(npu=SimpleNamespace(synchronize=lambda: None), __version__="test")
+    monkeypatch.setattr(profile, "_runtime", lambda: (torch, torch, profiler, None))
+
+    def before():
+        tasks.append(("old", 10))
+
+    def after():
+        tasks.extend([("new1", 6), ("new2", 6)])
+
+    with pytest.raises(ValueError, match="expected 2 native tasks, got 1"):
+        profile.compare_native(before, after, warmup=1, repeats=2, tasks_per_call=(2, 1),
+                               include_pairs=True, evidence_dir=tmp_path / "swapped")
+    evidence_dir = tmp_path / "verified"
+    result = profile.compare_native(before, after, warmup=1, repeats=2, tasks_per_call=(1, 2),
+                                    include_pairs=True, evidence_dir=evidence_dir)
+    assert [row["median_ratio"] for row in result["orders"]] == [1.2, 1.2]
+    assert {path.name for path in evidence_dir.iterdir()} == {"before.csv", "after.csv", "AB.csv", "BA.csv"}
+
+    calls = 0
+
+    def varying_after():
+        nonlocal calls
+        calls += 1
+        tasks.extend([("new1", 6), ("new2" if calls <= 2 else "other", 6)])
+
+    with pytest.raises(ValueError, match="AB: native task sequence differs"):
+        profile.compare_native(before, varying_after, warmup=1, repeats=2,
+                               tasks_per_call=(1, 2), evidence_dir=tmp_path / "varying")
 
 
 def test_pipe_counters_follow_task_positions_even_with_identical_symbols(tmp_path):
@@ -504,8 +556,12 @@ def test_wall_pairs_include_completion_but_exclude_prior_stream_work(monkeypatch
     monkeypatch.setitem(sys.modules, "torch_npu", SimpleNamespace(__version__="test"))
     monkeypatch.setattr(profile.time, "perf_counter_ns", lambda: clock[0])
     result = profile.compare_wall(
-        lambda: callback("A", 8000), lambda: callback("B", 4000), warmup=2, repeats=2
+        lambda: callback("A", 8000), lambda: callback("B", 4000),
+        warmup=2, repeats=2, include_pairs=True,
     )
+    assert [row["raw_pairs_us"] for row in result["orders"]] == [
+        [[9, 5], [9, 5]], [[5, 9], [5, 9]],
+    ]
     assert calls == list("ABABABABBABA")
     assert calls.count("A") == calls.count("B") == 2 + 2 * 2
     assert result["metric"] == "synchronized_wall_us"

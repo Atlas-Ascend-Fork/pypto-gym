@@ -1,6 +1,6 @@
 ---
 name: pypto-pro-kernel
-description: Write, verify, debug and optimize native pypto_pro kernels on Ascend NPUs using @pl.jit, VF, SIMT and Cube APIs. Includes runnable examples, static checks, native-task timing and a searchable performance-card library. Use for kernel development rather than development of the PyPTO framework itself.
+description: Write, verify, debug and optimize native pypto_pro kernels on Ascend NPUs using @pl.jit, VF, SIMT and Cube APIs. Includes runnable examples, static checks, native-task timing and workflows for contributing or reviewing performance knowledge cards. Use for kernel development rather than development of the PyPTO framework itself.
 ---
 
 # PyPTO Pro Kernel Workflow
@@ -37,6 +37,8 @@ For supplied code, inspect its source and evidence first. Read selected section 
 | Fix a parse, compile, numerical or device failure | Read the original diagnostic and query its unresolved operation; use [debugging](references/workflows/debugging.md) when the boundary still needs classification |
 | Optimize a correct kernel | [Measure the gap to the actual target](references/workflows/optimization.md#first-comparison-for-an-explicit-target), then compare the change with the best predicted benefit relative to validation cost. Configuration and structural changes compete on that basis; neither is a mandatory preliminary phase. Deliver when the original checker and target pass |
 | Run a supplied evaluator or measure time | Verify the [actual imported callable, numerical gate and score configuration](references/verification/board-runs.md#integrate-a-supplied-evaluator), then [qualify one representative capture](references/verification/native-timing.md#verify-capture-before-expanding-performance-coverage). Use its original invocation; inspect further evaluator internals only for a concrete unresolved failure |
+| Prepare a performance card | Follow the [contribution workflow](references/knowledge-cards/CONTRIBUTING.md#contribute-a-card) for content quality, runnable comparisons, language alignment and measured evidence |
+| Review a performance card or audit existing cards | Use the [review workflow](references/knowledge-cards/REVIEW.md#review-a-card) to pin material, verify sources and measurements, conduct a card-only blind test, and report supported findings and recommendations |
 
 Conditional routes: [requirements/SPEC](references/workflows/requirements.md) for unresolved semantics or a requested specification; [structural review](references/workflows/structural-review.md) for an unresolved structural cost; [coverage mode](references/workflows/optimization-coverage.md) when the user requests method coverage; [performance collection](references/tooling/performance-collection.md) and [field meanings](references/tooling/performance-fields.md) when timing cannot distinguish the active hypothesis; [delivery](references/workflows/delivery.md) when packaging is requested. These are not startup checklists.
 

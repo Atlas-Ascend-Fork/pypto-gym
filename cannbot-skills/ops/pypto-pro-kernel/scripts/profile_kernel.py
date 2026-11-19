@@ -15,8 +15,10 @@ task sums do not include host dispatch time or gaps between tasks.
 """
 
 import csv
+from decimal import Decimal
 import logging
 from functools import partial
+from io import StringIO
 from pathlib import Path
 import shutil
 import statistics
@@ -35,22 +37,20 @@ _METRIC_GROUPS = (
 )
 
 
-def _task_rows(path, *, repeats, tasks_per_call):
-    """Validate and order one fixed launch sequence without dropping CSV fields."""
-    if any(type(value) is not int or value < 1 for value in (repeats, tasks_per_call)):
-        raise ValueError("repeats and tasks_per_call must be positive integers")
-    with Path(path).open(encoding="utf-8-sig", newline="") as stream:
-        reader = csv.DictReader(stream)
-        required = {"Start Time(us)", "Duration(us)"}
-        if not required.issubset(reader.fieldnames or []):
-            raise ValueError(f"unsupported profiler CSV columns: {reader.fieldnames}")
-        rows = list(reader)
-    expected = repeats * tasks_per_call
-    if len(rows) != expected:
+def _read_task_rows(stream, expected=None):
+    reader = csv.DictReader(stream)
+    required = {"Start Time(us)", "Duration(us)"}
+    if not required.issubset(reader.fieldnames or []):
+        raise ValueError(f"unsupported profiler CSV columns: {reader.fieldnames}")
+    rows = list(reader)
+    if expected is not None and len(rows) != expected:
         raise ValueError(
             f"expected {expected} native tasks, got {len(rows)}; check callback work and capture completeness"
         )
-    times = [(float(row["Start Time(us)"]), float(row["Duration(us)"])) for row in rows]
+    try:
+        times = [(float(row["Start Time(us)"]), float(row["Duration(us)"])) for row in rows]
+    except (TypeError, ValueError) as exc:
+        raise ValueError("profiler task timestamps and durations must be numeric") from exc
     if any(
         not math.isfinite(start) or not math.isfinite(duration) or duration <= 0
         for start, duration in times
@@ -61,6 +61,48 @@ def _task_rows(path, *, repeats, tasks_per_call):
     if len({start for start, _ in times}) != len(rows):
         raise ValueError("coincident task start times make native task order ambiguous")
     return sorted(rows, key=lambda row: float(row["Start Time(us)"]))
+
+
+def _task_rows(path, *, repeats, tasks_per_call):
+    """Validate and order one fixed launch sequence without dropping CSV fields."""
+    if any(type(value) is not int or value < 1 for value in (repeats, tasks_per_call)):
+        raise ValueError("repeats and tasks_per_call must be positive integers")
+    with Path(path).open(encoding="utf-8-sig", newline="") as stream:
+        return _read_task_rows(stream, repeats * tasks_per_call)
+
+
+def verified_native_pairs(captures):
+    """Reconstruct paired sums from before-only, after-only, AB and BA CSV bytes."""
+    rows = {label: _read_task_rows(StringIO(data.decode("utf-8-sig"), newline=""))
+            for label, data in captures.items()}
+    signatures = {}
+    for label, sequence in rows.items():
+        if not sequence or any(not (row.get("Name") or "").strip() for row in sequence):
+            raise ValueError(f"{label}: native capture requires named tasks")
+        stream_ids = {row["Stream ID"] for row in sequence if "Stream ID" in row}
+        if len(stream_ids) > 1:
+            raise ValueError(f"{label}: native capture requires one stream")
+        signatures[label] = [row["Name"] for row in sequence]
+
+    pairs = {}
+    for order, first, second in (("AB", "before", "after"), ("BA", "after", "before")):
+        try:
+            first_tasks = signatures[first]
+            expected = first_tasks + signatures[second]
+            actual = signatures[order]
+            ordered_rows = rows[order]
+        except KeyError as exc:
+            raise ValueError(f"missing native capture: {exc.args[0]}") from exc
+        count, remainder = divmod(len(ordered_rows), len(expected))
+        if remainder or actual != expected * count:
+            raise ValueError(f"{order}: native task sequence differs from isolated calls")
+        split = len(first_tasks)
+        durations = [Decimal(row["Duration(us)"]) for row in ordered_rows]
+        pairs[order] = [
+            [sum(durations[start:start + split]), sum(durations[start + split:start + len(expected)])]
+            for start in range(0, len(durations), len(expected))
+        ]
+    return pairs
 
 
 def _task_calls(path, *, repeats, tasks_per_call):
@@ -182,7 +224,7 @@ def _statistics(calls):
     }
 
 
-def _paired_statistics(calls, before_tasks, after_tasks, order):
+def _paired_statistics(calls, before_tasks, after_tasks, order, include_pairs=False):
     if order not in ("AB", "BA"):
         raise ValueError("order must be AB (baseline first) or BA (candidate first)")
     baseline, candidate = [], []
@@ -202,7 +244,7 @@ def _paired_statistics(calls, before_tasks, after_tasks, order):
         }
 
     wins = sum(after < before for before, after in zip(baseline, candidate))
-    return {
+    result = {
         "order": order,
         "pairs": len(calls),
         "baseline": summary(baseline),
@@ -213,6 +255,10 @@ def _paired_statistics(calls, before_tasks, after_tasks, order):
         "candidate_wins": wins,
         "win_fraction": wins / len(calls),
     }
+    if include_pairs:
+        first, second = (baseline, candidate) if order == "AB" else (candidate, baseline)
+        result["raw_pairs_us"] = [[a, b] for a, b in zip(first, second)]
+    return result
 
 
 def paired_task_statistics(path, *, repeats, before_tasks, after_tasks, order="AB"):
@@ -267,7 +313,8 @@ def _runtime(*, pipe_metrics=False, metric=None):
     return torch, torch_npu, profiler, config
 
 
-def _capture_calls(call, *, repeats, tasks_per_call, runtime, pipe_metrics=False):
+def _capture_calls(call, *, repeats, tasks_per_call, runtime, pipe_metrics=False,
+                   retain_csv=None):
     torch, _, profiler, config = runtime
     directory = tempfile.mkdtemp(prefix="native-task-profile-")
     try:
@@ -297,6 +344,8 @@ def _capture_calls(call, *, repeats, tasks_per_call, runtime, pipe_metrics=False
             result = calls, pipes
         else:
             result = calls
+        if retain_csv is not None:
+            shutil.copyfile(files[0], retain_csv)
     except BaseException:
         _LOGGER.error(
             "Profiler capture failed; artifacts preserved at %s; "
@@ -409,15 +458,7 @@ def _call_pair(first, second):
     second()
 
 
-def compare_native(baseline, candidate, *, warmup=3, repeats=20, tasks_per_call=(1, 1)):
-    """Measure AB and BA in one process; ratios pair complete native-task sums.
-
-    tasks_per_call is (baseline_count, candidate_count), independent of order.
-    Callbacks must use equivalent immutable inputs, repeat a fixed task sequence
-    on one stream, and overwrite their outputs. Check correctness before calling.
-    Caller owns device selection, load comparability and timeout. Failed captures
-    are retained for diagnosis at the path printed with the original error.
-    """
+def _validate_native_comparison(warmup, repeats, tasks_per_call):
     if not isinstance(tasks_per_call, (tuple, list)) or len(tasks_per_call) != 2:
         raise ValueError(
             "tasks_per_call must contain baseline and candidate task counts"
@@ -429,13 +470,42 @@ def compare_native(baseline, candidate, *, warmup=3, repeats=20, tasks_per_call=
         raise ValueError(
             "warmup, repeats and both task counts must be positive integers"
         )
+
+
+def compare_native(
+    baseline, candidate, *, warmup=3, repeats=20, tasks_per_call=(1, 1),
+    include_pairs=False, evidence_dir=None,
+):
+    """Measure AB and BA in one process; ratios pair complete native-task sums.
+
+    tasks_per_call is (baseline_count, candidate_count), independent of order.
+    With include_pairs, each order retains raw_pairs_us in execution order.
+    With evidence_dir, save before, after, AB and BA CSVs in a new directory.
+    Capture each side once in isolation and verify the named task sequence
+    of every pair against those captures before returning evidence.
+    Callbacks must use equivalent immutable inputs, repeat a fixed task sequence
+    on one stream, and overwrite their outputs. Check correctness before calling.
+    Caller owns device selection, load comparability and timeout. Failed captures
+    are retained for diagnosis at the path printed with the original error.
+    """
+    _validate_native_comparison(warmup, repeats, tasks_per_call)
     before_tasks, after_tasks = tasks_per_call
     runtime = _runtime()
+    captures = {}
+    if evidence_dir is not None:
+        directory = Path(evidence_dir)
+        directory.mkdir()
+        captures = {label: directory / f"{label}.csv" for label in ("before", "after", "AB", "BA")}
     torch, torch_npu, _, _ = runtime
     for _ in range(warmup):
         baseline()
         candidate()
     torch.npu.synchronize()
+    if captures:
+        for label, call, task_count in (("before", baseline, before_tasks),
+                                        ("after", candidate, after_tasks)):
+            _capture_calls(call, repeats=1, tasks_per_call=task_count,
+                           runtime=runtime, retain_csv=captures[label])
     results = []
     for order in ("AB", "BA"):
         first, second = (
@@ -447,8 +517,13 @@ def compare_native(baseline, candidate, *, warmup=3, repeats=20, tasks_per_call=
             repeats=repeats,
             tasks_per_call=before_tasks + after_tasks,
             runtime=runtime,
+            retain_csv=captures.get(order),
         )
-        results.append(_paired_statistics(calls, before_tasks, after_tasks, order))
+        results.append(
+            _paired_statistics(calls, before_tasks, after_tasks, order, include_pairs)
+        )
+    if captures:
+        verified_native_pairs({label: path.read_bytes() for label, path in captures.items()})
     return {
         "metric": "native_task_sum_us",
         "orders": results,
@@ -542,11 +617,23 @@ def compare_configurations(
     }
 
 
-def compare_wall(baseline, candidate, *, warmup=3, repeats=20):
+def _measure_wall_call(callback, synchronize):
+    synchronize()
+    start = time.perf_counter_ns()
+    callback()
+    synchronize()
+    duration = (time.perf_counter_ns() - start) / 1000
+    if duration <= 0:
+        raise RuntimeError("wall-clock duration must be positive")
+    return duration
+
+
+def compare_wall(baseline, candidate, *, warmup=3, repeats=20, include_pairs=False):
     """Pair warmed, synchronized full-call latency in AB and BA order.
 
     Each callback is invoked warmup + 2*repeats times. Prepare equivalent states
     outside the callbacks, including fresh pools for single in-place updates.
+    With include_pairs, each order retains raw_pairs_us in execution order.
     This measures host dispatch, execution and the final synchronization; it
     does not collect profiler task durations or establish numerical correctness.
     Caller owns device selection, load comparability and an otherwise idle stream.
@@ -563,20 +650,11 @@ def compare_wall(baseline, candidate, *, warmup=3, repeats=20):
     orders = []
     for order in ("AB", "BA"):
         callbacks = (baseline, candidate) if order == "AB" else (candidate, baseline)
-        pairs = []
-        for _ in range(repeats):
-            durations = []
-            for callback in callbacks:
-                torch.npu.synchronize()
-                start = time.perf_counter_ns()
-                callback()
-                torch.npu.synchronize()
-                duration = (time.perf_counter_ns() - start) / 1000
-                if duration <= 0:
-                    raise RuntimeError("wall-clock duration must be positive")
-                durations.append(duration)
-            pairs.append(tuple(durations))
-        orders.append(_paired_statistics(pairs, 1, 1, order))
+        pairs = [
+            tuple(_measure_wall_call(callback, torch.npu.synchronize) for callback in callbacks)
+            for _ in range(repeats)
+        ]
+        orders.append(_paired_statistics(pairs, 1, 1, order, include_pairs))
     return {
         "metric": "synchronized_wall_us",
         "orders": orders,

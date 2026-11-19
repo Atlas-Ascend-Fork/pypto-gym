@@ -79,13 +79,12 @@ okf_version: "0.2"
 - 按方法主题选择类别，优先沿用已有分类；新增类别使用简短英文名。
 - `item_id` 使用 `<类别>-<两位递增序号>`，文件名使用 `<item_id>-<短名>.md`，放入类别目录。编号从该类别已登记的最大编号递增，新类别从 `01` 开始；已登记 ID 不变且不复用。
 - 修改卡片时同步索引中的 ID、标题、状态、适用条件和 API 限制。
-- 索引按[格式约定](PROFILE.md#3-卡片状态与人工-review)分为 Active、Draft、Retired；退役卡保留 ID、历史链接和退役原因。
-- 调优时按[优化工作流](../workflows/optimization.md)记录卡片 ID、文件位置和本轮结论；Draft、Retired 不作为候选。
+- 索引按[格式约定](CONTRIBUTING.md#card-format-and-admission)分为 Active、Draft、Retired；退役卡保留 ID、历史链接和退役原因。
+- 调优时按[优化工作流](../workflows/optimization.md)记录卡片 ID、文件位置和实验结论；Draft、Retired 不作为候选。
 
-## 贡献入口与配套资料
+## 贡献与审核
 
-第一次贡献先按[贡献指南](CONTRIBUTING.md)准备事实包，并使用其中可复制的提示词让 Agent 生成卡片，默认以 Active 提交；[带注释示例](examples/annotated-card.md)展示了证据不足时如何保留语义而不补猜。内容按[卡片模板](CARD_TEMPLATE.md)组织，合入前交技术人员 review。
+新增卡片或实质性修订按[贡献指南](CONTRIBUTING.md)准备卡片、完整对照实现与验证证据，再按[独立审核指南](REVIEW.md)检查。收录状态表示检索资格，当前适用性和优化效果应通过实际算子条件与验证结果确认。
 
-- [格式与来源约定](PROFILE.md)：卡片字段、可选参考资料和状态的简明说明。
-- [查询与关系规则](KERNEL_INTEGRATION.md)：可选关联字段、目标解析与检索校验入口。
-- [会话提炼提示词](PROMPT.md)：从已有调优会话提取候选事实包的参考示例。
+- 贡献者与 Agent 按任务使用[贡献入口](CONTRIBUTING.md#contribute-a-card)或[审核入口](REVIEW.md#review-a-card)。字段与验证要求在贡献指南中，评分细则与独立检查在审核指南中；英文模板见[卡片模板](CARD_TEMPLATE.md)。
+- 调优时按[查询与关系规则](KERNEL_INTEGRATION.md)关联已核实的目标、机制交集和适用边界。

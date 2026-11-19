@@ -111,7 +111,7 @@ Choose the current workflow from [SKILL.md](../SKILL.md), then consult the match
 | Execution context, pending commands and recovery | [CLI execution contract](tooling/checks.md#cli-execution-contract), bounded context reads and existing execution receipts |
 | Source-pattern candidates, measured-cost ranking and recoverable best/current state | [Optimization tools](tooling/optimization.md); verifier inputs, evidence gates and bounded scratch state |
 | Discovering complete programs, reading independent references/tests, and admitting examples | [Shared program query](tooling/checks.md#complete-example-programs); [example catalog and conventions](tooling/examples.md) |
-| Find performance knowledge | Browse the [card index in Chinese](knowledge-cards/index.md) or use [card retrieval and relationships](knowledge-cards/agent/KERNEL_INTEGRATION.md). |
+| Find, contribute or review performance knowledge | Browse the [card index in Chinese](knowledge-cards/index.md) or [card retrieval and relationships](knowledge-cards/KERNEL_INTEGRATION.md#query-and-relate-performance-cards). Contributors and agents share the [contribution workflow](knowledge-cards/CONTRIBUTING.md#contribute-a-card) and [independent review workflow](knowledge-cards/REVIEW.md#review-a-card). |
 | Maintaining example coverage and VF assignments | [Coverage contract](tooling/example-coverage.md), consumed by `check.py coverage` |
 | External profiler collection (`msprof`, `msprof op` / `msopprof`) | [Performance collection](tooling/performance-collection.md), `python scripts/perf_collect.py` |
 | Profiler CSV and per-core field meanings | [Performance fields](tooling/performance-fields.md) |
@@ -120,7 +120,7 @@ This skill bundles its knowledge, tools and examples. Framework source and the i
 
 ## Admission rules
 
-- Agent-facing prose, headings and explanatory script comments/docstrings in this skill use English. Preserve literal diagnostics, source quotations, API/path names and machine-consumed markers (including `写法：`, `反例：`, `[需核查]` and the fixed coverage heading) when translation would alter their meaning or interface. Replace prose in place rather than keeping parallel language versions.
+- Agent-facing prose, headings and explanatory script comments/docstrings in this skill use English, except the shared performance-card contribution/review and retrieval guides, which use Chinese. New or materially revised card content and the copyable template use English. Preserve literal diagnostics, source quotations, API/path names and machine-consumed markers (including `写法：`, `反例：`, `[需核查]` and the fixed coverage heading) when translation would alter their meaning or interface. Replace prose in place rather than keeping parallel language versions.
 - Keep only this index at the `references/` root. Classify new documents by the responsibilities above; use lowercase hyphenated filenames, not iteration- or provenance-based directories, and do not add duplicate indexes to every subdirectory.
 - Workflows describe the next action and reading conditions. Computation patterns, API facts, diagnostics and verification methods have their own owners. Maintain each fact once and link to it elsewhere.
 - Organize API references by family or mechanism. Preserve the distinct evidence and version boundaries of official contracts, installed source and measured behavior; sharing a directory does not make them interchangeable evidence.
