@@ -99,9 +99,10 @@ TOY_MODELS = {
 
 def build_toy(name: str) -> tuple[nn.Module, torch.Tensor]:
     cls, kwargs = TOY_MODELS[name]
-    torch.manual_seed(42)
-    model = cls(**kwargs).eval()
-    sample = torch.randn(2, kwargs["dim"])
+    with torch.random.fork_rng(devices=[]):
+        torch.random.default_generator.manual_seed(42)
+        model = cls(**kwargs).eval()
+        sample = torch.randn(2, kwargs["dim"])
     return model, sample
 
 
