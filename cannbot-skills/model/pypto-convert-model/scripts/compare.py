@@ -182,6 +182,8 @@ class _DiffErrors:
 def _prepare_diff_layout(a: np.ndarray, b: np.ndarray) -> _DiffLayout:
     reference = np.asarray(a)
     output = np.asarray(b)
+    if np.iscomplexobj(reference) or np.iscomplexobj(output):
+        raise TypeError("complex model outputs are not supported by real-valued diff")
     return _DiffLayout(
         reference=reference.ravel(),
         output=output.ravel(),
