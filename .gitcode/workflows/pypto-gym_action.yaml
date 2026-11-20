@@ -97,6 +97,9 @@ stages:
     name: PreSmoke
     jobs:
       A3_smoke:
+        permissions:
+          repository: read
+          id-token: write
         name: PreSmoke_A3
         steps:
           -
@@ -151,6 +154,9 @@ stages:
         container:
           image: swr.cn-north-12.myhuaweicloud.com/pre_smoke/${{ jobs.JOB_image.outputs.PreSmoke_A3_npupool }}
       A5_smoke:
+        permissions:
+          repository: read
+          id-token: write
         name: PreSmoke_A5
         steps:
           -
