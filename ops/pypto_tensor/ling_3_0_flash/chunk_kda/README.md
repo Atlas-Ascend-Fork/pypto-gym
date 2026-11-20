@@ -43,4 +43,4 @@ chunk_kda_wrapper(q, k, v, g, beta, scale=None, initial_state=None,
 
 ## Testing
 
-Tests under [`tests/ops/ling_3_0_flash/chunk_kda/`](../../../../../../tests/ops/ling_3_0_flash/chunk_kda/).
+Tests under [`tests/ops/ling_3_0_flash/chunk_kda/`](../../../../tests/ops/ling_3_0_flash/chunk_kda/).
