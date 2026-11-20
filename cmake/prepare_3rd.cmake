@@ -24,11 +24,15 @@ if (NOT PROJECT_SOURCE_DIR)
         include("${CANN_3RD_LIB_PATH}/cann-cmake/function/prepare.cmake")
     else()
         include(FetchContent)
+        # SOURCE_DIR 把源码落点从默认 ${CMAKE_BINARY_DIR}/_deps 改到三方缓存目录,
+        # 与上面分支的预置约定同名归一: 主/prepare 两次 configure 共用一份, 跨 -c 持久。
+        # 注意: 该缓存不校验版本, 升级 CANN_CMAKE_TAG 时需手动清理 cann-cmake 目录。
         if(CANN_3RD_LIB_PATH AND EXISTS "${CANN_3RD_LIB_PATH}/cmake-${CANN_CMAKE_TAG}.tar.gz")
             FetchContent_Declare(
                 cann-cmake
                 URL "${CANN_3RD_LIB_PATH}/cmake-${CANN_CMAKE_TAG}.tar.gz"
                 URL_HASH SHA256=43fb1a2cb376192bb307bd4003c0c4bd82ab66a7eb62d3ddfa9f70f988b7ff18
+                SOURCE_DIR "${CANN_3RD_LIB_PATH}/cann-cmake"
             )
         else()
             FetchContent_Declare(
@@ -36,6 +40,7 @@ if (NOT PROJECT_SOURCE_DIR)
                 GIT_REPOSITORY https://gitcode.com/cann/cmake.git
                 GIT_TAG        ${CANN_CMAKE_TAG}
                 GIT_SHALLOW    TRUE
+                SOURCE_DIR "${CANN_3RD_LIB_PATH}/cann-cmake"
             )
         endif()
         FetchContent_GetProperties(cann-cmake)

@@ -6,10 +6,18 @@
 # INCLUDING BUT NOT LIMITED TO NON-INFRINGEMENT, MERCHANTABILITY, OR FITNESS FOR A PARTICULAR PURPOSE.
 # See LICENSE in the root of the software repository for the full text of the License.
 # -----------------------------------------------------------------------------------------------------------
-"""Load shipped libraries on demand; no runtime compilation or kernel-source imports."""
+"""Load operator bindings on demand: JIT compile on first use, then dlopen.
+
+The binding sources ship in ``_bindings/csrc/``; ``.jit.ensure_compiled``
+compiles them into a versioned cache (no rpath/RUNPATH involved) and the
+artifact is loaded through ``torch.ops.load_library``. No kernel-source
+imports, no device work.
+"""
 import importlib
 import json
 from pathlib import Path
+
+from .jit import cache_dir, ensure_compiled, prewarm  # noqa: F401  (re-exported)
 
 _loaded = {}
 _names = None
@@ -19,11 +27,11 @@ def binding_names():
     """Return the installed operator names without importing torch."""
     global _names
     if _names is None:
-        package = Path(__file__).resolve().parent
-        manifest = package / 'operators.json'
+        package = Path(__file__).resolve().parent.parent
+        manifest = package / '_bindings' / 'operators.json'
         if not manifest.is_file():
-            raise ImportError('Torch bindings are not installed; build the .run with --torch-bindings '
-                              'and install it into the active CANN environment')
+            raise ImportError('Torch bindings are not installed; build the artifact without '
+                              '--no-torch-bindings and install it into the active CANN environment')
         try:
             names = json.loads(manifest.read_text(encoding='utf-8'))
         except (OSError, ValueError) as error:
@@ -38,7 +46,7 @@ def binding_names():
 
 
 def load_binding(name):
-    """Import torch/torch_npu and load one operator extension on first use."""
+    """Import torch/torch_npu, JIT compile on first use, load one operator."""
     if name in _loaded:
         return _loaded[name]
     if name not in binding_names():
@@ -46,14 +54,12 @@ def load_binding(name):
     import torch
     import torch_npu  # Register PrivateUse1 and load libtorch_npu before extensions.
 
-    package = Path(__file__).resolve().parent
-    library = package / '_native' / f'libpypto_gym_{name}.so'
+    library = ensure_compiled(name)
     try:
         torch.ops.load_library(str(library))
     except OSError as error:
-        raise ImportError(f'Cannot load {library}; use the torch/torch_npu ABI '
-                          f'used to build this .run: {error}') from error
-    module = importlib.import_module(f'._frontends.{name}', __package__)
+        raise ImportError(f'Cannot load {library}: {error}') from error
+    module = importlib.import_module(f'.._bindings.frontends.{name}', __package__)
     entry = getattr(module, name)
     _loaded[name] = entry
     return entry

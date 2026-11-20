@@ -18,7 +18,12 @@ list(REMOVE_DUPLICATES _aclnn_default_ops)
 list(REMOVE_DUPLICATES _aclnn_inner_ops)
 list(REMOVE_DUPLICATES _aclnn_exclude_ops)
 
-# inner/exc 无算子时用 stub, 保证 op_build 三份 ops-info.ini 齐套
+# inner/exc/default 无算子时用 stub, 保证 op_build 三份 ops-info.ini 齐套
+if(NOT _aclnn_default_ops)
+    set(_default_stub ${CMAKE_BINARY_DIR}/op_host_aclnn_stub.cpp)
+    file(WRITE ${_default_stub} "// stub for empty aclnn op set\n")
+    target_sources(op_host_aclnn PRIVATE ${_default_stub})
+endif()
 if(NOT _aclnn_inner_ops)
     set(_inner_stub ${CMAKE_BINARY_DIR}/op_host_aclnn_inner_stub.cpp)
     file(WRITE ${_inner_stub} "// stub for empty aclnnInner op set\n")
@@ -148,7 +153,7 @@ endif ()
 # pass-2(PREPARE_BUILD) 跳过: autogen 源尚不存在, 且 host 产物不属于 prepare 阶段
 if (ENABLE_OPS_HOST AND NOT PREPARE_BUILD)
 
-    set(_vendor_dir packages/vendors/${VENDOR_NAME})
+    set(_vendor_dir ${GYM_VENDOR_DEST})
     set(_arch_lib_dir ${_vendor_dir}/op_proto/lib/linux/${CMAKE_SYSTEM_PROCESSOR})
 
     get_property(_infer_srcs GLOBAL PROPERTY GYM_INFER_SRCS)
@@ -204,6 +209,11 @@ if (ENABLE_OPS_HOST AND NOT PREPARE_BUILD)
     if (_infer_srcs)
         target_sources(ophost_gym_infer_obj PRIVATE ${_infer_srcs})
     endif()
+    if (NOT _autogen_proto_srcs AND NOT _infer_srcs)
+        set(_infer_stub ${CMAKE_BINARY_DIR}/ophost_gym_infer_stub.cpp)
+        file(WRITE ${_infer_stub} "// stub for a build without proto/infershape sources\n")
+        target_sources(ophost_gym_infer_obj PRIVATE ${_infer_stub})
+    endif()
     target_link_libraries(ophost_gym_infer_obj PRIVATE intf_pub)
     add_dependencies(ophost_gym_infer_obj opbuild_gen_default)
 
@@ -255,6 +265,11 @@ if (ENABLE_OPS_HOST AND NOT PREPARE_BUILD)
         endforeach()
         target_sources(ophost_gym_tiling_obj PRIVATE ${_tiling_srcs})
     target_link_libraries(ophost_gym_tiling_obj PRIVATE intf_pub)
+    else()
+        set(_tiling_stub ${CMAKE_BINARY_DIR}/ophost_gym_tiling_stub.cpp)
+        file(WRITE ${_tiling_stub} "// stub for a build without tiling sources\n")
+        target_sources(ophost_gym_tiling_obj PRIVATE ${_tiling_stub})
+        target_link_libraries(ophost_gym_tiling_obj PRIVATE intf_pub)
     endif()
 
     # tiling 布局核对程序(tiling_layout_check.py 生成, 运行时布局 vs 编译期真值
@@ -310,13 +325,15 @@ if (ENABLE_OPS_HOST AND NOT PREPARE_BUILD)
         target_link_libraries(ops_aclnn PRIVATE intf_pub)
         target_include_directories(ops_aclnn PRIVATE ${GYM_HOST_INCLUDES})
         add_dependencies(ops_aclnn opbuild_gen_default)
-        # 手写 aclnn 通道: 手写源 whole-archive 一并链入
-        if (_opapi_srcs)
-            add_library(gym_opapi_manual STATIC EXCLUDE_FROM_ALL ${_opapi_srcs})
-            set_target_properties(gym_opapi_manual PROPERTIES POSITION_INDEPENDENT_CODE ON)
-            target_link_libraries(gym_opapi_manual PRIVATE intf_pub)
-            target_include_directories(gym_opapi_manual PRIVATE ${GYM_HOST_INCLUDES})
-        endif()
+    endif()
+
+    # 手写 aclnn 通道: 手写源单独成静态库, 与自动生成源一起 whole-archive 进 cust_opapi.
+    # 不依赖 op_build 产物, 便于纯手写入口(如 AICPU kernel 的 aclnn 包装)独立接入.
+    if (_opapi_srcs)
+        add_library(gym_opapi_manual STATIC EXCLUDE_FROM_ALL ${_opapi_srcs})
+        set_target_properties(gym_opapi_manual PROPERTIES POSITION_INDEPENDENT_CODE ON)
+        target_link_libraries(gym_opapi_manual PRIVATE intf_pub)
+        target_include_directories(gym_opapi_manual PRIVATE ${GYM_HOST_INCLUDES})
     endif()
 
     set(_cust_opapi_stub ${CMAKE_BINARY_DIR}/cust_opapi_stub.cpp)
@@ -324,17 +341,20 @@ if (ENABLE_OPS_HOST AND NOT PREPARE_BUILD)
     add_library(cust_opapi SHARED EXCLUDE_FROM_ALL ${_cust_opapi_stub})
     target_include_directories(cust_opapi PRIVATE ${GYM_HOST_INCLUDES})
     target_link_directories(cust_opapi PRIVATE ${GYM_HOST_LINK_DIRS})
+    set(_cust_opapi_archives "")
+    if (TARGET ops_aclnn)
+        list(APPEND _cust_opapi_archives $<TARGET_FILE:ops_aclnn>)
+    endif ()
     if (TARGET gym_opapi_manual)
+        list(APPEND _cust_opapi_archives $<TARGET_FILE:gym_opapi_manual>)
+    endif ()
+    if (_cust_opapi_archives)
         target_link_libraries(cust_opapi PRIVATE
-            -Wl,--whole-archive
-            $<TARGET_FILE:ops_aclnn>
-            $<TARGET_FILE:gym_opapi_manual>
-            -Wl,--no-whole-archive)
-    else ()
-        target_link_libraries(cust_opapi PRIVATE
-            -Wl,--whole-archive
-            $<TARGET_FILE:ops_aclnn>
-            -Wl,--no-whole-archive)
+            -Wl,--whole-archive ${_cust_opapi_archives} -Wl,--no-whole-archive)
+    endif ()
+    # 目标级依赖: EXCLUDE_FROM_ALL 静态库只靠文件级依赖不足以被 make 调度
+    if (TARGET gym_opapi_manual)
+        add_dependencies(cust_opapi gym_opapi_manual)
     endif ()
     target_link_libraries(cust_opapi PRIVATE
         ${GYM_CANN_LIBS_DIR}/libnnopbase.so
@@ -343,7 +363,9 @@ if (ENABLE_OPS_HOST AND NOT PREPARE_BUILD)
         ${GYM_CANN_LIBS_DIR}/libascend_dump.so
         ascendalog dl)
     target_link_libraries(cust_opapi PRIVATE intf_pub)
-    add_dependencies(cust_opapi ops_aclnn)
+    if (TARGET ops_aclnn)
+        add_dependencies(cust_opapi ops_aclnn)
+    endif()
     add_custom_target(ops_gym_host ALL)
     add_dependencies(ops_gym_host cust_opapi cust_proto cust_opmaster gym_optiling_compat)
 
@@ -438,6 +460,15 @@ if (ENABLE_OPS_HOST AND NOT PREPARE_BUILD)
         install(FILES ${_gym_aclnn_master} DESTINATION ${_vendor_dir}/op_api/include/aclnnop
                 COMPONENT ${VENDOR_NAME})
     endif()
+    # 手写 aclnn 头 install: op_host/op_api/*.h(与自动生成头同目录发布)
+    foreach (_op_dir ${OP_DIR_LIST})
+        file(GLOB _manual_aclnn_headers ${_op_dir}/op_host/op_api/*.h)
+        if (_manual_aclnn_headers)
+            install(FILES ${_manual_aclnn_headers}
+                    DESTINATION ${_vendor_dir}/op_api/include/aclnnop
+                    COMPONENT ${VENDOR_NAME})
+        endif()
+    endforeach()
     # proto 头 install: autogen 下全部 *_proto.h
     file(GLOB _autogen_proto_headers ${ASCEND_AUTOGEN_DIR}/*_proto.h)
     if (_autogen_proto_headers)

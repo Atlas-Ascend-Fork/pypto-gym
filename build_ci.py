@@ -12,10 +12,12 @@
 
 This file provides a unified build entry point for PyPTO-GYM project, supporting dual product modes:
 
-    whl: jit direct-call mode, python -m build -> build_out/whl/<soc>/*.whl
+    whl: aot native wheel (torch bindings + vendor binaries), CMake chain ->
+         stage (cmake --install, whl layout) -> python -m build -> build_out/whl/<soc>/*.whl
     run: built-in mode, CMake full chain -> build_out/run/<soc>/ producing custom run packages
          configure -> build -> package (.run)
-    stest: -s/--stest runs on-board system tests (whl -> jit / run -> aclnn or torch)
+    stest: -s/--stest runs on-board system tests (run -> aclnn or torch /
+           whl -> torch, from the wheel installed under build_out)
 
 Multi-soc semantics: --soc accepts a comma-separated list; each soc runs a FULL
 build round in its own binary dir (build/<soc>), producing one .run per soc
@@ -37,8 +39,8 @@ Usage:
         --pkg-type: Specify product type (whl/run)
         --ops: Specify operators to build (comma separated, default ALL;
                run ALL reads ops/pro/build_ops.yaml)
-        --torch-bindings / --no-torch-bindings: Include/omit precompiled Torch bindings
-                                               (enabled by default for run)
+        --no-torch-bindings: Omit precompiled Torch bindings (ACLNN-only artifact);
+                             bindings are enabled by default for both whl and run
         --soc: Specify soc version (currently ascend950 only;
                comma-separated multi-value activates when whitelist expands)
         --build_type: Specify build type (Debug/Release/MinSizeRel/RelWithDebInfo, run mode)
@@ -50,7 +52,7 @@ Usage:
         -s/--stest: Run on-board system tests (optional value is a pytest -k filter)
 
 Examples:
-    # Build whl (jit mode)
+    # Build whl (aot native mode)
     python build_ci.py --pkg-type whl
 
     # Build run package for flex_attention on ascend950
@@ -71,6 +73,7 @@ import json
 import logging
 import os
 from pathlib import Path
+import platform
 import shutil
 import signal
 import shlex
@@ -88,6 +91,25 @@ class CMakeParam(abc.ABC):
     Subclasses must implement reg_args() to register CLI arguments and get_cfg_cmd() to generate
     CMake configuration commands.
     """
+
+    @staticmethod
+    def get_system_processor() -> str:
+        """Get the system processor architecture name
+
+        Retrieves the current system processor architecture via platform.machine()
+        and maps common aliases to standard names.
+
+        :return: Standardized processor architecture name, such as x86_64 or aarch64
+        :rtype: str
+        """
+        machine = platform.machine().lower()
+        arch_map = {  # Map common architectures directly
+            "x86_64": "x86_64",
+            "amd64": "x86_64",
+            "aarch64": "aarch64",
+            "arm64": "aarch64",
+        }
+        return arch_map.get(machine, machine)
 
     @staticmethod
     @abc.abstractmethod
@@ -124,16 +146,19 @@ class FeatureParam(CMakeParam):
 
         :param args: Parsed command-line arguments
         """
-        self.pkg_type: str = args.pkg_type  # Product type: whl (jit) / run (built-in)
+        self.pkg_type: str = args.pkg_type  # Product type: whl (aot native) / run (built-in)
         self.ops: str = args.ops or "ALL"  # Operators to build (comma separated)
         self.soc: str = args.soc or "ascend950"  # Soc versions (comma separated)
         self.whl_isolation: bool = args.isolation  # Compile whl package in isolation mode
-        self.torch_bindings_explicit: bool = args.torch_bindings is not None
-        self.torch_bindings: bool = (
-            self.pkg_type == "run" if args.torch_bindings is None else args.torch_bindings
-        )
-        if self.torch_bindings and self.pkg_type != "run":
-            raise ValueError("--torch-bindings requires --pkg-type run")
+        # Community full wheel plat tag (e.g. manylinux2014_x86_64), forwarded to
+        # `bdist_wheel --plat-name`; PyPI only accepts manylinux-family tags. The
+        # glibc baseline is guaranteed by building in a standardized environment.
+        # Not consumed by build_shell_wheel: the shell wheel stays py3-none-any.
+        plat_name = args.plat_name if args.plat_name else "manylinux2014"
+        self.whl_plat_name: str = f"{plat_name}_{self.get_system_processor()}"
+        # Both product forms ship precompiled bindings by default; --no-torch-bindings
+        # degrades to an ACLNN-only artifact (.run without python entry / wheel without _native).
+        self.torch_bindings: bool = not args.no_torch_bindings
 
     def __str__(self) -> str:
         """Return string representation of feature parameters
@@ -147,6 +172,7 @@ class FeatureParam(CMakeParam):
         run_count = len(self.soc_list)
         desc += f"\n    Soc                     : {self.soc} ({run_count} run{'s' if run_count > 1 else ''})"
         desc += f"\n    Isolation               : {self.whl_isolation}"
+        desc += f"\n    PlatName                : {self.whl_plat_name}"
         desc += f"\n    TorchBindings           : {self.torch_bindings}"
         return desc
 
@@ -178,17 +204,18 @@ class FeatureParam(CMakeParam):
     @staticmethod
     def reg_args(parser):
         parser.add_argument(
-            "--torch-bindings", action=argparse.BooleanOptionalAction, default=None,
-            help="include precompiled Torch bindings (default: enabled for run when at least one "
-                 "selected operator provides one, disabled for whl; requires torch and torch_npu). "
-                 "Use --no-torch-bindings for an ACLNN-only .run; explicit --torch-bindings fails "
-                 "when no selected operator provides a binding.",
+            "--no-torch-bindings", action="store_true", default=False,
+            help="omit precompiled Torch bindings and produce an ACLNN-only artifact "
+                 "(.run without the python entry / wheel without _native). Bindings are "
+                 "enabled by default for both whl and run; requires torch and torch_npu "
+                 "when enabled.",
         )
         parser.add_argument(
             "--pkg-type",
             choices=["whl", "run"],
             default="whl",
-            help="package type: whl (jit direct call) / run (built-in custom run package).",
+            help="package type: whl (aot native wheel: bindings + vendor binaries) / "
+                 "run (built-in custom run package).",
         )
         parser.add_argument(
             "--ops",
@@ -211,6 +238,16 @@ class FeatureParam(CMakeParam):
             default=False,
             help="isolation, build whl in an isolated virtual environment (default: no isolation, "
             "build dependencies must be installed in the current environment).",
+        )
+        parser.add_argument(
+            "--plat_name",
+            nargs="?",
+            type=str,
+            default="",
+            choices=["manylinux2014", "manylinux_2_24", "manylinux_2_28"],
+            help="whl plat_name of the community full wheel, such as manylinux2014/manylinux_2_24/"
+                 "manylinux_2_28 etc. (default: manylinux2014); suffixed with the system processor "
+                 "and forwarded to bdist_wheel --plat-name.",
         )
 
     def get_cfg_cmd(self) -> str:
@@ -302,6 +339,7 @@ class TestParam(CMakeParam):
         :param args: Parsed command-line arguments
         """
         self.stest = args.stest  # False (not requested) / True (no filter) / str (filter)
+        self.stest_mode: str = args.stest_mode  # auto / jit / torch / aclnn
 
     @property
     def enabled(self) -> bool:
@@ -321,6 +359,7 @@ class TestParam(CMakeParam):
             return ""
         desc = "\nTests"
         desc += f"\n    STest                   : {'ON' if not self.filter_expr else self.filter_expr}"
+        desc += f"\n    STestMode               : {self.stest_mode}"
         return desc
 
     @staticmethod
@@ -334,10 +373,29 @@ class TestParam(CMakeParam):
             help="run on-board system tests; optional value is a pytest -k filter "
                  "(comma-separated entries are ORed), e.g. --stest=test_fa_mask_info",
         )
+        parser.add_argument(
+            "--stest-mode",
+            choices=["auto", "jit", "torch", "aclnn"],
+            default="auto",
+            help="system test mode, decoupled from --pkg-type: "
+                 "auto = artifact-coupled (whl -> torch; run -> bound ops torch, unbound aclnn); "
+                 "jit = source-tree op_kernel tests, no artifact install (requires pypto_pro "
+                 "in the environment); torch = force torch custom-op mode against the installed "
+                 "artifact; aclnn = force C++ bridge mode (run only).",
+        )
 
-    def get_cfg_cmd(self) -> str:
-        """Enable test targets in CMake when system tests are requested."""
-        return " -DENABLE_TESTS=ON" if self.enabled else ""
+    def get_cfg_cmd(self, pkg_type_run: bool) -> str:
+        """Enable test targets (aclnn C++ bridge) only when run stest consumes them.
+
+        The bridge is consumed by run's aclnn mode only (auto routes unbound ops
+        there); whl stest is torch-mode only (决策 26/32) and jit mode tests the
+        source tree — both keep the configure torch-free and skip bridge builds.
+        The value is always emitted explicitly so re-configuring an existing
+        build dir overrides a stale cached ENABLE_TESTS.
+        """
+        if self.enabled and pkg_type_run and self.stest_mode in ("auto", "aclnn"):
+            return " -DENABLE_TESTS=ON"
+        return " -DENABLE_TESTS=OFF"
 
 
 class BuildCtrl(CMakeParam):
@@ -373,6 +431,13 @@ class BuildCtrl(CMakeParam):
         self.tests: TestParam = TestParam(args=args)
         self.jobs: Optional[int] = args.jobs
         self.verbose: bool = args.verbose
+        # Build identity for the JIT cache (X-Build-Timestamp in wheel METADATA):
+        # one timestamp per invocation, shared by the full and shell wheels of
+        # the same round (pypto "unify build_timestamp in run and whl" pattern).
+        # External pipelines may pin it via GYM_BUILD_TIMESTAMP.
+        self.build_timestamp: str = (
+            os.environ.get("GYM_BUILD_TIMESTAMP", "").strip()
+            or datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S"))
         self.cmake: Optional[Path] = self.which_cmake()
         if not self.cmake:
             raise RuntimeError("Can't find system cmake (pip cmake package is excluded, see which_cmake)")
@@ -538,12 +603,21 @@ class BuildCtrl(CMakeParam):
                 logging.info("===== Soc round (%s/%s): %s =====", i, len(soc_list), soc)
                 ctrl.cmake_configure(soc=soc)
                 ctrl.cmake_build(soc=soc)
+                # Shell wheel must exist before `package`: the install(CODE) rule
+                # globs build/<soc>/shell_whl/*.whl into the run payload (决策 29).
+                ctrl.build_shell_wheel(soc=soc)
                 ctrl.cmake_package(soc=soc)
             ctrl.run_stest()
         else:
-            logging.info("PackageType(whl), start process")
+            logging.info("PackageType(whl/aot), start process with CMake")
             ctrl.cmake_clean()
-            ctrl.py_build()
+            if len(ctrl.feature.soc_list) != 1:
+                raise ValueError("whl supports exactly one soc per wheel; pass a single --soc")
+            soc = ctrl.feature.soc_list[0]
+            ctrl.cmake_configure(soc=soc)
+            ctrl.cmake_build(soc=soc)
+            ctrl.stage_whl(soc=soc)
+            ctrl.py_build(soc=soc)
             ctrl.run_stest()
 
     @classmethod
@@ -582,7 +656,15 @@ class BuildCtrl(CMakeParam):
         cmd = f" -DCMAKE_INSTALL_PREFIX={self._run_dir(soc)}"
         cmd += f" -DPython3_EXECUTABLE={sys.executable}"
         cmd += f" -DASCEND_COMPUTE_UNIT={soc}"
-        cmd += self.tests.get_cfg_cmd()
+        # Artifact install layout; always explicit so re-configuring the same
+        # build dir flips a stale cached value (same lesson as ENABLE_TESTS).
+        cmd += " -DGYM_WHL_LAYOUT=OFF" if self.feature.pkg_type_run else " -DGYM_WHL_LAYOUT=ON"
+        if self.feature.pkg_type_run and self.feature.torch_bindings:
+            # Run payload embeds the Python shell wheel (decision 29); build_ci
+            # builds it between `cmake --build` and `package`, the install(CODE)
+            # rule in torch_extension/ globs it into the payload at install time.
+            cmd += " -DGYM_PACKAGE_SHELL_WHL=ON"
+        cmd += self.tests.get_cfg_cmd(self.feature.pkg_type_run)
         if self.third_party_path:
             cmd += f" -DCANN_3RD_LIB_PATH={self.third_party_path}"
         return cmd
@@ -601,18 +683,124 @@ class BuildCtrl(CMakeParam):
             logging.info("Clean Output-Tree(%s)", self.install_root)
             shutil.rmtree(self.install_root)
 
-    def py_build(self):
-        """whl package compilation (jit direct call mode)"""
+    def py_build(self, soc: str):
+        """whl package compilation (community full wheel)
+
+        Consumes the staged wheel source tree (stage_whl) via GYM_WHL_STAGE.
+        Version carries no soc/torch segment (PyPI rejects local versions;
+        bindings are JIT compiled against the runtime torch, 决策 28). The
+        plat tag (default manylinux2014_<arch>) is forwarded to bdist_wheel
+        via --config-setting for PyPI-compatible tags.
+        """
         # The build-system.requires check in pyproject.toml is implemented by the build
         # package itself and thus cannot fail early; validate the build package version here.
         self.check_pip_dependencies(deps={"build": ">=1.0.3"}, raise_err=True)
         whl_dir = self._whl_dir()
         whl_dir.mkdir(parents=True, exist_ok=True)
-        cmd = f"{sys.executable} -m build --outdir={whl_dir}"
+        cmd = f"{sys.executable} -m build --wheel --outdir={whl_dir}"
         cmd += " --no-isolation" if not self.feature.whl_isolation else ""
-        logging.info("Build whl, Cmd: %s, Timeout: %s secs", cmd, self.remain_timeout)
-        _, duration = self._run_build_cmd(cmd=cmd, pg_desc="build")
+        if self.feature.whl_plat_name:
+            cmd += f" --config-setting=--build-option='bdist_wheel --plat-name={self.feature.whl_plat_name}'"
+        update_env = {
+            "GYM_WHL_STAGE": str(self._whl_stage_dir(soc)),
+            "GYM_BUILD_TIMESTAMP": self.build_timestamp,
+        }
+        logging.info("Build whl, Cmd: %s, Env: %s, Timeout: %s secs", cmd, update_env, self.remain_timeout)
+        _, duration = self._run_build_cmd(cmd=cmd, update_env=update_env, pg_desc="build")
+        self._cleanup_setuptools_artifacts()
         logging.info("Build whl success, %s", duration)
+
+    def build_shell_wheel(self, soc: str):
+        """Build the Python shell wheel embedded in the run payload (决策 29).
+
+        The shell tree is materialized by cmake itself (component gym_shell:
+        entry package + _bindings materials rooted at pypto_gym/), keeping
+        cmake the single source of layout truth — no source assembly here. py3-none-any, no vendor binaries. The install(CODE) rule in
+        torch_extension/ globs build/<soc>/shell_whl/*.whl into the run payload
+        at package time.
+        """
+        manifest = self._build_dir(soc) / "torch_extension" / "operators.json"
+        if not manifest.is_file():
+            if self.feature.torch_bindings:
+                raise RuntimeError(f"operators.json not generated: {manifest}")
+            logging.info("No Torch bindings selected; run payload ships without the Python layer")
+            return
+        shell_src = self._build_dir(soc) / "shell_src"
+        if shell_src.exists():
+            shutil.rmtree(shell_src)
+        cmd = (f"{self.cmake} --install {self._build_dir(soc)}"
+               f" --component gym_shell --prefix {shell_src}")
+        logging.info("Shell-Stage[%s], Cmd: %s", soc, cmd)
+        _, duration = self._run_build_cmd(cmd=cmd, pg_desc="shell-stage")
+        if not (shell_src / "pypto_gym" / "__init__.py").is_file():
+            raise RuntimeError(f"gym_shell install produced no entry package under {shell_src}")
+        logging.info("Shell-Stage[%s] success, %s", soc, duration)
+        out_dir = self._build_dir(soc) / "shell_whl"
+        if out_dir.exists():
+            shutil.rmtree(out_dir)
+        out_dir.mkdir(parents=True)
+        self.check_pip_dependencies(deps={"build": ">=1.0.3"}, raise_err=True)
+        cmd = f"{sys.executable} -m build --wheel --outdir={out_dir}"
+        cmd += " --no-isolation" if not self.feature.whl_isolation else ""
+        logging.info("Build shell wheel, Cmd: %s, Timeout: %s secs", cmd, self.remain_timeout)
+        _, duration = self._run_build_cmd(
+            cmd=cmd,
+            update_env={"GYM_WHL_SHELL": str(shell_src),
+                        "GYM_BUILD_TIMESTAMP": self.build_timestamp},
+            pg_desc="shell-wheel")
+        self._cleanup_setuptools_artifacts()
+        logging.info("Build shell wheel success, %s", duration)
+
+    def _cleanup_setuptools_artifacts(self):
+        """Remove setuptools byproducts dropped into the repo/cmake build root.
+
+        `python -m build` runs setup.py with cwd=repo root, leaving build/bdist.*
+        and build/lib.* inside the cmake build root plus a regenerated
+        pypto_gym.egg-info (which would make pip mis-detect the repo as an
+        installed distribution).
+        """
+        for pattern in ("bdist.*", "lib.*"):
+            for path in self._build_root.glob(pattern):
+                shutil.rmtree(path, ignore_errors=True)
+        shutil.rmtree(self.src_root / "pypto_gym.egg-info", ignore_errors=True)
+
+    def stage_whl(self, soc: str):
+        """Materialize the wheel source tree with a single cmake install pass.
+
+        With -DGYM_WHL_LAYOUT=ON the install rules emit the wheel layout
+        directly (entry package on top, vendor tree under _opp), so no restage
+        step is needed. Symlinks (e.g. liboptiling.so) survive here and are
+        materialized by setup.py's build_py copy (shutil.copy2 follows links).
+        """
+        stage_dir = self._whl_stage_dir(soc)
+        if stage_dir.exists():
+            shutil.rmtree(stage_dir)
+        cmd = (f"{self.cmake} --install {self._build_dir(soc)}"
+               f" --component pypto_gym --prefix {stage_dir}")
+        logging.info("CMake Install-Stage[%s], Cmd: %s", soc, cmd)
+        _, duration = self._run_build_cmd(cmd=cmd, pg_desc="cmake-install")
+        self._check_whl_stage(stage_dir)
+        logging.info("CMake Install-Stage[%s] success, %s", soc, duration)
+
+    def _check_whl_stage(self, stage_dir: Path):
+        """Sanity-check the staged wheel tree (replaces whl_stage.py checks)."""
+        pkg = stage_dir / "pypto_gym"
+        if not (pkg / "__init__.py").is_file():
+            raise RuntimeError(f"wheel stage misses the entry package: {pkg}")
+        if not (pkg / "_opp" / "vendors" / "pypto_gym" / "op_api" / "lib" / "libcust_opapi.so").is_file():
+            raise RuntimeError(f"wheel stage misses the vendor ACLNN library under {pkg}")
+        broken = [str(p) for p in pkg.rglob("*") if p.is_symlink() and not p.exists()]
+        if broken:
+            raise RuntimeError(f"wheel stage has broken symlinks: {broken[:5]}")
+
+    def _whl_stage_dir(self, soc: str) -> Path:
+        """Wheel source tree root (contains pypto_gym/) consumed via GYM_WHL_STAGE.
+
+        Lives under the cmake build root: it is a build intermediate (the direct
+        output of `cmake --install` in whl layout), while build_out/ is reserved
+        for user-consumable artifacts (.whl/.run/site-packages).
+        """
+        return self._build_dir(soc) / "whl_src"
 
     def cmake_configure(self, soc: str):
         """Execute CMake Configure stage for one soc build round
@@ -713,22 +901,23 @@ class BuildCtrl(CMakeParam):
         return found
 
     def selected_op_dirs(self) -> List[Path]:
-        """Resolve --ops into operator dirs for stest."""
+        """Resolve --ops into operator dirs for stest.
+
+        ALL resolves through the build manifest (build_ops.yaml) for both pkg
+        types: the cmake side builds exactly the manifest ops, so stest must
+        scope to the same set — collecting tests of unbuilt ops fails at
+        `pypto_gym.<op>` attribute lookup in the installed wheel.
+        """
         found = self._discover_op_dirs()
         if self.feature.ops.strip().upper() == "ALL":
-            if self.feature.pkg_type_run:
-                scope = subprocess.run(
-                    [sys.executable, str(self.src_root / "cmake/scripts/select_run_ops.py"),
-                     "--source-root", str(self.src_root), "--ops", "ALL", "--format", "paths"],
-                    check=True, capture_output=True, text=True)
-                selected = [self.src_root / path for path in scope.stdout.splitlines()]
-                missing = [str(op) for op in selected if not (op / "tests").is_dir()]
-                if missing:
-                    raise RuntimeError(f"listed run operator tests not found for {missing}")
-                return selected
-            selected = sorted(found.values(), key=lambda p: p.name)
-            if not selected:
-                raise RuntimeError("no operator tests found under ops/{pro,tensor}/**/tests")
+            scope = subprocess.run(
+                [sys.executable, str(self.src_root / "cmake/scripts/select_run_ops.py"),
+                 "--source-root", str(self.src_root), "--ops", "ALL", "--format", "paths"],
+                check=True, capture_output=True, text=True)
+            selected = [self.src_root / path for path in scope.stdout.splitlines()]
+            missing = [str(op) for op in selected if not (op / "tests").is_dir()]
+            if missing:
+                raise RuntimeError(f"listed operator tests not found for {missing}")
             return selected
         names = [n.strip() for n in self.feature.ops.split(",") if n.strip()]
         missing = [n for n in names if n not in found]
@@ -741,12 +930,31 @@ class BuildCtrl(CMakeParam):
         expr = self.tests.filter_expr
         return ["-k", expr] if expr else []
 
+    def _check_jit_toolchain(self):
+        """Fail fast when the JIT binding toolchain is missing.
+
+        torch-mode stest JIT-compiles the bindings on first use; without this
+        check every test case would fail individually with the same error.
+        """
+        missing = []
+        if not shutil.which("ninja"):
+            missing.append("ninja (pip install ninja)")
+        if not (shutil.which("c++") or shutil.which("g++")):
+            missing.append("g++/c++ (GCC 9.4.0+)")
+        if missing:
+            raise RuntimeError(
+                "torch-mode stest JIT-compiles the bindings and requires: "
+                + ", ".join(missing))
+
     def _run_pytest(self, op_dirs: List[Path], mode: str, soc: str,
                     update_env: Optional[Dict[str, str]]) -> None:
         """Run pytest in a child process with an isolated environment."""
+        if mode == "torch":
+            self._check_jit_toolchain()
         args = [sys.executable, "-m", "pytest"]
         args += [str(op_dir / "tests") for op_dir in op_dirs]
-        args += ["--mode", mode, "--rootdir", str(self.src_root), "-q"]
+        args += ["--mode", mode, "--rootdir", str(self.src_root), "-v",
+                 "--durations=0", "-s", "--capture=no"]
         if mode == "aclnn":
             args += ["--aclnn-lib-dir", str(self._build_dir(soc) / "tests")]
         if mode in ("aclnn", "torch"):
@@ -772,28 +980,23 @@ class BuildCtrl(CMakeParam):
         logging.info("Install whl for test success, %s", duration)
         return site_dir
 
-    def _write_ops_registry(self, op_dirs: List[Path]) -> Path:
-        """Write op -> installed package module mapping for jit stest."""
-        mapping = {}
-        for op_dir in op_dirs:
-            rel = op_dir.relative_to(self.src_root)
-            pkg = "pypto_gym." + ".".join(rel.parts)
-            mapping[op_dir.name] = f"{pkg}.op_kernel.{op_dir.name}"
-        registry = self._whl_dir() / "ops_registry.json"
-        registry.write_text(json.dumps(mapping, indent=2) + "\n", encoding="utf-8")
-        logging.info("ops registry: %s", registry)
-        return registry
+    def _run_stest_whl_torch(self, op_dirs: List[Path], soc: str) -> None:
+        """whl stest: install the built wheel into build_out, run torch-mode tests.
 
-    def _run_stest_jit(self, op_dirs: List[Path]) -> None:
+        Verifies the torch custom-op form only (whl test regression scope). The
+        wheel must be self-sufficient: ASCEND_CUSTOM_OPP_PATH is NOT injected
+        here — importing pypto_gym from the installed tree sets it. PYTHONPATH
+        is prepended, not replaced: test fixtures import op_kernel JIT sources
+        as reference implementations and need pypto_pro from the environment.
+        """
         site_dir = self._install_whl_for_test()
-        registry = self._write_ops_registry(op_dirs)
         update_env = {
             "PYTHONPATH": self._prepend_env("PYTHONPATH", str(site_dir)),
-            "GYM_OPS_REGISTRY": str(registry),
         }
-        self._run_pytest(op_dirs, mode="jit", soc=self.feature.soc_list[0], update_env=update_env)
+        self._run_pytest(op_dirs, mode="torch", soc=soc, update_env=update_env)
 
-    def _run_stest_aclnn(self, op_dirs: List[Path], soc: str) -> None:
+    def _install_run_for_test(self, soc: str):
+        """Install the built .run into build_out/run/<soc> and return the pytest env."""
         run_dir = self._run_dir(soc).resolve()
         run_pkg = self._find_artifact(run_dir, "*.run")
         install_path = run_dir
@@ -812,11 +1015,15 @@ class BuildCtrl(CMakeParam):
             "ASCEND_CUSTOM_OPP_PATH": self._prepend_env("ASCEND_CUSTOM_OPP_PATH", str(vendor)),
             "LD_LIBRARY_PATH": self._prepend_env("LD_LIBRARY_PATH", str(vendor / "op_api" / "lib")),
         }
-        manifest = vendor / "python" / "pypto_gym" / "operators.json"
+        manifest = vendor / "python" / "pypto_gym" / "_bindings" / "operators.json"
         bound_names = (set(json.loads(manifest.read_text(encoding="utf-8")))
                        if self.feature.torch_bindings and manifest.is_file() else set())
         if bound_names:
             update_env["PYTHONPATH"] = self._prepend_env("PYTHONPATH", str(vendor / "python"))
+        return update_env, bound_names
+
+    def _run_stest_aclnn(self, op_dirs: List[Path], soc: str) -> None:
+        update_env, bound_names = self._install_run_for_test(soc)
         bound = [op for op in op_dirs if op.name in bound_names]
         unbound = [op for op in op_dirs if op.name not in bound_names]
         if bound:
@@ -824,35 +1031,67 @@ class BuildCtrl(CMakeParam):
         if unbound:
             self._run_pytest(unbound, mode="aclnn", soc=soc, update_env=update_env)
 
+    def _run_stest_jit_source(self, op_dirs: List[Path], soc: str) -> None:
+        """jit-mode stest: run op_kernel source tests directly, no artifact install.
+
+        The op_kernel sources are the input of the offline binary build; this mode
+        is their source-level regression gate (conftest puts op_kernel dirs on
+        sys.path; requires pypto_pro in the environment, no cmake test targets).
+        """
+        logging.info("stest(jit): source-tree based, no artifact install")
+        self._run_pytest(op_dirs, mode="jit", soc=soc, update_env=None)
+
     def run_stest(self) -> None:
-        """Execute system tests for the selected operators."""
+        """Execute system tests for the selected operators (mode per --stest-mode)."""
         if not self.tests.enabled:
             return
         op_dirs = self.selected_op_dirs()
-        logging.info("STest operators: %s", [d.name for d in op_dirs])
-        if self.feature.pkg_type_run:
-            self._run_stest_aclnn(op_dirs, self.feature.soc_list[0])
-        else:
-            self._run_stest_jit(op_dirs)
+        mode = self.tests.stest_mode
+        soc = self.feature.soc_list[0]
+        logging.info("STest operators: %s (mode=%s)", [d.name for d in op_dirs], mode)
+        if mode == "jit":
+            self._run_stest_jit_source(op_dirs, soc)
+        elif mode == "auto":
+            if self.feature.pkg_type_run:
+                self._run_stest_aclnn(op_dirs, soc)
+            else:
+                self._run_stest_whl_torch(op_dirs, soc)
+        elif mode == "torch":
+            if self.feature.pkg_type_run:
+                update_env, _ = self._install_run_for_test(soc)
+                self._run_pytest(op_dirs, mode="torch", soc=soc, update_env=update_env)
+            else:
+                self._run_stest_whl_torch(op_dirs, soc)
+        else:  # aclnn
+            if not self.feature.pkg_type_run:
+                raise ValueError(
+                    "--stest-mode aclnn requires --pkg-type run (C++ test bridge + installed vendor)")
+            update_env, _ = self._install_run_for_test(soc)
+            self._run_pytest(op_dirs, mode="aclnn", soc=soc, update_env=update_env)
 
     def resolve_torch_bindings(self) -> None:
-        """Default run builds fall back to ACLNN-only when no selected op has a binding.
+        """Resolve the default (bindings ON) against the selected operator scope.
 
-        Keeps the pre-binding behaviour for operators that never adapted Torch, while
-        an explicit --torch-bindings request still fails loudly in CMake.
+        run: falls back to an ACLNN-only .run with a WARNING when no selected op
+        provides a binding (keeps the pre-binding behaviour for ops that never
+        adapted Torch).
+        whl: fails instead — the wheel's purpose is the torch.ops main path; an
+        ACLNN-only wheel requires an explicit --no-torch-bindings.
         """
-        if not self.feature.pkg_type_run or not self.feature.torch_bindings:
-            return
-        if self.feature.torch_bindings_explicit:
+        if not self.feature.torch_bindings:
             return
         try:
             op_dirs = self._selected_build_dirs()
         except (OSError, subprocess.CalledProcessError):
             return  # Leave the error to CMake's own scope resolution.
         if op_dirs and not any((d / "torch_extension" / "CMakeLists.txt").is_file() for d in op_dirs):
+            if not self.feature.pkg_type_run:
+                raise ValueError(
+                    "No selected operator provides a Torch binding; an ACLNN-only wheel "
+                    "requires an explicit --no-torch-bindings")
             logging.warning(
                 "No selected operator provides a Torch binding; building an ACLNN-only .run "
-                "(pass --torch-bindings to require bindings)")
+                "(pass --no-torch-bindings to silence this warning)")
             self.feature.torch_bindings = False
 
     def _selected_build_dirs(self) -> List[Path]:

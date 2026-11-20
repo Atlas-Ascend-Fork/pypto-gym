@@ -1573,7 +1573,7 @@ def compute_p_dn(ctx_p, sub_id, qk_vec_db, tile_nz_db, tile_nz_db_1, tmp_max, tm
 # ================================================================
 #  Kernel with NBuffer + auto_mutex
 # ================================================================
-@pl.jit(arch="a5", auto_mutex=True, compile_timeout=200,
+@pl.jit(arch="3510", auto_mutex=True, compile_timeout=200,
         tiling_key=FlexAttnTilingKey,
         datatype={
             "query": "io_dtype",

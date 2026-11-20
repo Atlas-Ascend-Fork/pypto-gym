@@ -10,42 +10,144 @@
 # -----------------------------------------------------------------------------------------------------------
 """PyPTO-GYM setuptools configuration module
 
-Source tree to install tree path mapping is controlled here:
+Two wheel forms, selected by exactly one environment variable (both produced
+by build_ci.py; bare `python -m build` is rejected with a pointer):
 
-    ops -> pypto_gym.ops    # operator library: pro/tensor paradigms map level by level
+- GYM_WHL_STAGE=<dir>  community full wheel: Python shell + _bindings materials
+  (csrc/frontends/manifest) + _opp vendor tree (precompiled kernels / tiling /
+  aclnn). Tag py3-none-<plat>: platform binaries aboard, but no Python/torch
+  ABI lock (bindings are JIT compiled at runtime, decision 28). The plat tag
+  defaults to linux_<arch>; pass a manylinux plat via build_ci.py --plat_name
+  (forwarded as `bdist_wheel --plat-name=...`) for PyPI-compatible tags.
+  Version <base>.
+- GYM_WHL_SHELL=<dir>  run-embedded shell wheel: Python shell + _bindings only,
+  no vendor binaries. Tag py3-none-any (fully platform independent, shared by
+  x86/aarch64 run packages). Version <base>.
 
-Only packages under ops/pro and ops/tensor are discovered; tests/op_host
-directories inside operator trees and non-.py files (.md/.txt etc.) are
-excluded from the bdist.
+The staged tree layout (materialized by `cmake --install`; the repo source tree
+under python/pypto_gym/ mirrors it 1:1) is <dir>/pypto_gym/{__init__.py,
+_loader/,_bindings/{operators.json,csrc/,frontends/}[,_opp/]}.
 """
 
 import logging
+import os
 from pathlib import Path
-from typing import Dict, List, Tuple
+from typing import List
 from datetime import datetime, timezone
 
 import setuptools
+from setuptools.dist import Distribution
+from setuptools.command.egg_info import egg_info as _egg_info
+
+try:
+    from setuptools.command.bdist_wheel import bdist_wheel as _bdist_wheel
+except ImportError:  # older setuptools: fall back to the wheel package
+    from wheel.bdist_wheel import bdist_wheel as _bdist_wheel
+
+
+class BinaryDistribution(Distribution):
+    """Force a platform-specific wheel (Root-Is-Purelib: false).
+
+    The full form ships the vendor tree (kernel .o, host libraries) as package
+    data; without this, bdist_wheel would tag the wheel py3-none-any and pip
+    would install it on incompatible platforms.
+    """
+
+    def has_ext_modules(self):
+        return True
+
+
+class Py3NonePlatformWheel(_bdist_wheel):
+    """Tag the full form py3-none-<plat>.
+
+    The binaries aboard are Python/torch ABI free (device kernels + C-API host
+    libraries; bindings are JIT compiled against the runtime torch), so the
+    cpXX-cpXX interpreter lock of the default platform tag would wrongly
+    reject compatible interpreters (decision 22/28).
+    """
+
+    def finalize_options(self):
+        super().finalize_options()
+        self.python_tag = "py3"
+
+    def get_tag(self):
+        _python, _abi, plat = super().get_tag()
+        return "py3", "none", plat
+
+
+class CustomEggInfo(_egg_info):
+    """Inject X-Build-Timestamp into PKG-INFO (bdist_wheel copies it to METADATA).
+
+    setuptools has no public API for custom METADATA fields; following pypto's
+    CustomEggInfo, the field is inserted into the RFC 5322 header region (before
+    the blank-line separator) so importlib.metadata can parse it. The JIT cache
+    keys on this build identity: same-version rebuilds must not reuse a stale
+    binding cache. The timestamp comes from GYM_BUILD_TIMESTAMP (build_ci
+    injects one per build round, shared by the full and shell wheels); a manual
+    `python -m build` generates one locally.
+    """
+
+    def run(self):
+        super().run()
+        self._inject_build_timestamp()
+
+    def _inject_build_timestamp(self):
+        metadata_file = Path(self.egg_info) / "PKG-INFO"
+        if not metadata_file.exists():
+            # 兼容部分 setuptools 版本使用 METADATA 文件名
+            metadata_file = Path(self.egg_info) / "METADATA"
+        if not metadata_file.exists():
+            # -e 模式下没有 METADATA/PKG-INFO 文件
+            logging.warning("Can't get METADATA in %s", self.egg_info)
+            return
+        timestamp = os.environ.get("GYM_BUILD_TIMESTAMP", "").strip()
+        if not timestamp:
+            timestamp = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S")
+        field = f"X-Build-Timestamp: {timestamp}\n"
+        content = metadata_file.read_text(encoding="utf-8")
+        separator = "\n\n"
+        idx = content.find(separator)
+        if idx == -1:
+            # 无空行分隔符(异常情况), 追加到末尾
+            metadata_file.write_text(content + field, encoding="utf-8")
+        else:
+            metadata_file.write_text(content[:idx] + "\n" + field + content[idx + 1:], encoding="utf-8")
 
 
 class SetupCtrl:
-    """Setuptools configuration flow controller
-
-    Discovers source packages and the operator tree, generates the
-    packages/package_dir mapping, and starts the setuptools build.
-    """
+    """Setuptools configuration flow controller (staged-tree packaging only)."""
 
     _LICENSE_EXPR: str = "LicenseRef-CANN-Open-Software-License-Agreement-Version-2.0"
     _LICENSE_FILES: List[str] = ["LICENSE"]
-
-    # Paradigm dirs under ops/ that participate in packaging
-    _PARADIGM_DIRS = ("pro", "tensor")
-
-    # Dir names inside operator trees excluded from packaging
-    _EXCLUDED_DIRS = {"tests", "op_host", "__pycache__"}
+    _PACKAGE: str = "pypto_gym"
+    _PACKAGE_DATA_COMMON: List[str] = [
+        "_bindings/operators.json",
+        "_bindings/frontends/*.py",
+        "_bindings/csrc/*",
+    ]
+    _PACKAGE_DATA_FULL: List[str] = _PACKAGE_DATA_COMMON + [
+        "_opp/vendors/**/*",
+    ]
 
     def __init__(self):
         self.src_root: Path = Path(__file__).parent.resolve()
-        self.packages, self.package_dir = self._discover_packages()
+        stage = os.environ.get("GYM_WHL_STAGE", "")
+        shell = os.environ.get("GYM_WHL_SHELL", "")
+        if bool(stage) == bool(shell):
+            raise RuntimeError(
+                "exactly one of GYM_WHL_STAGE (community full wheel) or GYM_WHL_SHELL "
+                "(run-embedded shell wheel) must be set; build wheels via "
+                "build_ci.py --pkg-type whl|run")
+        self.shell_mode: bool = bool(shell)
+        root = Path(shell if self.shell_mode else stage).resolve()
+        if not (root / self._PACKAGE / "__init__.py").is_file():
+            raise RuntimeError(f"staged tree {root} misses {self._PACKAGE}/__init__.py")
+        self.stage: Path = root
+        self.packages: List[str] = [self._PACKAGE, f"{self._PACKAGE}._loader"]
+        # package_dir must be relative to the setup.py directory (setuptools requirement).
+        self.package_dir = {
+            self._PACKAGE: os.path.relpath(root / self._PACKAGE, self.src_root)
+        }
 
     @classmethod
     def main(cls):
@@ -62,68 +164,28 @@ class SetupCtrl:
     @classmethod
     def _main(cls):
         ctrl = SetupCtrl()
-        logging.info("packaging %d packages", len(ctrl.packages))
-        setuptools.setup(
+        logging.info("packaging %d packages (shell=%s)", len(ctrl.packages), ctrl.shell_mode)
+        kwargs = dict(
             # 1. SPDX expression; newer setuptools maps it to the License-Expression field
             # 2. license_files packs LICENSE into dist-info/licenses across setuptools versions
             license=cls._LICENSE_EXPR,
             license_files=cls._LICENSE_FILES,
             packages=ctrl.packages,
             package_dir=ctrl.package_dir,
+            zip_safe=False,
         )
-
-    def _discover_packages(self) -> Tuple[List[str], Dict[str, str]]:
-        """Aggregate the packaging scope (currently the ops tree only)."""
-        packages: List[str] = []
-        package_dir: Dict[str, str] = {}
-        ops_packages, ops_package_dir = self._discover_ops_packages()
-        packages += ops_packages
-        package_dir.update(ops_package_dir)
-        return packages, package_dir
-
-    def _discover_ops_packages(self) -> Tuple[List[str], Dict[str, str]]:
-        """Discover the ops tree and generate the packages list and package_dir mapping.
-
-        1. Only packages under the _PARADIGM_DIRS trees (pro/tensor) are discovered:
-           ops/<paradigm> maps to pypto_gym.ops.<paradigm>, with network/operator
-           dirs mapping level by level;
-        2. Legacy trees outside pro/tensor (e.g. pypto_pro/pypto_tensor) are not
-           packaged until they are migrated to the pro/tensor layout;
-        3. tests/op_host dirs inside operator trees are skipped, so they never
-           enter the bdist;
-        4. package_dir values must be paths relative to the repo root (the
-           setup.py directory).
-        """
-        ops_root = self.src_root / "ops"
-        if not ops_root.is_dir():
-            logging.warning("Ops tree not found: %s", ops_root)
-            return [], {}
-        all_dirs = []
-        for path in ops_root.iterdir():
-            if path.is_dir() and not path.name.startswith((".", "__")):
-                all_dirs.append(path.name)
-        ignored = sorted(d for d in all_dirs if d not in self._PARADIGM_DIRS)
-        if ignored:
-            logging.warning("Skip non-paradigm dirs under ops: %s", ignored)
-        packages: List[str] = ["pypto_gym.ops"]
-        for paradigm in self._PARADIGM_DIRS:
-            paradigm_root = ops_root / paradigm
-            if not paradigm_root.is_dir():
-                logging.warning("Paradigm tree not found: %s", paradigm_root)
-                continue
-            pkg_root = f"pypto_gym.ops.{paradigm}"
-            packages.append(pkg_root)
-            for path in sorted(paradigm_root.rglob("*")):
-                if not path.is_dir():
-                    continue
-                rel = path.relative_to(paradigm_root)
-                if any(part in self._EXCLUDED_DIRS for part in rel.parts):
-                    continue
-                if not path.name.isidentifier():
-                    logging.warning("skip non-identifier package dir: %s", path)
-                    continue
-                packages.append(f"{pkg_root}." + ".".join(rel.parts))
-        return packages, {"pypto_gym.ops": "ops"}
+        if ctrl.shell_mode:
+            kwargs.update(
+                package_data={cls._PACKAGE: cls._PACKAGE_DATA_COMMON},
+                cmdclass={"egg_info": CustomEggInfo},
+            )
+        else:
+            kwargs.update(
+                package_data={cls._PACKAGE: cls._PACKAGE_DATA_FULL},
+                distclass=BinaryDistribution,
+                cmdclass={"bdist_wheel": Py3NonePlatformWheel, "egg_info": CustomEggInfo},
+            )
+        setuptools.setup(**kwargs)
 
 
 if __name__ == "__main__":

@@ -23,7 +23,7 @@ readonly TMP_PKG_VERSION_FILE="${TMP_PKG_INFO_PATH}/version.info"
 unset tmp_cfd
 
 readonly VENDOR_NAME="pypto_gym"
-source "${TMP_PKG_SCRIPTS_PATH}/python_registration.sh"
+source "${TMP_PKG_SCRIPTS_PATH}/python_wheel.sh"
 
 ########################################################################################################################
 # 日志
@@ -169,28 +169,13 @@ do_install() {
     [ -d "${TMP_PKG_ROOT_PATH}/packages/vendors/${VENDOR_NAME}" ] \
         || exit_log 1 "vendor payload missing in package: ${TMP_PKG_ROOT_PATH}/packages/vendors/${VENDOR_NAME}"
 
-    local has_bindings=n register_python=n check_rc=0
-    if [ -f "${TMP_PKG_ROOT_PATH}/packages/vendors/${VENDOR_NAME}/python/pypto_gym/operators.json" ]; then
+    local has_bindings=n
+    if [ -f "${TMP_PKG_ROOT_PATH}/packages/vendors/${VENDOR_NAME}/python/pypto_gym/_bindings/operators.json" ]; then
         has_bindings=y
-        gym_python_check_links "${targetdir}"
-        check_rc=$?
-        case "${check_rc}" in
-            0) register_python=y ;;
-            2) gym_python_warn_degraded "${targetdir}" "CANN site-packages is not writable" ;;
-            *) exit_log 1 "cannot register Python bindings" ;;
-        esac
     fi
-
-    # Always drop links left by a previous version; only a writable standard
-    # CANN layout can recreate them.
-    if ! gym_python_remove_links "${targetdir}"; then
-        if [ "${has_bindings}" = y ]; then
-            gym_python_warn_degraded "${targetdir}" "cannot remove stale Python binding links"
-            register_python=n
-        else
-            exit_log 1 "cannot remove old Python binding registration"
-        fi
-    fi
+    # Legacy symlink trees (pre-wheel versions) and stale pip registrations are
+    # handled inside gym_install_shell_wheel / gym_remove_shell_wheel.
+    gym_remove_shell_wheel "${targetdir}"
 
     if [ -d "${targetdir}/${vendordir}" ]; then
         log "[INFO] ${targetdir}/${vendordir} already exists, old version will be replaced"
@@ -213,28 +198,24 @@ do_install() {
         cp -f "${TMP_PKG_VERSION_FILE}" "${targetdir}/${vendordir}/version.info" 2>/dev/null
     fi
 
-    # set_env.bash: 导出 ASCEND_CUSTOM_OPP_PATH + LD_LIBRARY_PATH
+    # set_env.bash: 导出 ASCEND_CUSTOM_OPP_PATH + LD_LIBRARY_PATH（纯 C++ aclnn 消费方）。
+    # Python 层由壳 wheel 经 pip 注册（决策 29），不再注入 PYTHONPATH。
     mkdir -p "${targetdir}/${vendordir}/bin"
     cat > "${targetdir}/${vendordir}/bin/set_env.bash" <<EOF
 #!/bin/bash
 export ASCEND_CUSTOM_OPP_PATH=${targetdir}/${vendordir}:\${ASCEND_CUSTOM_OPP_PATH}
 export LD_LIBRARY_PATH=${targetdir}/${vendordir}/op_api/lib/:\${LD_LIBRARY_PATH}
-if [ -d "${targetdir}/${vendordir}/python" ]; then
-    export PYTHONPATH=${targetdir}/${vendordir}/python:\${PYTHONPATH}
-fi
 EOF
     chmod 550 "${targetdir}/${vendordir}/bin/set_env.bash"
 
-    if [ "${register_python}" = y ]; then
-        gym_python_install_links "${targetdir}" || {
-            gym_python_warn_degraded "${targetdir}" "cannot create Python binding links"
-            register_python=n
-        }
+    local registered_dir=""
+    if [ "${has_bindings}" = y ]; then
+        registered_dir=$(gym_install_shell_wheel "${targetdir}")
     fi
 
     # 独立卸载入口和共享登记逻辑一起交付。
     mkdir -p "${targetdir}/${vendordir}/scripts"
-    for script_name in uninstall.sh python_registration.sh; do
+    for script_name in uninstall.sh python_wheel.sh; do
         cp -f "${TMP_PKG_SCRIPTS_PATH}/${script_name}" "${targetdir}/${vendordir}/scripts/${script_name}" \
             || exit_log 1 "cannot install ${script_name}"
         chmod 550 "${targetdir}/${vendordir}/scripts/${script_name}"
@@ -250,19 +231,18 @@ EOF
 
     log "[INFO] install success. vendor: ${VENDOR_NAME} -> ${targetdir}/${vendordir}"
     log "[INFO] verify: grep load_priority ${config_file}"
-    public_python_dir=$(gym_python_public_dir "${targetdir}")
-    if [ -n "${public_python_dir}" ] && [ -f "${public_python_dir}/operators.json" ]; then
-        log "[INFO] Python bindings registered: ${public_python_dir}; no vendor source required with CANN environment loaded"
+    if [ -n "${registered_dir}" ] && [ -f "${registered_dir}/_bindings/operators.json" ]; then
+        log "[INFO] Python bindings registered (pip): ${registered_dir}"
     elif [ "${has_bindings}" = y ]; then
-        log "[WARN] Python bindings not registered; source ${targetdir}/${vendordir}/bin/set_env.bash to use pypto_gym"
+        log "[WARN] Python bindings not registered; pip install ${targetdir}/${vendordir}/python/pypto_gym-*.whl manually"
     else
-        log "[INFO] custom-location environment: source ${targetdir}/${vendordir}/bin/set_env.bash"
+        log "[INFO] ACLNN-only package: source ${targetdir}/${vendordir}/bin/set_env.bash for C++ consumers"
     fi
     log "[INFO] uninstall: bash ${targetdir}/${vendordir}/scripts/uninstall.sh"
 }
 
 do_uninstall() {
-    gym_python_remove_links "${targetdir}" || exit_log 1 "cannot remove Python binding registration"
+    gym_remove_shell_wheel "${targetdir}" || exit_log 1 "cannot remove Python binding registration"
     if [ ! -d "${targetdir}/${vendordir}" ]; then
         log "[INFO] ${targetdir}/${vendordir} not exist, no need to uninstall"
         remove_load_priority

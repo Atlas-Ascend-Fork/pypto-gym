@@ -1755,7 +1755,7 @@ def _prepare_addresses64_pow2_vf(
     vf.mem_bar()
 
 
-@pl.jit(arch="a5", auto_mutex=True, tiling_key=QsliKey)
+@pl.jit(arch="3510", auto_mutex=True, tiling_key=QsliKey)
 def quant_sparse_lightning_indexer_kernel(
     q_ptr: pl.Ptr[pl.DT_UINT8],
     k_ptr: pl.Ptr[pl.DT_UINT8],

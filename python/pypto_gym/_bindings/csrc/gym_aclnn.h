@@ -105,13 +105,10 @@ inline aclDataType DataType(at::ScalarType type) {
     return ACL_INT64;
   case at::kByte:
     return ACL_UINT8;
-  case at::kFloat8_e4m3fn:
-    // ACL_FLOAT8_E4M3FN (acl/acl_base_rt.h); the enum name is not exported by
-    // every CANN header set, so use the ABI value, matching the test bridges.
-    return static_cast<aclDataType>(36);
-  case at::kFloat8_e8m0fnu:
-    // ACL_FLOAT8_E8M0, same reasoning as above.
-    return static_cast<aclDataType>(37);
+  case at::ScalarType::Float8_e4m3fn:
+    return ACL_FLOAT8_E4M3FN;
+  case at::ScalarType::Float8_e8m0fnu:
+    return ACL_FLOAT8_E8M0;
   default:
     TORCH_CHECK(false, "Unsupported ACL tensor dtype: ", type);
   }
@@ -137,12 +134,26 @@ struct TensorInfo {
   int64_t storage_elements;
   void *data;
   aclDataType type;
+  aclFormat format;
+  std::vector<int64_t> storage_sizes;
   explicit TensorInfo(const at::Tensor &tensor)
       : sizes(tensor.sizes().vec()), strides(tensor.strides().vec()),
         offset(tensor.storage_offset()),
         storage_elements(tensor.storage().nbytes() / tensor.element_size()),
         data(const_cast<void *>(tensor.storage().data())),
-        type(DataType(tensor.scalar_type())) {}
+        type(DataType(tensor.scalar_type())),
+        format(static_cast<aclFormat>(at_npu::native::get_npu_format(tensor))) {
+    // Preserve the historical ND descriptor exactly; internal formats such as
+    // FRACTAL_NZ need torch_npu's physical storage shape to describe the
+    // reordered elements.
+    if (format == ACL_FORMAT_ND) {
+      storage_sizes.push_back(storage_elements);
+    } else {
+      storage_sizes = at_npu::native::get_npu_storage_sizes(tensor);
+      if (storage_sizes.empty())
+        storage_sizes.push_back(storage_elements);
+    }
+  }
 };
 
 inline TensorHandle Tensor(const TensorInfo &tensor) {
@@ -153,8 +164,9 @@ inline TensorHandle Tensor(const TensorInfo &tensor) {
   static const auto destroy =
       Symbol<DestroyTensor::Function>("aclDestroyTensor");
   auto *result = create(tensor.sizes.data(), tensor.sizes.size(), tensor.type,
-                        tensor.strides.data(), tensor.offset, ACL_FORMAT_ND,
-                        &tensor.storage_elements, 1, tensor.data);
+                        tensor.strides.data(), tensor.offset, tensor.format,
+                        tensor.storage_sizes.data(), tensor.storage_sizes.size(),
+                        tensor.data);
   TORCH_CHECK(result, "aclCreateTensor failed");
   return TensorHandle(result, DestroyTensor{destroy});
 }

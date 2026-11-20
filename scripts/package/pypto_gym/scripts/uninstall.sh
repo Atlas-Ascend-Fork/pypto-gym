@@ -18,7 +18,7 @@ vendor_name=pypto_gym
 # 从本脚本位置反推 vendors 根目录与 config.ini
 # 本脚本位于 <opp>/vendors/<vendor>/scripts/uninstall.sh, 向上 2 级 = <opp>/vendors
 curr_path=$(dirname "$(readlink -f "$0")")
-source "${curr_path}/python_registration.sh"
+source "${curr_path}/python_wheel.sh"
 vendordir=$(realpath "${curr_path}/../../")
 config_file="${vendordir}/config.ini"
 
@@ -28,7 +28,7 @@ log() {
 }
 
 # 先清理由本包创建的 Python 入口，保留其他 wheel 的 ops 目录。
-gym_python_remove_links "$(dirname "${vendordir}")" || exit 1
+gym_remove_shell_wheel "$(dirname "${vendordir}")" || exit 1
 
 # 删除 vendor 目录
 if [ ! -d "${vendordir}/${vendor_name}" ]; then

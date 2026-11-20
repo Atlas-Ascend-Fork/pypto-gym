@@ -1,6 +1,6 @@
 # QuantSparseLightningIndexer 设计说明（PyPTO-Pro）
 
-对应实现：[quant_sparse_lightning_indexer.py](op_kernel/quant_sparse_lightning_indexer.py)。模块只有一个公开 host 函数和一个 `@pl.jit(arch="a5", auto_mutex=True, tiling_key=QsliKey)` 入口 `quant_sparse_lightning_indexer_kernel`。host 侧校验输入与属性、申报工作区、选择容量档位并启动一次 kernel；设备侧完成候选 K 搬运、QK 点积、head 加权归约、TopK 和分片结果归并。kernel 在构建期由 `asc_opc` 预编译成二进制随 custom run 包交付，运行期经生成的 `aclnnQuantSparseLightningIndexer` 接口调用。接口见 [README.md](README.md)，测试及性能记录见 [RESULTS.md](RESULTS.md)。
+对应实现：[quant_sparse_lightning_indexer.py](op_kernel/quant_sparse_lightning_indexer.py)。模块只有一个公开 host 函数和一个 `@pl.jit(arch="3510", auto_mutex=True, tiling_key=QsliKey)` 入口 `quant_sparse_lightning_indexer_kernel`。host 侧校验输入与属性、申报工作区、选择容量档位并启动一次 kernel；设备侧完成候选 K 搬运、QK 点积、head 加权归约、TopK 和分片结果归并。kernel 在构建期由 `asc_opc` 预编译成二进制随 custom run 包交付，运行期经生成的 `aclnnQuantSparseLightningIndexer` 接口调用。接口见 [README.md](README.md)，测试及性能记录见 [RESULTS.md](RESULTS.md)。
 
 
 本文中，worker 指一个 AIC 及其配合工作的两个 AIV；tile 指一次处理的 512 个候选 token，对应候选数组中连续的 64 个块位置，不要求这些块在逻辑序列或物理内存中连续。GM 是设备全局内存，UB 是 AIV 的本地缓冲区；L1、L0A、L0B 和 L0C 用于 Cube 数据及累加结果。MTE2 负责从 GM 读取数据，MTE3 负责向 GM 等目标搬运数据，FIXPIPE 将 Cube 累加结果交给 AIV。

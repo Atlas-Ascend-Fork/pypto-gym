@@ -12,7 +12,7 @@ PyPTO-Gym 是基于 PyPTO 编程框架构建的样例仓库，面向华为昇腾
 - **编程框架**：PyPTO，基于 Tile 的编程模型
 - **内容**：融合算子样例 + 大模型适配样例
 
-Pro 算子的构建、安装与测试见[构建指南](docs/build-guide.md)，预编译 Torch 接口和新算子接入见[Torch 绑定说明](torch_extension/README.md)。
+Pro 算子的构建、安装与测试见[构建指南](docs/build-guide.md)，算子接口的获取方式见 `pypto_gym` 包内文档（`help(pypto_gym)`、`get_ops()`、`prewarm()`）。
 `.run` 使用 `--ops ALL`（或省略 `--ops`）时，只构建 [ops/pro/build_ops.yaml](ops/pro/build_ops.yaml) 中列出的算子；路径相对于 `ops/pro`，注释对应行即可取消该算子的构建。
 
 ## 核心特性

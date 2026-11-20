@@ -15,7 +15,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "pypto-gym"
-version = "0.1.0"
+version = "0.1.1"
 authors = [
     { name = "PyPTO Team", email = "pto@cann.osinfra.cn" }
 ]
@@ -27,7 +27,8 @@ dynamic = ["license"]
 
 requires-python = ">=3.9"
 dependencies = [
-    "pypto>=0.2.1",
+    "pypto>=0.3.0",
+    "ninja>=1.11",
 ]
 keywords = ["python", "pto", "tile", "tile-centric", "ascend", "kernel", "operator"]
 

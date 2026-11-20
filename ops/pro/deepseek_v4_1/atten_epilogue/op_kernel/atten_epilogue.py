@@ -2756,7 +2756,7 @@ def workspace_bytes(t):
 
 
 @pl.jit(
-    arch="a5",
+    arch="3510",
     auto_mutex=True,
     tiling_key=EpilogueKey,
     compile_timeout=300,

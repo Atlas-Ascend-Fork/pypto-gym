@@ -47,6 +47,7 @@ option(ENABLE_TESTS "Enable tests" OFF)  # 算子级 dispatcher 据此派发 tes
 include(cmake/config.cmake)
 include(cmake/func.cmake)
 include(cmake/obj_func.cmake)
+include(cmake/aicpu.cmake)
 
 ########################################################################################################################
 # 编译流程
@@ -60,7 +61,7 @@ if (ENABLE_TESTS)
     add_subdirectory(tests)
 endif()
 if (ENABLE_TORCH_BINDINGS AND NOT PREPARE_BUILD)
-    add_subdirectory(torch_extension)
+    add_subdirectory(python)
 endif()
 
 # 算子接入: 发现 ops/{pro,tensor} 树, add 算子级目录(dispatcher 派发 op_host/tests).
@@ -71,6 +72,11 @@ foreach(_op_dir ${OP_DIR_LIST})
 endforeach()
 if (ENABLE_TORCH_BINDINGS AND NOT PREPARE_BUILD)
     gym_finalize_torch_bindings()
+endif()
+
+# AICPU kernel 汇总: 所有算子接入后链接单一 .so 并合并 opInfo json(仅存在 aicpu kernel 时生效)
+if (NOT PREPARE_BUILD)
+    gym_finalize_aicpu_kernels()
 endif()
 
 # 读回算子登记, 创建 host 侧目标(三 .so/核对程序)与 kernel 编译链
@@ -85,48 +91,58 @@ include(cmake/custom_build.cmake)       # TODO 看看能不能去掉
 include(version.cmake)
 add_cann_version_info_targets()
 
-# run 包脚本骨架安装: install.sh 入口 + help/cleanup + version.info.
-# 组件名与 install COMPONENT 一致(set_cann_cpack_config 按组件收集 staging).
-set(_GymScriptPrefix "${PYPTO_GYM_SRC_DIR}/scripts/package/${VENDOR_NAME}/scripts")
-install(DIRECTORY "${_GymScriptPrefix}/"
-        DESTINATION share/info/${VENDOR_NAME}/script
-        FILE_PERMISSIONS
-                OWNER_READ OWNER_WRITE OWNER_EXECUTE  # 文件权限
-                GROUP_READ GROUP_EXECUTE
-                WORLD_READ WORLD_EXECUTE
-        DIRECTORY_PERMISSIONS
-                OWNER_READ OWNER_WRITE OWNER_EXECUTE  # 目录权限
-                GROUP_READ GROUP_EXECUTE
-                WORLD_READ WORLD_EXECUTE
-        COMPONENT ${VENDOR_NAME}
-)
+# run 包专属安装(安装器脚本骨架 + version.info -> share/info): whl 布局不需要
+# (wheel 无安装器, Python 层由 pip 承载), GYM_WHL_LAYOUT 时整体跳过.
+if (NOT GYM_WHL_LAYOUT)
+    # run 包脚本骨架安装: install.sh 入口 + help/cleanup + version.info.
+    # 组件名与 install COMPONENT 一致(set_cann_cpack_config 按组件收集 staging).
+    set(_GymScriptPrefix "${PYPTO_GYM_SRC_DIR}/scripts/package/${VENDOR_NAME}/scripts")
+    install(DIRECTORY "${_GymScriptPrefix}/"
+            DESTINATION share/info/${VENDOR_NAME}/script
+            FILE_PERMISSIONS
+                    OWNER_READ OWNER_WRITE OWNER_EXECUTE  # 文件权限
+                    GROUP_READ GROUP_EXECUTE
+                    WORLD_READ WORLD_EXECUTE
+            DIRECTORY_PERMISSIONS
+                    OWNER_READ OWNER_WRITE OWNER_EXECUTE  # 目录权限
+                    GROUP_READ GROUP_EXECUTE
+                    WORLD_READ WORLD_EXECUTE
+            COMPONENT ${VENDOR_NAME}
+    )
 
-# cann-cmake 公共脚本
-set(SCRIPTS_FILES
-        ${CANN_CMAKE_DIR}/scripts/install/check_version_required.awk
-        ${CANN_CMAKE_DIR}/scripts/install/common_func_v2.inc
-        ${CANN_CMAKE_DIR}/scripts/install/common_func.inc
-        ${CANN_CMAKE_DIR}/scripts/install/common_installer.inc
-        ${CANN_CMAKE_DIR}/scripts/install/common_interface.csh
-        ${CANN_CMAKE_DIR}/scripts/install/common_interface.fish
-        ${CANN_CMAKE_DIR}/scripts/install/common_interface.sh
-        ${CANN_CMAKE_DIR}/scripts/install/install_common_parser.sh
-        ${CANN_CMAKE_DIR}/scripts/install/multi_version.inc
-        ${CANN_CMAKE_DIR}/scripts/install/script_operator.inc
-        ${CANN_CMAKE_DIR}/scripts/install/version_cfg.inc
-        ${CANN_CMAKE_DIR}/scripts/install/version_compatiable.inc
-)
-install(FILES ${SCRIPTS_FILES}
-        DESTINATION share/info/${VENDOR_NAME}/script
-        COMPONENT ${VENDOR_NAME}
-)
+    # cann-cmake 公共脚本
+    set(SCRIPTS_FILES
+            ${CANN_CMAKE_DIR}/scripts/install/check_version_required.awk
+            ${CANN_CMAKE_DIR}/scripts/install/common_func_v2.inc
+            ${CANN_CMAKE_DIR}/scripts/install/common_func.inc
+            ${CANN_CMAKE_DIR}/scripts/install/common_installer.inc
+            ${CANN_CMAKE_DIR}/scripts/install/common_interface.csh
+            ${CANN_CMAKE_DIR}/scripts/install/common_interface.fish
+            ${CANN_CMAKE_DIR}/scripts/install/common_interface.sh
+            ${CANN_CMAKE_DIR}/scripts/install/install_common_parser.sh
+            ${CANN_CMAKE_DIR}/scripts/install/multi_version.inc
+            ${CANN_CMAKE_DIR}/scripts/install/script_operator.inc
+            ${CANN_CMAKE_DIR}/scripts/install/version_cfg.inc
+            ${CANN_CMAKE_DIR}/scripts/install/version_compatiable.inc
+    )
+    install(FILES ${SCRIPTS_FILES}
+            DESTINATION share/info/${VENDOR_NAME}/script
+            COMPONENT ${VENDOR_NAME}
+    )
 
-# version 配置
-#       由 add_cann_version_info_targets 命令产出
-install(FILES ${CMAKE_BINARY_DIR}/version.${VENDOR_NAME}.info
-        DESTINATION share/info/${VENDOR_NAME}
-        RENAME version.info
-        COMPONENT ${VENDOR_NAME}
-)
+    # version 配置
+    #       由 add_cann_version_info_targets 命令产出
+    install(FILES ${CMAKE_BINARY_DIR}/version.${VENDOR_NAME}.info
+            DESTINATION share/info/${VENDOR_NAME}
+            RENAME version.info
+            COMPONENT ${VENDOR_NAME}
+    )
 
-set_cann_cpack_config(${VENDOR_NAME} COMPUTE_UNIT ${ASCEND_COMPUTE_UNIT} PACKAGE_TYPE "${PACKAGE_TYPE}")
+    # CPack/.run 打包配置: 仅 run 产物主 configure 需要。set_cann_cpack_config 内部会
+    # 无条件预取 makeself 到 CANN_3RD_LIB_PATH(缺省 third_party/), 而 makeself 只被
+    # `package` 目标消费 —— whl 布局与 prepare 二次 configure 都不打包, 跳过以避免
+    # 无谓的三方件下载(whl 流程不应触碰 third_party/)。
+    if (NOT PREPARE_BUILD)
+        set_cann_cpack_config(${VENDOR_NAME} COMPUTE_UNIT ${ASCEND_COMPUTE_UNIT} PACKAGE_TYPE "${PACKAGE_TYPE}")
+    endif ()
+endif ()

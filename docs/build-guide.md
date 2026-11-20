@@ -10,21 +10,23 @@ PyPTO-Gym 是 PyPTO 实验算子仓，应该提供从算子源码到可安装产
 
 | 产物                            | 命令                                   | 安装方式        | 适用场景                          |
 | ------------------------------- | -------------------------------------- | --------------- | --------------------------------- |
-| **whl**（JIT 直调）       | `python3 build_ci.py --pkg-type whl` | `pip install` | 开发调试、快速验证、PIP源生态发布 |
+| **whl**（AOT 全量）       | `python3 build_ci.py --pkg-type whl` | `pip install` | 开发调试、快速验证、PIP源生态发布 |
 | **.run**（custom run 包） | `python3 build_ci.py --pkg-type run` | `bash *.run`  | 生产部署、批量交付                |
 
 ### 1.2. 两种产物模式的区别
 
-#### 1.2.1. whl 模式（JIT 直调）
+#### 1.2.1. whl 模式（AOT 全量）
 
 ```bash
+python3 build_ci.py --pkg-type whl [--plat_name manylinux2014]
 pip install build_out/whl/ascend950/pypto_gym-*.whl
-    → import pypto_gym.ops.pro.experimental.flex_attention
-    → 首次调用时 JIT 编译 kernel
+    → py3-none-manylinux<ver>_<arch> 产物（默认 manylinux2014，glibc 基线由标准构建环境保证）
+    → 预编译 kernel（_opp vendor 树）+ 绑定 JIT 材料（_bindings，首调对运行时 torch 编译）
 ```
 
-- 算子以 Python 包形态分发，`op_kernel/*.py` 内的 `@pl.jit` kernel 在运行时按需编译
-- 适合开发迭代：改完 kernel 直接跑，无需重新打包
+- 版本静态声明于 `pyproject.toml`（发版必 bump，PyPI 同版本不可重传）；产物含预编译 kernel 二进制，
+  无需运行时编译 kernel；Torch 绑定首调 JIT 编译并缓存
+- `--plat_name` 可选 `manylinux2014 / manylinux_2_24 / manylinux_2_28`，自动拼接系统架构后缀
 
 ### 1.2.2. run 模式（custom run 包）
 
@@ -38,13 +40,15 @@ bash cann-950-pypto_gym_9.2.0_linux-aarch64.run
 - 内含预编译产物：kernel `.o`（按 dtype 组合）+ host 侧三个 `.so` + aclnn 头文件 + ops-info.json
 - 安装后零 JIT 开销，aclnn 接口直接查找已编译二进制
 
-正式 Torch 绑定默认一并预编译、装入 `.run`，当前支持
-`mega_mhc`。已加载 CANN 基础环境时，安装到其 `opp` 后即可使用
+正式 Torch 绑定默认随构建产出，当前支持
+`mega_mhc`、`atten_epilogue`、`quant_sparse_lightning_indexer`。已加载 CANN 基础环境时，安装到其 `opp` 后即可使用
 `pypto_gym.mega_mhc(...)`；直接调用 `torch.ops.pypto_gym.mega_mhc(...)` 前需先
 `import pypto_gym` 并调用 `pypto_gym.load()`（或先访问任一 `pypto_gym.<op>`）。
-`import pypto_gym` 本身不导入 torch、不加载绑定库，无需运行时编译。
-构建环境需有 torch/torch_npu；部署环境需与其 ABI 兼容。标准 CANN 安装自动登记
-Python 入口并使用绑定库的相对运行时路径，无需额外 source vendor 脚本。
+`import pypto_gym` 惰性：不导入 torch、不加载绑定；绑定 `.cpp` 首调对运行时 torch
+JIT 编译并按构建身份缓存（`prewarm()` 可部署期预编译，镜像期消除首调耗时）。
+构建链零 torch 依赖；torch 模式 stest 与运行期 JIT 编译需环境内可用的 torch/torch_npu，
+版本由 JIT 现场适配，无 ABI 锁定。标准 CANN 布局由安装器将壳 wheel
+pip 登记到 `<cann_root>/python/site-packages`（source CANN 环境后即可 import）。
 自定义位置安装仍可使用 vendor 的 `set_env.bash`。
 
 ```bash
@@ -54,10 +58,10 @@ python3 build_ci.py --pkg-type run --ops mega_mhc --stest
 默认情况下，`--stest` 对已提供绑定的算子使用 `--mode torch`；未提供绑定的算子使用 `--mode aclnn`。
 `run` 默认尝试启用绑定，但若所选算子**都没有**接入绑定，会自动降级为 ACLNN-only 包（打印
 WARNING），仍按原有的 ACLNN 方式调用和测试。仅需 ACLNN 接口时可显式传
-`--no-torch-bindings`（手工 CMake 对应 `-DENABLE_TORCH_BINDINGS=OFF`）；显式传
-`--torch-bindings` 则要求所选算子中至少有一个提供绑定，否则 configure 阶段报错。
-`whl` 构建保持 JIT 模式，不启用此绑定。
-详细接口和新算子接入方式见 [Torch 绑定说明](../torch_extension/README.md)。
+`--no-torch-bindings`（手工 CMake 对应 `-DENABLE_TORCH_BINDINGS=OFF`）。
+`whl`（AOT native wheel）同样默认启用绑定，但所选算子都没有绑定时**直接报错**——
+wheel 的主路径就是 torch.ops；确需 ACLNN-only wheel 时显式传 `--no-torch-bindings`。
+外部调用者获取算子接口的方式（`get_ops` / `prewarm` 契约）见 `pypto_gym` 包内文档（`help(pypto_gym)`）；vendor 三级发现与注入机制见 `pypto_gym/__init__.py` 的 `_resolve_vendor_path` docstring。
 
 ### 1.3. 快速开始
 
@@ -86,11 +90,13 @@ python3 build_ci.py --pkg-type whl
 
 > 添加 `--stest` 会自动设置 `ENABLE_TESTS=ON`，构建测试目标并执行测试；不添加时默认不构建测试桥。手工构建测试桥见 §2.3。
 
-`.run` 构建的 `--ops ALL`（含省略 `--ops`）使用
+`.run` / `whl` 构建的 `--ops ALL`（含省略 `--ops`）使用
 [ops/pro/build_ops.yaml](../ops/pro/build_ops.yaml) 控制发布范围，使用 YAML 路径列表：
 
 ```yaml
 - deepseek_v4_1/mega_mhc
+- deepseek_v4_1/atten_epilogue
+- deepseek_v4_1/quant_sparse_lightning_indexer
 ```
 
 路径相对于 `ops/pro`。列出的目录参与构建，未列出的目录不参与；不想构建某项时，
@@ -98,7 +104,7 @@ python3 build_ci.py --pkg-type whl
 文件缺失、路径错误或全部被注释时构建报错。
 `--stest` 使用相同名单，CMake 自动跟踪文件变化。
 显式 `--ops mega_mhc` 绕过清单，仍按算子目录名选择；多个名称用逗号分隔。
-`whl` 的 `ALL` 不受此文件影响。
+`whl` 与 `run` 的 `ALL` 均按此清单确定构建与测试范围。
 
 #### 1.3.3. 安装 .run 包
 
@@ -253,7 +259,7 @@ pytest ops/pro/experimental/flex_attention/tests --mode jit -q
 
 ### 2.3. 构建 aclnn 测试桥
 
-测试桥只在 `ENABLE_TESTS=ON` 时构建。使用 `build_ci.py --pkg-type run --ops flex_attention --no-torch-bindings --stest` 会自动开启该选项并完成构建、安装和测试；也可以手工配置后只构建测试桥：
+测试桥只在 `ENABLE_TESTS=ON` 时构建。build_ci.py 仅在 **`--pkg-type run` 且 stest 模式为 auto/aclnn** 时自动开启该选项（桥的唯一消费方是 run 的 aclnn 模式，覆盖未绑定算子）；whl 流程（stest 仅 torch 模式）与 jit 源码模式永不开启，保持 configure 零 torch 依赖。例如 `build_ci.py --pkg-type run --ops flex_attention --no-torch-bindings --stest` 会自动开启并完成构建、安装和测试；也可以手工配置后只构建测试桥：
 
 ```bash
 cmake -S . -B build/ascend950 \

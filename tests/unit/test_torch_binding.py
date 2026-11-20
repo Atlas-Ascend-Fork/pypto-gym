@@ -16,7 +16,7 @@ import tempfile
 import unittest
 
 ROOT = Path(__file__).resolve().parents[2]
-PACKAGE = ROOT / "torch_extension" / "pypto_gym"
+PACKAGE = ROOT / "python" / "pypto_gym"
 
 
 class TorchBindingLazyImportTest(unittest.TestCase):
@@ -26,11 +26,13 @@ class TorchBindingLazyImportTest(unittest.TestCase):
         self.site = Path(self.temp.name) / "site-packages"
         self.pkg = self.site / "pypto_gym"
         self.pkg.mkdir(parents=True)
-        for name in ("__init__.py", "_loader.py"):
-            shutil.copy2(PACKAGE / name, self.pkg / name)
-        (self.pkg / "operators.json").write_text(json.dumps(["example_op"]) + "\n")
-        frontends = self.pkg / "_frontends"
-        frontends.mkdir()
+        shutil.copy2(PACKAGE / "__init__.py", self.pkg / "__init__.py")
+        shutil.copytree(PACKAGE / "_loader", self.pkg / "_loader",
+                        ignore=shutil.ignore_patterns("__pycache__"))
+        bindings = self.pkg / "_bindings"
+        frontends = bindings / "frontends"
+        frontends.mkdir(parents=True)
+        (bindings / "operators.json").write_text(json.dumps(["example_op"]) + "\n")
         (frontends / "example_op.py").write_text("def example_op(*args, **kwargs):\n"
                                                  "    return 'loaded'\n")
 

@@ -99,7 +99,7 @@ class RunBuildScopeTest(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "ambiguous"):
             scope.select_run_ops(self.root, "mega_mhc")
 
-    def test_stest_uses_run_manifest_and_keeps_whl_scope(self):
+    def test_stest_uses_build_manifest_for_both_pkg_types(self):
         ctrl = BuildCtrl.__new__(BuildCtrl)
         ctrl.src_root = self.root
         ctrl.feature = SimpleNamespace(ops="ALL", pkg_type_run=True)
@@ -108,14 +108,13 @@ class RunBuildScopeTest(unittest.TestCase):
         ctrl.feature.ops = "example_op"
         self.assertEqual([p.name for p in ctrl.selected_op_dirs()], ["example_op"])
         ctrl.feature = SimpleNamespace(ops="ALL", pkg_type_run=False)
-        self.assertEqual([p.name for p in ctrl.selected_op_dirs()],
-                         ["example_op", "mega_mhc", "unlisted_op"])
+        self.assertEqual([p.name for p in ctrl.selected_op_dirs()], ["mega_mhc"])
 
     def test_default_bindings_fall_back_to_aclnn_when_unsupported(self):
         ctrl = BuildCtrl.__new__(BuildCtrl)
         ctrl.src_root = self.root
         ctrl.feature = SimpleNamespace(ops="example_op", pkg_type_run=True,
-                                       torch_bindings=True, torch_bindings_explicit=False)
+                                       torch_bindings=True)
         ctrl.resolve_torch_bindings()
         self.assertFalse(ctrl.feature.torch_bindings)
 
@@ -126,11 +125,26 @@ class RunBuildScopeTest(unittest.TestCase):
         ctrl.resolve_torch_bindings()
         self.assertTrue(ctrl.feature.torch_bindings)
 
-        # An explicit --torch-bindings request is still validated by CMake.
-        ctrl.feature = SimpleNamespace(ops="mega_mhc", pkg_type_run=True,
-                                       torch_bindings=True, torch_bindings_explicit=True)
+    def test_whl_bindings_required_when_unsupported(self):
+        ctrl = BuildCtrl.__new__(BuildCtrl)
+        ctrl.src_root = self.root
+        # whl fails instead of degrading: the wheel's main path is torch.ops.
+        ctrl.feature = SimpleNamespace(ops="example_op", pkg_type_run=False,
+                                       torch_bindings=True)
+        with self.assertRaises(ValueError):
+            ctrl.resolve_torch_bindings()
+
+        binding = self.root / "ops/pro/experimental/example_op/torch_extension"
+        binding.mkdir()
+        (binding / "CMakeLists.txt").write_text("# binding fixture\n")
         ctrl.resolve_torch_bindings()
         self.assertTrue(ctrl.feature.torch_bindings)
+
+        # An explicit --no-torch-bindings request skips the scope check entirely.
+        ctrl.feature = SimpleNamespace(ops="unlisted_op", pkg_type_run=False,
+                                       torch_bindings=False)
+        ctrl.resolve_torch_bindings()
+        self.assertFalse(ctrl.feature.torch_bindings)
 
     def test_cmake_ignores_unselected_orphans(self):
         cmake = BuildCtrl.which_cmake()

@@ -69,6 +69,22 @@ else ()
 endif ()
 message(STATUS "ASCEND_CANN_PACKAGE_PATH=${ASCEND_CANN_PACKAGE_PATH}")
 
+# 产物安装布局(单一事实来源, 供全部 install 规则消费):
+#   run 布局(默认): vendor 载荷 packages/vendors/<vendor>/, Python 入口嵌于其 python/ 下;
+#   whl 布局(GYM_WHL_LAYOUT=ON): 入口包置顶 pypto_gym/(wheel 根), vendor 树嵌于
+#     pypto_gym/_opp/vendors/<vendor>/ —— `cmake --install --prefix <whl_src>` 一步
+#     产出 wheel 源码树, 无需二次重排(whl_stage.py 已退役).
+# 由 build_ci.py 按 --pkg-type 显式传值(ON/OFF 都显式, 避免同 build 目录切换流程时缓存粘滞).
+option(GYM_WHL_LAYOUT "Emit the wheel layout instead of the run vendor layout" OFF)
+if (GYM_WHL_LAYOUT)
+    set(GYM_VENDOR_DEST   "pypto_gym/_opp/vendors/${VENDOR_NAME}")
+    set(GYM_PY_ENTRY_DEST "pypto_gym")
+else ()
+    set(GYM_VENDOR_DEST   "packages/vendors/${VENDOR_NAME}")
+    set(GYM_PY_ENTRY_DEST "packages/vendors/${VENDOR_NAME}/python/pypto_gym")
+endif ()
+message(STATUS "GYM_WHL_LAYOUT=${GYM_WHL_LAYOUT} GYM_VENDOR_DEST=${GYM_VENDOR_DEST}")
+
 # CANN 包完整性: op_build 工具存在性
 set(OP_BUILD_TOOL ${ASCEND_CANN_PACKAGE_PATH}/tools/opbuild/op_build CACHE STRING "op_build tool")
 if (NOT EXISTS ${OP_BUILD_TOOL})
@@ -96,18 +112,34 @@ if (NOT PREPARE_BUILD)
     endforeach()
 endif()
 
-# Torch 依赖（测试桥或正式 Torch 绑定按需启用）:
-# 1. 未启用 ENABLE_TESTS/ENABLE_TORCH_BINDINGS 时，run/kernel 构建不依赖 torch.
-# 2. 必须在本文件(根作用域 include)中查找: imported target 为目录作用域, 根作用域创建后
-#    才能被后续 add_subdirectory 引入的算子 tests 子目录链接.
-if (ENABLE_TESTS OR ENABLE_TORCH_BINDINGS)
+# Python3 环境感知(单一感知点): 调 cmake/scripts/analysis_python3_environ.py 生成
+# PY3_MOD_* 变量文件, 供本文件(Torch/torch_npu 查找)与 build_ci.py(wheel 版本标签)消费.
+# 定义在 config.cmake 而非 func.cmake: 本文件先于 func.cmake 被 include(CMakeLists.txt 顺序).
+function(gym_analysis_python3_environ OUTPUT_FILE)
+    get_filename_component(_PyScript "${PYPTO_GYM_SRC_DIR}/cmake/scripts/analysis_python3_environ.py" REALPATH)
     execute_process(
-            COMMAND ${Python3_EXECUTABLE} -c "import torch.utils; print(torch.utils.cmake_prefix_path)"
-            OUTPUT_VARIABLE _gym_torch_cmake_prefix
-            OUTPUT_STRIP_TRAILING_WHITESPACE
-            ERROR_QUIET)
-    if (_gym_torch_cmake_prefix)
-        list(APPEND CMAKE_PREFIX_PATH ${_gym_torch_cmake_prefix})
+            COMMAND ${Python3_EXECUTABLE} ${_PyScript} -o=${OUTPUT_FILE}
+            RESULT_VARIABLE _Rst)
+    if (NOT ${_Rst} EQUAL 0)
+        message(FATAL_ERROR "Analysis python3 environ failed (rc=${_Rst}).")
+    endif()
+    if (NOT EXISTS ${OUTPUT_FILE})
+        message(FATAL_ERROR "Analysis python3 environ failed, ${OUTPUT_FILE} not exist.")
+    endif()
+endfunction()
+
+gym_analysis_python3_environ("${CMAKE_BINARY_DIR}/python3_environ.cmake")
+include("${CMAKE_BINARY_DIR}/python3_environ.cmake")
+
+# Torch 依赖（仅测试桥按需启用）:
+# 1. 正式 Torch 绑定为运行期 JIT 编译（决策 28），构建态不依赖 torch/torch_npu——
+#    这是 CANN 包集成（构建环境无 torch）的硬要求.
+# 2. 未启用 ENABLE_TESTS 时，run/kernel/whl 构建不依赖 torch.
+# 3. 必须在本文件(根作用域 include)中查找: imported target 为目录作用域, 根作用域创建后
+#    才能被后续 add_subdirectory 引入的算子 tests 子目录链接.
+if (ENABLE_TESTS)
+    if (PY3_MOD_TORCH_CMAKE_DIR)
+        list(APPEND CMAKE_PREFIX_PATH ${PY3_MOD_TORCH_CMAKE_DIR})
     endif()
     find_package(Torch REQUIRED)
     find_library(TORCH_PYTHON_LIB torch_python PATHS ${TORCH_INSTALL_PREFIX}/lib NO_DEFAULT_PATH)

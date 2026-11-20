@@ -269,6 +269,12 @@ function(add_bin_compile_target)
             continue()
         endif ()
 
+        # 纯 AICPU 算子不参与 AICore kernel 编译链, 由 aicpu.cmake 独立出包
+        get_property(_aicpu_only_ops GLOBAL PROPERTY GYM_AICPU_ONLY_OPS)
+        if (op_file IN_LIST _aicpu_only_ops)
+            continue()
+        endif ()
+
         set(OP_TARGET_NAME ${op_file}_${BINARY_COMPUTE_UNIT})
         if (TARGET ${OP_TARGET_NAME})
             # 同算子多 dtype 脚本共享一组 staging 目标
@@ -288,7 +294,7 @@ function(add_bin_compile_target)
             file(MAKE_DIRECTORY ${OP_SRC_OUT_DIR})
 
             # vendors staging: kernel 二进制与配置(COMPONENT 供 CPack 收集)
-            set(_kernel_install_dir packages/vendors/${VENDOR_NAME}/op_impl/ai_core/tbe/kernel)
+            set(_kernel_install_dir ${GYM_VENDOR_DEST}/op_impl/ai_core/tbe/kernel)
             install(DIRECTORY ${OP_BIN_OUT_DIR}
                     DESTINATION ${_kernel_install_dir}/${BINARY_COMPUTE_UNIT} OPTIONAL
                     COMPONENT ${VENDOR_NAME})
@@ -372,7 +378,7 @@ function(add_bin_compile_target)
         foreach(_op_target ${_ops_target_list})
             add_dependencies(${OPS_CONFIG_TARGET} ${_op_target})
         endforeach()
-        set(_kernel_cfg_dir packages/vendors/${VENDOR_NAME}/op_impl/ai_core/tbe/kernel/config/${BINARY_COMPUTE_UNIT})
+        set(_kernel_cfg_dir ${GYM_VENDOR_DEST}/op_impl/ai_core/tbe/kernel/config/${BINARY_COMPUTE_UNIT})
         install(FILES ${BINARY_INFO_CONFIG_FILE} DESTINATION ${_kernel_cfg_dir} OPTIONAL
                 COMPONENT ${VENDOR_NAME})
         install(FILES ${BIN_OUT_DIR}/relocatable_kernel_info_config.json
