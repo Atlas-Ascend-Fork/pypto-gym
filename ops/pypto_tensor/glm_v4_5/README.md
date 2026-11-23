@@ -127,7 +127,7 @@ def attention_pre_quant(
 
 ## 调用示例
 
-- 详见算子实现 [glm_attention_pre_quant_impl.py](./glm_attention_pre_quant_impl.py)，测试用例见 [tests/ops/glm_v4_5/test_glm_attention_pre_quant.py](../../../../../tests/ops/glm_v4_5/test_glm_attention_pre_quant.py)
+- 详见算子实现 [glm_attention_pre_quant_impl.py](./glm_attention_pre_quant_impl.py)，测试用例见 [tests/ops/glm_v4_5/test_glm_attention_pre_quant.py](../../../tests/ops/glm_v4_5/test_glm_attention_pre_quant.py)
 
 
 
@@ -197,7 +197,7 @@ def attention(
 
 ## 调用示例
 
-- 详见算子实现 [glm_attention_impl.py](./glm_attention_impl.py)，测试用例见 [tests/ops/glm_v4_5/test_glm_attention.py](../../../../../tests/ops/glm_v4_5/test_glm_attention.py)
+- 详见算子实现 [glm_attention_impl.py](./glm_attention_impl.py)，测试用例见 [tests/ops/glm_v4_5/test_glm_attention.py](../../../tests/ops/glm_v4_5/test_glm_attention.py)
 
 
 
@@ -245,7 +245,7 @@ def gate(
 
 ## 调用示例
 
-- 详见算子实现 [glm_gate_impl.py](./glm_gate_impl.py)，测试用例见 [tests/ops/glm_v4_5/test_glm_gate.py](../../../../../tests/ops/glm_v4_5/test_glm_gate.py)
+- 详见算子实现 [glm_gate_impl.py](./glm_gate_impl.py)，测试用例见 [tests/ops/glm_v4_5/test_glm_gate.py](../../../tests/ops/glm_v4_5/test_glm_gate.py)
 
 
 
@@ -320,7 +320,7 @@ def select_experts(
 
 ## 调用示例
 
-- 详见算子实现 [glm_select_experts_impl.py](./glm_select_experts_impl.py)，测试用例见 [tests/ops/glm_v4_5/test_glm_select_experts.py](../../../../../tests/ops/glm_v4_5/test_glm_select_experts.py)
+- 详见算子实现 [glm_select_experts_impl.py](./glm_select_experts_impl.py)，测试用例见 [tests/ops/glm_v4_5/test_glm_select_experts.py](../../../tests/ops/glm_v4_5/test_glm_select_experts.py)
 
 
 
@@ -390,7 +390,7 @@ def ffn_shared_expert_quant(
 
 ## 调用示例
 
-- 详见算子实现 [glm_ffn_shared_expert_quant_impl.py](./glm_ffn_shared_expert_quant_impl.py)，测试用例见 [tests/ops/glm_v4_5/test_glm_ffn_shared_expert_quant.py](../../../../../tests/ops/glm_v4_5/test_glm_ffn_shared_expert_quant.py)
+- 详见算子实现 [glm_ffn_shared_expert_quant_impl.py](./glm_ffn_shared_expert_quant_impl.py)，测试用例见 [tests/ops/glm_v4_5/test_glm_ffn_shared_expert_quant.py](../../../tests/ops/glm_v4_5/test_glm_ffn_shared_expert_quant.py)
 
 
 # attention_fusion
@@ -528,7 +528,7 @@ def attention(
 
 ## 调用示例
 
-- 详见算子实现 [glm_attention_fusion_impl.py](./glm_attention_fusion_impl.py)，测试用例见 [tests/ops/glm_v4_5/test_glm_attention_fusion.py](../../../../../tests/ops/glm_v4_5/test_glm_attention_fusion.py)
+- 详见算子实现 [glm_attention_fusion_impl.py](./glm_attention_fusion_impl.py)，测试用例见 [tests/ops/glm_v4_5/test_glm_attention_fusion.py](../../../tests/ops/glm_v4_5/test_glm_attention_fusion.py)
 
 
 # moe_fusion
