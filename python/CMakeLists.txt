@@ -55,6 +55,16 @@ function(gym_add_torch_binding op_name)
     install(FILES "${op_name}.py"
         DESTINATION pypto_gym/_bindings/frontends
         COMPONENT gym_shell)
+    # torchair GE/aclgraph 转换器注册模块(参考 ops-transformer graph_convert_* 模式);
+    # 仅当算子提供该文件时随前端一并安装, 前端在模块尾部尝试导入(缺失即 no-op)。
+    if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/graph_convert_${op_name}.py")
+        install(FILES "graph_convert_${op_name}.py"
+            DESTINATION ${GYM_PY_ENTRY_DEST}/_bindings/frontends
+            COMPONENT ${VENDOR_NAME})
+        install(FILES "graph_convert_${op_name}.py"
+            DESTINATION pypto_gym/_bindings/frontends
+            COMPONENT gym_shell)
+    endif()
     set_property(GLOBAL APPEND PROPERTY GYM_TORCH_OPS ${op_name})
 endfunction()
 

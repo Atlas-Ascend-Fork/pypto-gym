@@ -15,7 +15,29 @@ PyPTO AICPU 自定义算子打包链路
 与手写 AICPU 算子同一条 custom 包路径: aclnn 侧 ADD_TO_LAUNCHER_LIST_AICPU 拉起, 不经过 Python.
 ]]
 
-set(GYM_AICPU_ARM_CXX ${ASCEND_CANN_PACKAGE_PATH}/toolkit/toolchain/hcc/bin/aarch64-target-linux-gnu-g++)
+# 惰性解析 AICPU 交叉编译器(收敛自原 aicpu_func.cmake, 双布局兼容:
+# toolkit/toolchain/hcc 优先, 旧布局 tools/hcc 回退; 结果进 CACHE 供全链路消费)。
+function(gym_resolve_aicpu_toolchain)
+    if (GYM_AICPU_TOOLCHAIN_RESOLVED)
+        return()
+    endif ()
+    set(_gym_cxx_candidates
+            ${ASCEND_CANN_PACKAGE_PATH}/toolkit/toolchain/hcc/bin/aarch64-target-linux-gnu-g++
+            ${ASCEND_CANN_PACKAGE_PATH}/tools/hcc/bin/aarch64-target-linux-gnu-g++)
+    set(_gym_resolved_cxx)
+    foreach (_gym_cand IN LISTS _gym_cxx_candidates)
+        if (EXISTS ${_gym_cand})
+            set(_gym_resolved_cxx ${_gym_cand})
+            break()
+        endif ()
+    endforeach ()
+    if (NOT _gym_resolved_cxx)
+        message(FATAL_ERROR "aicpu toolchain not found (aarch64-target-linux-gnu-g++) under ${ASCEND_CANN_PACKAGE_PATH}")
+    endif ()
+    set(GYM_AICPU_ARM_CXX ${_gym_resolved_cxx} CACHE INTERNAL "hcc aarch64 compiler for aicpu kernels")
+    set(GYM_AICPU_TOOLCHAIN_RESOLVED TRUE CACHE INTERNAL "aicpu toolchain resolved")
+    message(STATUS "aicpu toolchain: ${GYM_AICPU_ARM_CXX}")
+endfunction()
 
 set(GYM_AICPU_CXX_FLAGS
     -std=c++17 -O2 -fPIC -fvisibility=hidden -fvisibility-inlines-hidden -fstack-protector-all
@@ -44,6 +66,7 @@ endforeach()
 # 在算子的 op_kernel_aicpu/CMakeLists.txt 中调用一次; <op_file>.py 即 PyPTO AICPU kernel 源.
 function(enable_pypto_aicpu_kernel op_file)
     cmake_parse_arguments(PAICPU "" "OP_TYPE;ARCH" "" ${ARGN})
+    gym_resolve_aicpu_toolchain()
     if(NOT EXISTS ${GYM_AICPU_ARM_CXX})
         message(FATAL_ERROR "enable_pypto_aicpu_kernel: ARM cross compiler not found: ${GYM_AICPU_ARM_CXX}")
     endif()
@@ -94,6 +117,7 @@ function(gym_finalize_aicpu_kernels)
     if(NOT _kernels)
         return()
     endif()
+    gym_resolve_aicpu_toolchain()
     set(_objs "")
     foreach(_entry IN LISTS _kernels)
         string(REPLACE "|" ";" _parts "${_entry}")
