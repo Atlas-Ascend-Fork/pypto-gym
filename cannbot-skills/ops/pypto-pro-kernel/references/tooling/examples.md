@@ -59,11 +59,13 @@ Enter Cube work through the [GEMM mapping](../patterns/gemm-desugar.md). Select 
 | [moe_weighted_combine](../../examples/algorithms/moe_weighted_combine/) | Bounded-error integer accumulation for reproducible indexed sums, worker/group private slots and complete-call scratch/traffic tradeoffs |
 | [embedding_bag](../../examples/algorithms/embedding_bag/) | Runtime offsets/indices, empty segments and direct versus partial/merge reduction |
 | [simt_scatter_add](../../examples/algorithms/simt_scatter_add/) | Global ordering between native initialization and atomic accumulation on one Stream |
+| [kv_cache_append](../../examples/algorithms/kv_cache_append/) | For bounded token batches with duplicate slots, only the last input for each slot writes both cache rows. [rope_kv_scatter](../../examples/algorithms/rope_kv_scatter/) covers unique slots and [SIMT scatter-add](../../examples/algorithms/simt_scatter_add/) covers accumulating duplicates. |
 | [byte_histogram](../../examples/algorithms/byte_histogram/) | UINT8 input, UINT16 local counts, INT32 partial/merge and overflow boundaries |
 | [simt_histogram](../../examples/algorithms/simt_histogram/) | Direct GM atomics, thread-local run combining and block-local UB counts, complete output initialization and changed-input repeated calls |
 | [simt_ticket_reservation](../../examples/algorithms/simt_ticket_reservation/) | Consumed atomic returns, per-thread range reservation, a second publication traversal and independent unordered ticket checks |
 | [grouped_int8](../../examples/algorithms/grouped_int8/) | FP32 multiplication, RNE, integer range and `PACK4_B32`, separating group buffers from logical GM addresses |
 | [sliding_max](../../examples/algorithms/sliding_max/) | Output versus clipped-load coordinates, read-only halos and transfer reuse across VF segments |
+| [dilation_2d](../../examples/algorithms/dilation_2d/) | Pack four NHWC pixels and share input rows across two 3×3 max-plus windows. See [sliding_max](../../examples/algorithms/sliding_max/) for a clipped 1-D halo and [grouped_conv1d](../../examples/algorithms/grouped_conv1d/) for strided/dilated tap coordinates. |
 | [grouped_conv1d](../../examples/algorithms/grouped_conv1d/) | Direct-GM SIMT ownership, grouped channel coordinates, zero-extended dilated taps and FP16 operands promoted before FP32 FMA |
 | [bilinear_sampling](../../examples/algorithms/bilinear_sampling/) | Record/channel groups, shared coordinates/weights, per-neighbor zero extension and direct integer-point movement |
 | [bilinear_sampling_backward](../../examples/algorithms/bilinear_sampling_backward/) | Conflicting dX scatter, owned dGrid partial/merge and selected-cell derivatives at integers; configuration trades off large and small shapes |
@@ -87,9 +89,11 @@ Enter Cube work through the [GEMM mapping](../patterns/gemm-desugar.md). Select 
 | [layernorm](../../examples/algorithms/layernorm/) | VF dual reductions and tail handling after mean subtraction; one zero fill cannot protect all subsequent reductions |
 | [engram_gate](../../examples/algorithms/engram_gate/) | Dual RMS and weighted-dot VF reductions, resident weights, key/output UB reuse, tiling-key slot selection and masked residual updates |
 | [layernorm_backward](../../examples/algorithms/layernorm_backward/) | Separate row/column mappings for outputs and batched statistic loads/broadcasts |
+| [mhc_sinkhorn](../../examples/algorithms/mhc_sinkhorn/) | One FP32 lane per 4×4 matrix keeps all 16 positions across alternating row/column passes; compare one round trip per iteration. For the shuffle alone, see [VF lane layout](../../examples/basic_api/vf/vf_lane_layout/). |
 | [masked_softmax](../../examples/algorithms/masked_softmax/) | Runtime valid prefixes, exact zero for empty rows, dynamic rows and unaligned widths |
 | [streaming_masked_softmax](../../examples/algorithms/streaming_masked_softmax/) | Rows exceeding UB, fixed transfer blocks, streamed state and dense LSE transport |
 | [prefix_cross_entropy](../../examples/algorithms/prefix_cross_entropy/) | Prefix normalization, smoothing, loss/gradient outputs and distinct dense-scalar/block store paths |
+| [linear_cross_entropy](../../examples/algorithms/linear_cross_entropy/) | Consume BF16 vocabulary projections a slab at a time and retain the target score when its slab arrives. [prefix_cross_entropy](../../examples/algorithms/prefix_cross_entropy/) starts with logits; [streaming_masked_softmax](../../examples/algorithms/streaming_masked_softmax/) isolates the online normalization. |
 | [residual_rms_quant](../../examples/algorithms/residual_rms_quant/) | Contractual FP16 rounding, shared binary scaling for tiny normalized ratios, INT32-to-INT8 packing and invariant-vector reuse; two native stages with explicit task/GM costs |
 
 ### Matrix fusion and attention
