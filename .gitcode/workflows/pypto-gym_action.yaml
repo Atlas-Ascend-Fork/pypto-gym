@@ -189,7 +189,9 @@ stages:
               path: ${{ steps.process_checkout.outputs.path }}
           -
             name: smoke executor
-            timeout-minutes: 30
+            # 覆盖 冒烟(pypto 构建/安装+910 用例跳过) + gym 950 run 包 clean 构建 + stest:
+            # 需大于 GYM_STEST_TIMEOUT(默认 2700s) + pypto 构建安装预算 + gym clean 编译耗时
+            timeout-minutes: 75
             run: |
                 set -e
                 # set env
@@ -198,6 +200,8 @@ stages:
                 export pr_id=${{ env.MERGE_ID }}
                 export PTO_ISA_ARCH=x86_64
                 export GYM_SMOKE_SOC=950
+                # gym stest 总超时(pypto 构装 + gym 构建 + stest 的 build_ci 内部预算)
+                export GYM_STEST_TIMEOUT=3600
                 bash ${{ steps.process_checkout.outputs.path }}/pre_smoke.sh
           - name: upload
             uses: obs-upload

@@ -268,7 +268,7 @@ def _quantize_cache_record(inp, output, x, row, dim, output_capacity,
             _quantize_fp4_row(inp, output, output_b16, dim, data_cols // 2)
 
 
-@pl.jit(auto_mutex=True, tiling_key=KvCompressKey, name="KvCompressEpilogV2")
+@pl.jit(auto_mutex=True, tiling_key=KvCompressKey, name="kv_compress_epilog_v2_kernel")
 def kv_compress_epilog_v2_kernel(
         cache_ptr: pl.Ptr[pl.DT_UINT8],
         x_ptr: pl.Ptr[pl.DT_BF16],

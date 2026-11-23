@@ -9,6 +9,17 @@
 # .run ALL build manifest; paths are relative to ops/pro.
 # Comment out an entry to exclude it, e.g. # - deepseek_v4_1/mega_mhc
 # Explicit --ops op_a,op_b still selects operator directory names.
-- deepseek_v4_1/mega_mhc
+
 - deepseek_v4_1/atten_epilogue
+# - deepseek_v4_1/compressor_v2
+- deepseek_v4_1/engram_gate
+# engram_gate_bwd: grad_weight 精度阈值边缘超限(atol 1.538e-05 vs 1.526e-05, jit 同现), 修复后恢复
+# - deepseek_v4_1/engram_gate_bwd
+- deepseek_v4_1/kv_compress_epilog_v2
+- deepseek_v4_1/mega_mhc
+- deepseek_v4_1/mhc_post_fwd
+- deepseek_v4_1/mhc_pre_fuse
+# mixed_quant_sparse_flash_mla: decode_6 系 LSE 整行未写(残留预填 NaN) + padded_pages/single_token_k
+# rtol 2.2%~2.3% 超阈值, jit 同现, 修复后恢复
+# - deepseek_v4_1/mixed_quant_sparse_flash_mla
 - deepseek_v4_1/quant_sparse_lightning_indexer

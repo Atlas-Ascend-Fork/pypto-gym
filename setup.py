@@ -144,10 +144,37 @@ class SetupCtrl:
             raise RuntimeError(f"staged tree {root} misses {self._PACKAGE}/__init__.py")
         self.stage: Path = root
         self.packages: List[str] = [self._PACKAGE, f"{self._PACKAGE}._loader"]
-        # package_dir must be relative to the setup.py directory (setuptools requirement).
         self.package_dir = {
             self._PACKAGE: os.path.relpath(root / self._PACKAGE, self.src_root)
         }
+        if not self.shell_mode:
+            # JIT source tier (form A): the staged ops/ tree (installed by
+            # python/CMakeLists.txt in whl layout) becomes pypto_gym.ops.*.
+            # Directory names inside the tree are already sanitized by the
+            # cmake install (tests/op_host/torch_extension/docs excluded).
+            ops_packages, ops_package_dir = self._discover_ops_packages()
+            self.packages += ops_packages
+            self.package_dir.update(ops_package_dir)
+
+    def _discover_ops_packages(self):
+        """Discover the staged ops tree as pypto_gym.ops.* packages."""
+        ops_root = self.stage / self._PACKAGE / "ops"
+        if not ops_root.is_dir():
+            logging.warning("staged tree has no ops/ tier (JIT sources absent)")
+            return [], {}
+        packages: List[str] = []
+        for path in sorted(ops_root.rglob("*")):
+            if not path.is_dir() or path.name == "__pycache__":
+                continue
+            if path != ops_root and not path.name.isidentifier():
+                continue
+            rel = path.relative_to(self.stage)
+            packages.append(".".join(rel.parts))
+        packages = sorted(set(packages))
+        # package_dir must be relative to the setup.py directory.
+        package_dir = {pkg: os.path.relpath(self.stage / Path(*pkg.split(".")),
+                                             self.src_root) for pkg in packages}
+        return packages, package_dir
 
     @classmethod
     def main(cls):

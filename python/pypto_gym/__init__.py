@@ -159,9 +159,12 @@ def prewarm(ops=None):
 def _resolve_op(name):
     """Shared operator resolver behind get_ops() and attribute access.
 
-    Currently resolves the torch-binding tier (operators.json manifest).
-    Reserved for multi-tier resolution (torch.ops -> JIT source -> None);
-    the public contract of get_ops() stays stable across that extension.
+    Two-tier resolution (form A dual-capability wheel):
+      1. torch-binding tier — operators.json manifest (_bindings), JIT compiled
+         against the installed _opp binaries;
+      2. JIT source tier — pypto_gym.ops.<paradigm>.<network>.<op> public entry
+         (requires pypto_pro in the environment; the wheel ships the sources).
+    The public contract of get_ops() stays stable across tier extension.
     Returns the callable entry, or None when unresolvable.
     """
     from ._loader import binding_names, load_binding
@@ -169,29 +172,68 @@ def _resolve_op(name):
     try:
         names = binding_names()
     except ImportError:
+        names = []
+    if name in names:
+        return load_binding(name)
+    return _resolve_jit_source(name)
+
+
+def _resolve_jit_source(name):
+    """JIT source tier: import pypto_gym.ops.<...>.<op> public entry by name.
+
+    Scans ``op_kernel/<name>.py`` modules under the ops/ tree and resolves the
+    public callable of the same name (op-level ``__init__.py`` re-exports are
+    covered by the same module-level attribute). A missing pypto_pro
+    dependency surfaces as ImportError to the caller.
+    """
+    import importlib
+
+    base = Path(__file__).resolve().parent / "ops"
+    if not base.is_dir():
         return None
-    if name not in names:
-        return None
-    return load_binding(name)
+    for module_path in sorted(base.rglob(f"op_kernel/{name}.py")):
+        rel = module_path.relative_to(base.parent)
+        module_name = ".".join(rel.with_suffix("").parts)
+        try:
+            module = importlib.import_module(module_name)
+        except ImportError:
+            continue
+        entry = getattr(module, name, None)
+        if callable(entry):
+            return entry
+    return None
 
 
 def get_ops(op=None):
     """Resolve operator entries by name (tier-agnostic soft probe).
 
-    ``op=None``  -> sorted list of currently resolvable operator names.
+    ``op=None``  -> sorted list of currently resolvable operator names
+                    (binding tier + JIT source tier).
     ``op=<str>`` -> callable entry, or None when unresolvable (no exception;
-                    cross-check with ``get_ops()`` for typos).
+                    cross-check with get_ops() for typos).
     """
     if op is None:
         from ._loader import binding_names
 
+        names = set()
         try:
-            return sorted(binding_names())
+            names.update(binding_names())
         except ImportError:
-            return []
+            pass
+        names.update(_jit_source_names())
+        return sorted(names)
     if not isinstance(op, str):
         raise TypeError('operator name must be a string')
     return _resolve_op(op)
+
+
+def _jit_source_names():
+    """Operator names discoverable in the JIT source tier (ops/ tree)."""
+    base = Path(__file__).resolve().parent / "ops"
+    if not base.is_dir():
+        return set()
+    return {path.stem for path in base.rglob("op_kernel/*.py")
+            if path.stem != "__init__"}
 
 
 def __getattr__(name):
@@ -201,8 +243,8 @@ def __getattr__(name):
 
     try:
         binding_names()
-    except ImportError as error:
-        raise AttributeError(str(error)) from error
+    except ImportError:
+        pass  # no bindings installed; the JIT source tier may still resolve
     entry = _resolve_op(name)
     if entry is None:
         raise AttributeError(f"module {__name__!r} has no attribute {name!r}")

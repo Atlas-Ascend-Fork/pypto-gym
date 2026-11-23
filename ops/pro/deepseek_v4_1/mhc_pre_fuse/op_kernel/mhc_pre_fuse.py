@@ -430,7 +430,7 @@ def _pick_tb(t):
     return 1
 
 
-@pl.jit(auto_mutex=True, tiling_key=MhcPreKey, name=OP_NAME)
+@pl.jit(auto_mutex=True, tiling_key=MhcPreKey, name="mhc_pre_fuse_kernel")
 def mhc_pre_fuse_kernel(
     mul_ptr: pl.Ptr[pl.DT_FP32],
     sq_ptr: pl.Ptr[pl.DT_FP32],

@@ -105,8 +105,12 @@ inline aclDataType DataType(at::ScalarType type) {
     return ACL_INT64;
   case at::kByte:
     return ACL_UINT8;
+  case at::kBool:
+    return ACL_BOOL;
   case at::ScalarType::Float8_e4m3fn:
     return ACL_FLOAT8_E4M3FN;
+  case at::ScalarType::Float8_e5m2:
+    return ACL_FLOAT8_E5M2;
   case at::ScalarType::Float8_e8m0fnu:
     return ACL_FLOAT8_E8M0;
   default:
@@ -169,6 +173,28 @@ inline TensorHandle Tensor(const TensorInfo &tensor) {
                         tensor.data);
   TORCH_CHECK(result, "aclCreateTensor failed");
   return TensorHandle(result, DestroyTensor{destroy});
+}
+
+struct DestroyIntArray {
+  using Function = aclnnStatus (*)(const aclIntArray *);
+  Function destroy;
+  void operator()(const aclIntArray *array) const noexcept {
+    if (array)
+      destroy(array);
+  }
+};
+using IntArrayHandle = std::unique_ptr<aclIntArray, DestroyIntArray>;
+
+// ValueDepend int32 inputs ride as host int64 values; the backing vector must
+// outlive the handle, so callers keep it in scope next to the launch.
+inline IntArrayHandle IntArray(const std::vector<int64_t> &values) {
+  using Create = aclIntArray *(*)(const int64_t *, uint64_t);
+  static const auto create = Symbol<Create>("aclCreateIntArray");
+  static const auto destroy =
+      Symbol<DestroyIntArray::Function>("aclDestroyIntArray");
+  auto *result = create(values.data(), values.size());
+  TORCH_CHECK(result, "aclCreateIntArray failed");
+  return IntArrayHandle(result, DestroyIntArray{destroy});
 }
 
 using Execute = aclnnStatus (*)(void *, uint64_t, aclOpExecutor *, aclrtStream);

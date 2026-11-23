@@ -294,7 +294,7 @@ def engram_gate_bwd_vf(go_b, v_b, x_b, k_b, w32, gw32, s42, og0, og1, og2,
 
 
 # ---------------------------------------------------------------- kernel
-@pl.jit(auto_mutex=True, tiling_key=EngramGateBwdKey, name="EngramGateBwd")
+@pl.jit(auto_mutex=True, tiling_key=EngramGateBwdKey, name="engram_gate_bwd_kernel")
 def engram_gate_bwd_kernel(
     grad_out_ptr: pl.Ptr[pl.DT_BF16],
     x_ptr: pl.Ptr[pl.DT_BF16],

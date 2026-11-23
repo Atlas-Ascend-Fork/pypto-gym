@@ -25,6 +25,29 @@ layout truth; build_ci does no source assembly).
 
 option(GYM_PACKAGE_SHELL_WHL "Embed the Python shell wheel into the run payload" OFF)
 
+# JIT source tier (form A dual-capability wheel): the paradigm source trees
+# under ops/ (pro; legacy pypto_pro/pypto_tensor trees are not migrated and
+# stay out) install as pypto_gym/ops/... so the community wheel restores the
+# pre-774c9ed9 `pypto_gym.ops` direct-call namespace alongside the AOT
+# _opp/_bindings tiers. Excluded from packaging: tests / op_host (binary build
+# trees), torch_extension (its cpp/py are already aggregated into _bindings),
+# __pycache__, and docs (.md/.txt keep the wheel source-only).
+# Whl layout only: the run payload keeps its runtime-minimal Python layer
+# (JIT sources are a wheel-user capability; the run host already ships AOT).
+if (GYM_WHL_LAYOUT)
+    install(DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}/../ops/pro"
+            DESTINATION ${GYM_PY_ENTRY_DEST}/ops
+            COMPONENT ${VENDOR_NAME}
+            PATTERN "__pycache__" EXCLUDE
+            PATTERN "tests" EXCLUDE
+            PATTERN "op_host" EXCLUDE
+            PATTERN "torch_extension" EXCLUDE
+            PATTERN "*.md" EXCLUDE
+            PATTERN "*.txt" EXCLUDE
+            PATTERN "CMakeLists.txt" EXCLUDE)
+    message(STATUS "JIT source tier: ops/pro -> ${GYM_PY_ENTRY_DEST}/ops (whl layout)")
+endif()
+
 # The repo tree under pypto_gym/ mirrors the installed package layout 1:1
 # (_loader/, _bindings/csrc/gym_aclnn.h, ...), so the directory install carries
 # everything except the per-op materials aggregated below and the configure-time
@@ -43,6 +66,14 @@ install(DIRECTORY pypto_gym/
 # (decentralized ownership, centralized layout); the JIT compile resolves
 # `#include "gym_aclnn.h"` from _bindings/csrc/ (same directory as the sources).
 function(gym_add_torch_binding op_name)
+    foreach(_extra ${ARGN})
+        install(FILES "${_extra}"
+            DESTINATION ${GYM_PY_ENTRY_DEST}/_bindings/csrc
+            COMPONENT ${VENDOR_NAME})
+        install(FILES "${_extra}"
+            DESTINATION pypto_gym/_bindings/csrc
+            COMPONENT gym_shell)
+    endforeach()
     install(FILES "${op_name}.cpp"
         DESTINATION ${GYM_PY_ENTRY_DEST}/_bindings/csrc
         COMPONENT ${VENDOR_NAME})

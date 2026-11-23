@@ -222,7 +222,7 @@ def mhc_post_fwd_vf(xbf, rbf, cf, pc, obf, n_chunks: pl.DT_INT64):
 # ---------------------------------------------------------------------------
 # Delivery-form kernel
 # ---------------------------------------------------------------------------
-@pl.jit(auto_mutex=True, tiling_key=MhcPostKey, name="MhcPostFwd")
+@pl.jit(auto_mutex=True, tiling_key=MhcPostKey, name="mhc_post_fwd_kernel")
 def mhc_post_fwd_kernel(
     x_ptr: pl.Ptr[pl.DT_BF16],
     residual_ptr: pl.Ptr[pl.DT_BF16],

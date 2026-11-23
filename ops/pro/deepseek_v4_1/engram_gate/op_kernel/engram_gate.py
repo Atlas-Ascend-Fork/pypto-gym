@@ -184,7 +184,7 @@ def engram_gate_vf(ux, uk, uw, uv, uo, dim: pl.DT_INT64):
         vf.store_align(uo, ob_pk32, pall_u32, mul, dist=pl.StoreDist.PACK)
 
 
-@pl.jit(auto_mutex=True, tiling_key=EngramGateKey, name="EngramGate")
+@pl.jit(auto_mutex=True, tiling_key=EngramGateKey, name="engram_gate_kernel")
 def engram_gate_kernel(
     x_ptr: pl.Ptr[pl.DT_BF16],
     key_ptr: pl.Ptr[pl.DT_BF16],
