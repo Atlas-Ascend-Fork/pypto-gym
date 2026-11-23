@@ -25,6 +25,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import keyword
 import logging
 import math
 from pathlib import Path
@@ -75,7 +76,7 @@ def _validate_intermediate(idx: int, entry: Dict[str, Any], op: str) -> Dict[str
 
     name = entry["name"]
     _require(
-        isinstance(name, str) and name.isidentifier(),
+        isinstance(name, str) and name.isidentifier() and not keyword.iskeyword(name),
         f"intermediates[{idx}].name must be a valid Python identifier, got {name!r}",
     )
     _require(
