@@ -153,7 +153,8 @@ def flash_attention_score_grad_kernel(
                     if pypto.is_loop_begin(s2_idx):
                         dq_acc[:] = dq_tile
                     else:
-                        dq_acc[:] = dq_acc + dq_tile
+                        dq_t = pypto.view(dq_acc, [S_TILE, head_dim], [0, 0], valid_shape=[actual_s1, head_dim])
+                        dq_acc[:] = dq_t + dq_tile
 
                     if pypto.is_loop_end(s2_idx):
                         pypto.set_vec_tile_shapes(v_tile_d[0], v_tile_d[1])
@@ -210,8 +211,10 @@ def flash_attention_score_grad_kernel(
                         dk_acc[:] = dk_tile
                         dv_acc[:] = dv_tile
                     else:
-                        dk_acc[:] = dk_acc + dk_tile
-                        dv_acc[:] = dv_acc + dv_tile
+                        dk_t = pypto.view(dk_acc, [S_TILE, head_dim], [0, 0], valid_shape=[actual_s2, head_dim])
+                        dv_t = pypto.view(dv_acc, [S_TILE, head_dim], [0, 0], valid_shape=[actual_s2, head_dim])
+                        dk_acc[:] = dk_t + dk_tile
+                        dv_acc[:] = dv_t + dv_tile
 
                     if pypto.is_loop_end(s1_idx):
                         pypto.set_vec_tile_shapes(v_tile_d[0], v_tile_d[1])
