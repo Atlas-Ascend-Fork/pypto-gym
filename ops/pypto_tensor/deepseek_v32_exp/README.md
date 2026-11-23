@@ -123,7 +123,7 @@ def mla_prolog_quant_compute(token_x, w_dq, w_uq_qr, dequant_scale, w_uk, w_dkv_
 
 ## 调用示例
 
-- 详见算子实现 [mla_prolog_quant_impl.py](mla_prolog_quant_impl.py)，测试用例见 [tests/ops/deepseek_v32_exp/test_mla_prolog_quant.py](../../../../../tests/ops/deepseek_v32_exp/test_mla_prolog_quant.py)
+- 详见算子实现 [mla_prolog_quant_impl.py](mla_prolog_quant_impl.py)，测试用例见 [tests/ops/deepseek_v32_exp/test_mla_prolog_quant.py](../../../tests/ops/deepseek_v32_exp/test_mla_prolog_quant.py)
 
 # lightning_indexer_prolog
 
@@ -204,7 +204,7 @@ def lightning_indexer_prolog_quant_compute(x_in, q_norm_in, q_norm_scale_in, w_q
 -   **weights_out**（`Tensor`）：公式中 weights 的输出 tensor，不支持非连续的 Tensor，数据格式支持 ND，数据类型支持`float16`，shape为[t, idx_n_heads]。
 
 ## 调用示例
--   算子实现见 [lightning_indexer_prolog_quant_impl.py](lightning_indexer_prolog_quant_impl.py)，测试用例见 [tests/ops/deepseek_v32_exp/test_lightning_indexer_prolog_quant.py](../../../../../tests/ops/deepseek_v32_exp/test_lightning_indexer_prolog_quant.py)
+-   算子实现见 [lightning_indexer_prolog_quant_impl.py](lightning_indexer_prolog_quant_impl.py)，测试用例见 [tests/ops/deepseek_v32_exp/test_lightning_indexer_prolog_quant.py](../../../tests/ops/deepseek_v32_exp/test_lightning_indexer_prolog_quant.py)
 
 
 # sparse_flash_attention_quant
@@ -259,7 +259,7 @@ def sparse_flash_attention_quant_compute(query_nope, query_rope, key_nope_2d, ke
 
 ## 调用示例
 
--   详见算子实现 [sparse_flash_attention_quant_impl.py](sparse_flash_attention_quant_impl.py)，测试用例见 [tests/ops/deepseek_v32_exp/test_sparse_flash_attention_quant.py](../../../../../tests/ops/deepseek_v32_exp/test_sparse_flash_attention_quant.py)
+-   详见算子实现 [sparse_flash_attention_quant_impl.py](sparse_flash_attention_quant_impl.py)，测试用例见 [tests/ops/deepseek_v32_exp/test_sparse_flash_attention_quant.py](../../../tests/ops/deepseek_v32_exp/test_sparse_flash_attention_quant.py)
 
 
 # sparse_attention_antiquant
@@ -306,7 +306,7 @@ def sparse_attention_antiquant_compute(query_nope, query_rope, nope_cache, topk_
 
 ## 调用示例
 
--   详见算子实现 [sparse_attention_antiquant_impl.py](sparse_attention_antiquant_impl.py)，测试用例见 [tests/ops/deepseek_v32_exp/test_sparse_attention_antiquant.py](../../../../../tests/ops/deepseek_v32_exp/test_sparse_attention_antiquant.py)
+-   详见算子实现 [sparse_attention_antiquant_impl.py](sparse_attention_antiquant_impl.py)，测试用例见 [tests/ops/deepseek_v32_exp/test_sparse_attention_antiquant.py](../../../tests/ops/deepseek_v32_exp/test_sparse_attention_antiquant.py)
 
 
 # mla_indexer_polog_quant
@@ -391,7 +391,7 @@ def mla_indexer_prolog_quant_compute(
 
 ## 调用示例
 
-- 详见算子实现 [mla_indexer_prolog_quant_impl.py](mla_indexer_prolog_quant_impl.py)，测试用例见 [tests/ops/deepseek_v32_exp/test_mla_indexer_prolog_quant.py](../../../../../tests/ops/deepseek_v32_exp/test_mla_indexer_prolog_quant.py)
+- 详见算子实现 [mla_indexer_prolog_quant_impl.py](mla_indexer_prolog_quant_impl.py)，测试用例见 [tests/ops/deepseek_v32_exp/test_mla_indexer_prolog_quant.py](../../../tests/ops/deepseek_v32_exp/test_mla_indexer_prolog_quant.py)
 
 # lightning indexer
 
