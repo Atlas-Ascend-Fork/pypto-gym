@@ -18,19 +18,31 @@ This bounded example supports B<=3, M<=129, R<=257, N in {128,256,384},
 and K in 64..1024 divisible by 64. Overlap is exposed only for K<=320.
 
 make_kernel(..., workers=W, depth=1, preload=0) is the serial control;
-(depth,preload)=(2,1) uses a two-slot time-shifted pipeline. Launch the kernel
-with kernel[None,W](x,table,indices,out): W is part of this factory's
-mapping and must match the Host block count. Each mixed block uses one
-AIC and two AIVs on the verified A5 path. The two AIVs each own 64 panel
-rows. One SIMT invocation has 128 threads and moves 64-bit words into an
-ND Vec tile; a low-precision alias and a real ND-to-NZ move prepare insert.
+(depth,preload)=(2,1) runs Vec one task ahead of Cube over two panel slots.
+Launch the kernel with kernel[None,W](x,table,indices,out): W is part of
+this factory's mapping and must match the Host block count. Each mixed
+block uses one AIC and two AIVs on the verified A5 path. The two AIVs each
+own 64 panel rows. One SIMT invocation has 128 threads and moves 64-bit
+words into an ND Vec tile; a low-precision alias and a real ND-to-NZ move
+prepare insert.
 
-Both stages receive the declared Mat group. Cube reinterprets its bound
+Cube and Vector hand the panel over through the declared Mat group, and
+this example writes that cross-core synchronisation itself with
+pl.system.set_cross_core and pl.system.wait_cross_core on the group's
+fwd_ids and bwd_ids: the automatic CV pipeline does not support SIMT, so a
+kernel launching a SIMT vector function cannot use pipeline=PipelineConfig.
+Vec waits for the backward id of the slot it is about to overwrite and
+posts the forward id once the panel is complete; Cube does the reverse.
+With preload the forward wait of task i-1 sits in the beat that produces
+task i, so the first beat has no panel to consume and one closing beat
+consumes the last one.
+
+Both halves receive the declared Mat group. Cube reinterprets its bound
 group parameter as ZN before selecting one slot, then uses pl.gemm without
-a transpose flag. This preserves pipeline buffer tracking as well as the
-backing storage and cursor; passing an untracked external view is unsafe
-to assume equivalent on the verified source. The view performs no copy.
-Vec uses 16 KiB plus the installed SIMT reservation. Mat uses
+a transpose flag. This preserves the group's Auto Mutex tracking as well as
+the backing storage and cursor; passing an untracked external view is
+unsafe to assume equivalent on the verified source. The view performs no
+copy. Vec uses 16 KiB plus the installed SIMT reservation. Mat uses
 2*K*(128*depth+64) bytes: panel slots precede the A tile. Left/Right/Acc
 use 8/16/32 KiB, each with one slot; their independent spaces start at zero.
 There is no auxiliary GM panel. Each M tile gathers its operand again.
@@ -56,41 +68,6 @@ def gather_chunk(table, indices, dst, b, n0, k0):
         kk = linear % (TK // 4)
         selected = indices[b, n0 + row]
         dst[row, kk] = table[b, selected, k0 // 4 + kk]
-
-
-@pl.pipeline.stage
-def consume(
-    step,
-    batch,
-    workers,
-    rows,
-    mtiles,
-    ntiles,
-    x,
-    out,
-    a_group,
-    panel_group,
-    left,
-    right,
-    acc_group,
-):
-    worker = pl.get_block_idx() // pl.get_subblock_num()
-    task = step * workers + worker
-    panel_group = pl.reinterpret(panel_group, shape=[x.shape[2], TN], layout=pl.ZN)
-    panel = panel_group.next()
-    pl.set_validshape(panel, [x.shape[2], TN])
-    if task < batch * mtiles * ntiles:
-        b = task // (mtiles * ntiles)
-        m0 = ((task // ntiles) % mtiles) * TM
-        n0 = (task % ntiles) * TN
-        valid_m = pl.min(TM, rows - m0)
-        a = a_group.next()
-        acc = acc_group.next()
-        pl.set_validshape(a, [valid_m, x.shape[2]])
-        pl.set_validshape(acc, [valid_m, TN])
-        pl.load(a, x, [b, m0, 0], order=[1, 2])
-        pl.gemm(acc, a, panel, l0a=left, l0b=right, m=valid_m, splitk=TK)
-        pl.store(out, acc, [b, m0, n0], order=[1, 2])
 
 
 @lru_cache(None)
@@ -134,21 +111,12 @@ def make_kernel(
     mtiles, ntiles = (rows + TM - 1) // TM, selected_rows // TN
     forward_ids = list(range(depth))
     backward_ids = list(range(depth, 2 * depth))
+    steps = (batch * mtiles * ntiles + workers - 1) // workers
 
-    @pl.pipeline.stage
-    def produce(
-        step,
-        batch,
-        workers,
-        mtiles,
-        ntiles,
-        features,
-        packed_table,
-        indices,
-        nd_group,
-        nz_group,
-        panel_group,
-    ):
+    def produce(step, packed, indices, nd_group, nz_group, panel_group):
+        """Vec 一拍：等 Cube 腾出 panel 槽，SIMT 按索引 gather 出 panel，再通知 Cube。"""
+        slot = step % depth if depth > 1 else 0
+        pl.system.wait_cross_core(pipe=pl.PipeType.MTE3, event_id=backward_ids[slot])
         worker = pl.get_block_idx() // pl.get_subblock_num()
         task = step * workers + worker
         shared = panel_group.next()
@@ -159,24 +127,38 @@ def make_kernel(
             for k0 in pl.range(0, features, TK):
                 nd = nd_group.next()
                 nz = nz_group.next()
-                gather_chunk[THREADS](packed_table, indices, nd, b, n0 + sub * 64, k0)
+                gather_chunk[THREADS](packed, indices, nd, b, n0 + sub * 64, k0)
                 nd_low = pl.reinterpret(nd, dtype=dtype, shape=[64, TK])
                 pl.set_validshape(nd_low, [64, TK])
                 pl.move(nz, nd_low)
                 pl.insert(shared, nz, [sub * 64, k0])
+        pl.system.set_cross_core(pipe=pl.PipeType.MTE3, event_id=forward_ids[slot])
 
-    @pl.jit(
-        arch="a5", auto_mutex=True, pipeline=pl.pipeline.PipelineConfig(preload=preload)
-    )
-    def kernel(
-        x: pl.Tensor[[batch, rows, features], dtype],
-        table: pl.Tensor[[batch, table_rows, features], dtype],
-        indices: pl.Tensor[[batch, selected_rows], pl.DT_INT32],
-        out: pl.Tensor[[batch, rows, selected_rows], pl.DT_FP32],
-    ):
-        packed_table = pl.make_tensor(
-            table, [batch, table_rows, features // 4], dtype=pl.DT_INT64
-        )
+    def consume(step, x, out, a_group, panel_group, left, right, accs):
+        """Cube 一拍：等 panel 就绪，用它做一块 GEMM 写回，再把 panel 槽还给 Vec。"""
+        slot = step % depth if depth > 1 else 0
+        pl.system.wait_cross_core(pipe=pl.PipeType.MTE1, event_id=forward_ids[slot])
+        worker = pl.get_block_idx() // pl.get_subblock_num()
+        task = step * workers + worker
+        panel_group = pl.reinterpret(panel_group, shape=[x.shape[2], TN], layout=pl.ZN)
+        panel = panel_group.next()
+        pl.set_validshape(panel, [x.shape[2], TN])
+        if task < batch * mtiles * ntiles:
+            b = task // (mtiles * ntiles)
+            m0 = ((task // ntiles) % mtiles) * TM
+            n0 = (task % ntiles) * TN
+            valid_m = pl.min(TM, rows - m0)
+            a = a_group.next()
+            acc = accs.next()
+            pl.set_validshape(a, [valid_m, x.shape[2]])
+            pl.set_validshape(acc, [valid_m, TN])
+            pl.load(a, x, [b, m0, 0], order=[1, 2])
+            pl.gemm(acc, a, panel, l0a=left, l0b=right, m=valid_m, splitk=TK)
+            pl.store(out, acc, [b, m0, n0], order=[1, 2])
+        pl.system.set_cross_core(pipe=pl.PipeType.MTE1, event_id=backward_ids[slot])
+
+    def declare_vec_groups():
+        """声明 Vec 上 gather 用的两片暂存：ND 落地片与 NZ 转换片。"""
         nd_group = pl.make_tile_group(
             type=pl.TileType(
                 shape=[64, TK // 4], dtype=pl.DT_INT64, target_memory=pl.MemorySpace.Vec
@@ -196,6 +178,10 @@ def make_kernel(
             mutex_ids="auto",
             depth=1,
         )
+        return nd_group, nz_group
+
+    def declare_mat_groups():
+        """声明 Mat 上的两片：核间交接的 panel 片在前，A 片紧随其后。"""
         panel_group = pl.make_tile_group(
             type=pl.TileType(
                 shape=[TN, features],
@@ -217,6 +203,10 @@ def make_kernel(
             mutex_ids="auto",
             depth=1,
         )
+        return panel_group, a_group
+
+    def declare_l0_groups():
+        """声明 GEMM 的三片操作数 Buffer：左矩阵、右矩阵与累加器。"""
         left = pl.make_tile_group(
             type=pl.TileType(
                 shape=[TM, TK],
@@ -236,7 +226,7 @@ def make_kernel(
             mutex_ids="auto",
             depth=1,
         )
-        acc_group = pl.make_tile_group(
+        accs = pl.make_tile_group(
             type=pl.TileType(
                 shape=[TM, TN],
                 dtype=pl.DT_FP32,
@@ -247,36 +237,61 @@ def make_kernel(
             mutex_ids="auto",
             depth=1,
         )
-        for step in pl.range((batch * mtiles * ntiles + workers - 1) // workers):
-            with pl.section_vector():
-                produce(
-                    step,
-                    batch,
-                    workers,
-                    mtiles,
-                    ntiles,
-                    features,
-                    packed_table,
-                    indices,
-                    nd_group,
-                    nz_group,
-                    panel_group,
-                )
+        return left, right, accs
+
+    @pl.jit(arch="a5", auto_mutex=True)
+    def kernel(
+        x: pl.Tensor[[batch, rows, features], dtype],
+        table: pl.Tensor[[batch, table_rows, features], dtype],
+        indices: pl.Tensor[[batch, selected_rows], pl.DT_INT32],
+        out: pl.Tensor[[batch, rows, selected_rows], pl.DT_FP32],
+    ):
+        packed = pl.make_tensor(
+            table, [batch, table_rows, features // 4], dtype=pl.DT_INT64
+        )
+        nd_group, nz_group = declare_vec_groups()
+        panel_group, a_group = declare_mat_groups()
+        left, right, accs = declare_l0_groups()
+        if preload:
+            # 两槽时间错位：Vec 产出第 step 拍，Cube 消费上一拍，循环后补最后一拍。
             with pl.section_cube():
-                consume(
-                    step,
-                    batch,
-                    workers,
-                    rows,
-                    mtiles,
-                    ntiles,
-                    x,
-                    out,
-                    a_group,
-                    panel_group,
-                    left,
-                    right,
-                    acc_group,
+                pl.system.set_cross_core(
+                    pipe=pl.PipeType.MTE1, event_id=backward_ids[0]
+                )
+                pl.system.set_cross_core(
+                    pipe=pl.PipeType.MTE1, event_id=backward_ids[1]
+                )
+            for step in pl.range(steps):
+                with pl.section_vector():
+                    produce(step, packed, indices, nd_group, nz_group, panel_group)
+                with pl.section_cube():
+                    if step > 0:
+                        consume(
+                            step - 1, x, out, a_group, panel_group, left, right, accs
+                        )
+            with pl.section_cube():
+                consume(steps - 1, x, out, a_group, panel_group, left, right, accs)
+            with pl.section_vector():
+                pl.system.wait_cross_core(
+                    pipe=pl.PipeType.MTE3, event_id=backward_ids[0]
+                )
+                pl.system.wait_cross_core(
+                    pipe=pl.PipeType.MTE3, event_id=backward_ids[1]
+                )
+        else:
+            # 单槽串行：Vec 产出后 Cube 立刻消费同一拍。
+            with pl.section_cube():
+                pl.system.set_cross_core(
+                    pipe=pl.PipeType.MTE1, event_id=backward_ids[0]
+                )
+            for step in pl.range(steps):
+                with pl.section_vector():
+                    produce(step, packed, indices, nd_group, nz_group, panel_group)
+                with pl.section_cube():
+                    consume(step, x, out, a_group, panel_group, left, right, accs)
+            with pl.section_vector():
+                pl.system.wait_cross_core(
+                    pipe=pl.PipeType.MTE3, event_id=backward_ids[0]
                 )
 
     return kernel
