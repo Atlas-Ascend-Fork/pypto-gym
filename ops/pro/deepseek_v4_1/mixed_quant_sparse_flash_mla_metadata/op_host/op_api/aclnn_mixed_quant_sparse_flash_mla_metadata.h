@@ -9,8 +9,8 @@
  * -----------------------------------------------------------------------------------------------------------
  */
 
-#ifndef OP_API_INC_ACLNN_MIXED_QUANT_SPARSE_FLASH_MLA_METADATA_PTO_BNN_H_
-#define OP_API_INC_ACLNN_MIXED_QUANT_SPARSE_FLASH_MLA_METADATA_PTO_BNN_H_
+#ifndef OP_API_INC_ACLNN_MIXED_QUANT_SPARSE_FLASH_MLA_METADATA_H_
+#define OP_API_INC_ACLNN_MIXED_QUANT_SPARSE_FLASH_MLA_METADATA_H_
 
 #include "aclnn/aclnn_base.h"
 #include "aclnnop/aclnn_util.h"
@@ -19,17 +19,17 @@
 extern "C" {
 #endif
 
-ACLNN_API aclnnStatus aclnnMixedQuantSparseFlashMlaMetadataPtoBnnGetWorkspaceSize(
+ACLNN_API aclnnStatus aclnnMixedQuantSparseFlashMlaMetadataGetWorkspaceSize(
     const aclTensor *cuSeqlensQ, const aclTensor *oriTopkLength, const aclTensor *cmpTopkLengthOptional,
     int64_t blocks, int64_t hasCmp, int64_t kOri, int64_t kCmp, int64_t bsOri, int64_t bsCmp,
     int64_t btOri, int64_t btCmp, int64_t oriPages, int64_t cmpPages, int64_t oriKvStride0,
     int64_t cmpKvStride0, const aclTensor *out, const aclTensor *tilingDevice,
     uint64_t *workspaceSize, aclOpExecutor **executor);
 
-ACLNN_API aclnnStatus aclnnMixedQuantSparseFlashMlaMetadataPtoBnn(
+ACLNN_API aclnnStatus aclnnMixedQuantSparseFlashMlaMetadata(
     void *workspace, uint64_t workspaceSize, aclOpExecutor *executor, aclrtStream stream);
 
 #ifdef __cplusplus
 }
 #endif
-#endif // OP_API_INC_ACLNN_MIXED_QUANT_SPARSE_FLASH_MLA_METADATA_PTO_BNN_H_
+#endif // OP_API_INC_ACLNN_MIXED_QUANT_SPARSE_FLASH_MLA_METADATA_H_

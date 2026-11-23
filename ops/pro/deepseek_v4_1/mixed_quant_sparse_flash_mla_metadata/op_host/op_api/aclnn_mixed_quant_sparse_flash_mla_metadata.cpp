@@ -10,11 +10,11 @@
  */
 
 /*!
- * \file aclnn_mixed_quant_sparse_flash_mla_metadata_pto_bnn.cpp
+ * \file aclnn_mixed_quant_sparse_flash_mla_metadata.cpp
  * \brief MQSMLA metadata planner aclnn entry (single AICPU task, no tiling).
  */
 
-#include "aclnn_mixed_quant_sparse_flash_mla_metadata_pto_bnn.h"
+#include "aclnn_mixed_quant_sparse_flash_mla_metadata.h"
 
 #include "aclnn_kernels/common/op_error_check.h"
 #include "opdev/aicpu/aicpu_task.h"
@@ -28,19 +28,19 @@
 using namespace op;
 
 namespace l0op {
-OP_TYPE_REGISTER(MixedQuantSparseFlashMlaMetadataPtoBnn);
+OP_TYPE_REGISTER(MixedQuantSparseFlashMlaMetadata);
 
-const aclTensor *MixedQuantSparseFlashMlaMetadataPtoBnn(
+const aclTensor *MixedQuantSparseFlashMlaMetadata(
     const aclTensor *cuSeqlensQ, const aclTensor *oriTopkLength, const aclTensor *cmpTopkLength,
     int64_t blocks, int64_t hasCmp, int64_t kOri, int64_t kCmp, int64_t bsOri, int64_t bsCmp,
     int64_t btOri, int64_t btCmp, int64_t oriPages, int64_t cmpPages, int64_t oriKvStride0,
     int64_t cmpKvStride0, aclTensor *out, aclTensor *tilingDevice, aclOpExecutor *executor)
 {
-    L0_DFX(MixedQuantSparseFlashMlaMetadataPtoBnn, cuSeqlensQ, oriTopkLength, cmpTopkLength,
+    L0_DFX(MixedQuantSparseFlashMlaMetadata, cuSeqlensQ, oriTopkLength, cmpTopkLength,
            blocks, hasCmp, kOri, kCmp, out, tilingDevice);
-    static internal::AicpuTaskSpace space("MixedQuantSparseFlashMlaMetadataPtoBnn");
+    static internal::AicpuTaskSpace space("MixedQuantSparseFlashMlaMetadata");
     auto ret = ADD_TO_LAUNCHER_LIST_AICPU(
-        MixedQuantSparseFlashMlaMetadataPtoBnn,
+        MixedQuantSparseFlashMlaMetadata,
         OP_ATTR_NAMES({"blocks", "has_cmp", "k_ori", "k_cmp", "bs_ori", "bs_cmp", "bt_ori",
                        "bt_cmp", "ori_pages", "cmp_pages", "ori_kv_stride0", "cmp_kv_stride0"}),
         OP_INPUT(cuSeqlensQ, oriTopkLength, cmpTopkLength),
@@ -49,7 +49,7 @@ const aclTensor *MixedQuantSparseFlashMlaMetadataPtoBnn(
                 oriKvStride0, cmpKvStride0));
     OP_CHECK(ret == ACL_SUCCESS,
              OP_LOGE(ACLNN_ERR_INNER_NULLPTR,
-                     "MixedQuantSparseFlashMlaMetadataPtoBnn ADD_TO_LAUNCHER_LIST_AICPU failed."),
+                     "MixedQuantSparseFlashMlaMetadata ADD_TO_LAUNCHER_LIST_AICPU failed."),
              return nullptr);
     return out;
 }
@@ -83,14 +83,14 @@ static aclnnStatus CheckParams(const aclTensor *cuSeqlensQ, const aclTensor *ori
 extern "C" {
 #endif
 
-aclnnStatus aclnnMixedQuantSparseFlashMlaMetadataPtoBnnGetWorkspaceSize(
+aclnnStatus aclnnMixedQuantSparseFlashMlaMetadataGetWorkspaceSize(
     const aclTensor *cuSeqlensQ, const aclTensor *oriTopkLength, const aclTensor *cmpTopkLengthOptional,
     int64_t blocks, int64_t hasCmp, int64_t kOri, int64_t kCmp, int64_t bsOri, int64_t bsCmp,
     int64_t btOri, int64_t btCmp, int64_t oriPages, int64_t cmpPages, int64_t oriKvStride0,
     int64_t cmpKvStride0, const aclTensor *out, const aclTensor *tilingDevice,
     uint64_t *workspaceSize, aclOpExecutor **executor)
 {
-    L2_DFX_PHASE_1(aclnnMixedQuantSparseFlashMlaMetadataPtoBnn,
+    L2_DFX_PHASE_1(aclnnMixedQuantSparseFlashMlaMetadata,
                    DFX_IN(cuSeqlensQ, oriTopkLength, cmpTopkLengthOptional, blocks, hasCmp, kOri, kCmp),
                    DFX_OUT(out, tilingDevice));
     auto uniqueExecutor = CREATE_EXECUTOR();
@@ -101,7 +101,7 @@ aclnnStatus aclnnMixedQuantSparseFlashMlaMetadataPtoBnnGetWorkspaceSize(
     auto ret = CheckParams(cuSeqlensQ, oriTopkLength, out, tilingDevice);
     CHECK_RET(ret == ACLNN_SUCCESS, ret);
 
-    auto md = l0op::MixedQuantSparseFlashMlaMetadataPtoBnn(
+    auto md = l0op::MixedQuantSparseFlashMlaMetadata(
         cuSeqlensQ, oriTopkLength, cmpTopkLengthOptional, blocks, hasCmp, kOri, kCmp, bsOri, bsCmp,
         btOri, btCmp, oriPages, cmpPages, oriKvStride0, cmpKvStride0,
         const_cast<aclTensor *>(out), const_cast<aclTensor *>(tilingDevice), uniqueExecutor.get());
@@ -112,10 +112,10 @@ aclnnStatus aclnnMixedQuantSparseFlashMlaMetadataPtoBnnGetWorkspaceSize(
     return ACLNN_SUCCESS;
 }
 
-aclnnStatus aclnnMixedQuantSparseFlashMlaMetadataPtoBnn(void *workspace, uint64_t workspaceSize,
+aclnnStatus aclnnMixedQuantSparseFlashMlaMetadata(void *workspace, uint64_t workspaceSize,
                                                         aclOpExecutor *executor, aclrtStream stream)
 {
-    L2_DFX_PHASE_2(aclnnMixedQuantSparseFlashMlaMetadataPtoBnn);
+    L2_DFX_PHASE_2(aclnnMixedQuantSparseFlashMlaMetadata);
     return CommonOpExecutorRun(workspace, workspaceSize, executor, stream);
 }
 

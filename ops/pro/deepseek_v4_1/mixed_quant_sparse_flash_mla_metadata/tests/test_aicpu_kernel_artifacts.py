@@ -31,7 +31,7 @@ import pytest
 
 # 直跑自举: 借主算子 tests/_standalone_env.py 注入 vendor 环境(ASCEND_CUSTOM_OPP_PATH)
 _PEER_TESTS = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(
-    os.path.abspath(__file__)))), "mixed_quant_sparse_flash_mla_pto_bnn", "tests")
+    os.path.abspath(__file__)))), "mixed_quant_sparse_flash_mla", "tests")
 sys.path.insert(0, _PEER_TESTS)
 import _standalone_env  # noqa: E402,F401
 
@@ -42,7 +42,7 @@ JSON_REL = os.path.join("op_impl", "cpu", "config", "cust_aicpu_kernel.json")
 SO_NAME = "libpypto_gym_aicpu_kernels.so"
 
 #: 本算子 AICPU kernel 注册的 OpType（与 op_kernel_aicpu 的 json / codegen --op-type 对齐）
-EXPECTED_OP_TYPES = ("MixedQuantSparseFlashMlaMetadataPtoBnn",)
+EXPECTED_OP_TYPES = ("MixedQuantSparseFlashMlaMetadata",)
 
 EM_AARCH64 = 0xB7
 

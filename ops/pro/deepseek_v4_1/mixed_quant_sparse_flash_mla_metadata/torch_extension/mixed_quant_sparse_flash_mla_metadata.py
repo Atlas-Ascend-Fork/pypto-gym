@@ -11,14 +11,14 @@
 # INCLUDING BUT NOT LIMITED TO NON-INFRINGEMENT OF MERCHANTABILITY OR FITNESS FOR A PARTICULAR PURPOSE.
 # See LICENSE in the root of the software repository for the full text of the License.
 # -----------------------------------------------------------------------------------------------------------
-"""Public Torch frontend for the precompiled MixedQuantSparseFlashMlaMetadataPtoBnn operator."""
+"""Public Torch frontend for the precompiled MixedQuantSparseFlashMlaMetadata operator."""
 import torch
 
 _METADATA_ELEMENTS = 1024
 _TILING_DEVICE_ELEMENTS = 16
 
 
-def mixed_quant_sparse_flash_mla_metadata_pto_bnn(
+def mixed_quant_sparse_flash_mla_metadata(
         cu_seqlens_q, ori_topk_length, cmp_topk_length=None, *,
         blocks=None, has_cmp=1, k_ori=0, k_cmp=0,
         bs_ori=0, bs_cmp=0, bt_ori=0, bt_cmp=0,
@@ -47,7 +47,7 @@ def mixed_quant_sparse_flash_mla_metadata_pto_bnn(
         blocks = torch.npu.get_device_properties(cu_seqlens_q.device).cube_core_num
     if not 0 < int(blocks) <= 36:
         raise ValueError('blocks must be in 1..36')
-    metadata, tiling_device = torch.ops.pypto_gym.mixed_quant_sparse_flash_mla_metadata_pto_bnn(
+    metadata, tiling_device = torch.ops.pypto_gym.mixed_quant_sparse_flash_mla_metadata(
         cu_seqlens_q.contiguous(),
         ori_topk_length.contiguous(),
         None if cmp_topk_length is None else cmp_topk_length.contiguous(),

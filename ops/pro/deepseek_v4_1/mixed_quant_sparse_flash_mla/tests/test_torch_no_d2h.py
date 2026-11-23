@@ -25,7 +25,7 @@ D2H 探测方法(torch_npu profiler, chrome trace):
 - 正控用例先证明探测器本身能看到已知 D2H(``tensor.cpu()``)。
 
 用法:
-  pytest ops/pro/deepseek_v4_1/mixed_quant_sparse_flash_mla_pto_bnn/tests/test_torch_no_d2h_pto_bnn.py -q --mode torch
+  pytest ops/pro/deepseek_v4_1/mixed_quant_sparse_flash_mla/tests/test_torch_no_d2h.py -q --mode torch
 """
 
 from __future__ import annotations
@@ -50,13 +50,13 @@ for _path in (_THIS_DIR, os.path.join(_THIS_DIR, "assets")):
 
 import _standalone_env  # noqa: E402,F401  直跑自举: 注入 tests/common 与安装态 vendor 环境
 
-import mixed_quant_sparse_flash_mla_pto_bnn_golden_cpu as golden  # noqa: E402
-import mixed_quant_sparse_flash_mla_pto_bnn_precision as verify  # noqa: E402
+import mixed_quant_sparse_flash_mla_golden_cpu as golden  # noqa: E402
+import mixed_quant_sparse_flash_mla_precision as verify  # noqa: E402
 
 try:
     from pypto_gym import (  # noqa: E402
-        mixed_quant_sparse_flash_mla_metadata_pto_bnn as planner,
-        mixed_quant_sparse_flash_mla_pto_bnn as mla,
+        mixed_quant_sparse_flash_mla_metadata as planner,
+        mixed_quant_sparse_flash_mla as mla,
     )
 except ImportError as error:  # 安装态 vendor 不在(torch 绑定未随包构建)时跳过
     pytest.skip(f"installed vendor misses an operator binding: {error}",

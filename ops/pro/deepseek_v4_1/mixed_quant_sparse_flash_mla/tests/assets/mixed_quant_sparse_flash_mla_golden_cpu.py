@@ -73,21 +73,15 @@ FD_M_NUM_INDEX = 6
 FD_HEADS_PER_AIV = 32
 
 TILE_N = 128  # KV tokens per S2 task (matches the kernel contract).
-# Flat partition only when the modelled critical path shrinks by at least this
-# factor. The reducer of a split is the core that ends the row, so that half is
-# still resident and only the remote partial crosses GM; a 1.25x-critical-path
-# case nets ~1.07x on the board (decode_6_long_s2: 34.9us -> 32.6us), while
-# keeping the write side of the balance gain against the barrier cost.
-FD_MIN_GAIN = 1.25
-# Below this many total tiles the barrier + partial traffic dominates, so keep
-# the whole-row schedule (tiny cases are already tile-starved, not imbalanced).
-FD_MIN_TOTAL_TILES = 64
-# Splitting a short row leaves one-tile parts, which exercise a different (and so
-# far not fully characterised) tail path; short-row cases are not the ones FD is
-# for anyway (their imbalance came from row granularity at a scale FD cannot fix
-# better than the whole-row schedule), so only split rows long enough to matter.
-FD_MIN_ROW_TILES = 4
-FD_SPLIT_COST_TILES = 0.5
+# FD 判据对齐 cannbot DSL 规划器：用绝对节省 tile 数，不用关键路径比率（比率会高估收益）。
+FD_MIN_SAVED_TILES = 4
+# 长序列（rows >= 96）放宽到省 2 tile 即开 FD（A/B 实测 +0.8~+3.9%）；短序列保持 4。
+FD_MIN_SAVED_TILES_LONG = 2
+FD_MIN_ROWS_LONG = 96
+# 每核目标 tile 数；单 tile 分片会让串行 FD 归约比它卸掉的活更贵。
+FD_TARGET_TILES_PER_CORE = 4
+# 短行保留完整 online softmax，只切足够长的行。
+FD_MIN_ROW_TILES = 5
 
 
 def _row_tiles(w_ori, w_cmp, has_cmp):
@@ -174,17 +168,18 @@ def _uniform_critical(rows, row_tiles, blocks):
     start = 0
     for c in range(ublocks):
         cnt = rows // ublocks + (1 if c < rows % ublocks else 0)
-        worst = max(worst, sum(row_tiles[start : start + cnt]))
+        worst = max(worst, sum(row_tiles[start:start + cnt]))
         start += cnt
     return worst
 
 
-def plan_metadata_fd(cu_q, len_ori, len_cmp=None, has_cmp=True, blocks=None, min_gain=FD_MIN_GAIN):
+def plan_metadata_fd(cu_q, len_ori, len_cmp=None, has_cmp=True, blocks=None):
     """Plan the flat ``(row, tile)`` interval schedule with 2-way FD partials.
 
-    Returns ``(metadata_int32_1024, block_dim)`` when the critical path shrinks
-    by at least ``min_gain`` and every split row stays 2-way; returns ``None``
-    otherwise (caller falls back to ``plan_metadata_uniform``).
+    Returns ``(metadata_int32_1024, block_dim)`` when the flat schedule saves at
+    least ``FD_MIN_SAVED_TILES`` of modelled critical path and every split row
+    stays 2-way; returns ``None`` otherwise (caller falls back to
+    ``plan_metadata_uniform``).
 
     The interval end is exclusive when the core stops on a row boundary
     (``s2_end == 0``) and inclusive when it stops inside a row, matching the
@@ -198,14 +193,22 @@ def plan_metadata_fd(cu_q, len_ori, len_cmp=None, has_cmp=True, blocks=None, min
         return None
     row_tiles = [_row_tiles(len_ori[r], (len_cmp[r] if has_cmp and len_cmp else 0), has_cmp) for r in range(rows)]
     total = sum(row_tiles)
-    if total < FD_MIN_TOTAL_TILES or max(row_tiles) < FD_MIN_ROW_TILES:
+    if max(row_tiles) < FD_MIN_ROW_TILES:
         return None
 
+    # plan_blocks 按每核目标 tile 数定，再 clamp 到 [rows, blocks] 以保留整行并行度下限。
+    n_blocks = min(max(total // FD_TARGET_TILES_PER_CORE, rows), blocks)
+    if n_blocks <= 0:
+        return None
     ub_max = _uniform_critical(rows, row_tiles, blocks)
-    n_blocks = min(blocks, total)
+    fd_floor = -(-total // n_blocks)
+    saved_tiles = ub_max - fd_floor
+    if saved_tiles < FD_MIN_SAVED_TILES:
+        if saved_tiles < FD_MIN_SAVED_TILES_LONG or rows < FD_MIN_ROWS_LONG:
+            return None
     flat = [total * c // n_blocks for c in range(n_blocks + 1)]
     fl_max = max(flat[c + 1] - flat[c] for c in range(n_blocks))
-    if fl_max <= 0 or ub_max < fl_max * min_gain:
+    if fl_max <= 0:
         return None
 
     rstart = []
@@ -227,9 +230,6 @@ def plan_metadata_fd(cu_q, len_ori, len_cmp=None, has_cmp=True, blocks=None, min
         r = row_at(f)
         if rstart[r] < f < rstart[r] + row_tiles[r]:
             splits.append((c, r))
-    # 切分的 partial 写读 + 屏障代价：省下的 tile 数必须盖得住切分数。
-    if (ub_max - fl_max) < FD_SPLIT_COST_TILES * len(splits):
-        return None
     if len(splits) > n_blocks or len(splits) * 2 > 2 * AIC_CORE_MAX_NUM:
         return None
     # A row cut by two consecutive boundaries would need a 3-way merge.
@@ -278,7 +278,7 @@ def plan_metadata_fd(cu_q, len_ori, len_cmp=None, has_cmp=True, blocks=None, min
     return torch.tensor(md, dtype=torch.int32), n_blocks
 
 
-def plan_metadata(cu_q, len_ori, len_cmp=None, has_cmp=True, blocks=None, min_gain=FD_MIN_GAIN):
+def plan_metadata(cu_q, len_ori, len_cmp=None, has_cmp=True, blocks=None):
     """Dispatch: flat FD schedule when it pays, else uniform whole rows.
 
     ``blocks`` defaults to the runtime AI-Cube core count of the target device.
@@ -288,7 +288,7 @@ def plan_metadata(cu_q, len_ori, len_cmp=None, has_cmp=True, blocks=None, min_ga
     """
     blocks = _effective_blocks(blocks)
     if len_ori is not None:
-        fd = plan_metadata_fd(cu_q, len_ori, len_cmp, has_cmp, blocks, min_gain)
+        fd = plan_metadata_fd(cu_q, len_ori, len_cmp, has_cmp, blocks)
         if fd is not None:
             return fd
     ublocks = min(blocks, max(int(cu_q[-1]), 1))
@@ -348,6 +348,33 @@ _CASE_OVERRIDES = {
     "decode_1": {"s_ori": 32768, "s_cmp": 16384, "k_cmp": 512},
     "decode_6": {"s_ori": 32768, "s_cmp": 16384, "k_cmp": 512},
     "decode_6_long_s2": {"s_ori": 131072, "s_cmp": 65536, "k_cmp": 512},
+    "netspec_decode_96": {
+        "s_ori": 131072,
+        "s_cmp": 65536,
+        "k_ori": 128,
+        "k_cmp": 2048,
+        "bs_ori": 128,
+        "bs_cmp": 64,
+        "block_local_indices": True,
+    },
+    "netspec_decode_96_k2_512": {
+        "s_ori": 131072,
+        "s_cmp": 65536,
+        "k_ori": 128,
+        "k_cmp": 512,
+        "bs_ori": 128,
+        "bs_cmp": 64,
+        "block_local_indices": True,
+    },
+    "netspec_decode_96_k2_256": {
+        "s_ori": 131072,
+        "s_cmp": 65536,
+        "k_ori": 128,
+        "k_cmp": 256,
+        "bs_ori": 128,
+        "bs_cmp": 64,
+        "block_local_indices": True,
+    },
 }
 
 
@@ -373,6 +400,9 @@ _CASE_LAYOUTS = {
     "decode_1": [1] * 32,
     "decode_6": [6] * 32,
     "decode_6_long_s2": [6] * 12,
+    "netspec_decode_96": [6] * 16,
+    "netspec_decode_96_k2_512": [6] * 16,
+    "netspec_decode_96_k2_256": [6] * 16,
 }
 _CASE_ORDER = list(_CASE_LAYOUTS)
 
@@ -476,7 +506,7 @@ def mixed_quant_sparse_flash_mla_golden_cpu(
         accumulator = torch.zeros(N1, D)
         for values in sides:
             for start in range(0, len(values), TILE_N):
-                tile = values[start : start + TILE_N]
+                tile = values[start:start + TILE_N]
                 scores = qf[row] @ tile.T * scale
                 new_max = torch.maximum(row_max, scores.max(dim=1).values)
                 correction = torch.exp(row_max - new_max)
@@ -523,12 +553,29 @@ def _build_case_tensors(case, device=torch.device("cpu")):
         physical[table.long().flatten()] = packed_pages[:, :window].reshape(batch * window, bs, physical.shape[-1])
         pool = physical.reshape(batch * pages, bs, 1, row_bytes)
         stride0 = bs * row_bytes
-        if p.get("kv_axis0_noncontiguous", False) and side == "ori":
+        if p.get("kv_axis0_noncontiguous", False):
+            # 两侧共享同一页间 padding 语义：页内保持连续，只有 axis-0 跨度带空洞。
             stride0 = bs * row_bytes + 64
             backing = torch.full((batch * pages * stride0,), 0xA5, dtype=torch.uint8)
             pool = torch.as_strided(backing, (batch * pages, bs, 1, row_bytes), (stride0, row_bytes, row_bytes, 1))
             pool.copy_(physical.reshape(batch * pages, bs, 1, row_bytes))
-        indices = torch.randint(min(tokens, window * bs), (rows, width), generator=generator, dtype=torch.int32)
+        if p.get("block_local_indices", False):
+            # 模拟前置 indexer 产物：ori 侧是连续滑窗，cmp 侧是若干 8-token 候选块内的 token。
+            span = min(tokens, window * bs)
+            if fp4:
+                blk, nb = 8, max(1, width // 8)
+                total_blocks = max(1, span // blk)
+                take = min(nb, total_blocks)
+                blocks = torch.stack([torch.randperm(total_blocks, generator=generator)[:take] for _ in range(rows)])
+                base = (blocks * blk).unsqueeze(-1) + torch.arange(blk).view(1, 1, blk)
+                flat = base.reshape(rows, take * blk)
+                indices = torch.nn.functional.pad(flat, (0, max(0, width - flat.shape[1])))[:, :width].int()
+            else:
+                hi = max(1, span - width)
+                start = torch.randint(0, hi, (rows, 1), generator=generator)
+                indices = (start + torch.arange(width).view(1, -1))[:, :width].int()
+        else:
+            indices = torch.randint(min(tokens, window * bs), (rows, width), generator=generator, dtype=torch.int32)
         lengths = torch.full((rows,), width, dtype=torch.int32)
         if p.get("vary_lengths", False):
             lengths = torch.tensor(([0, 1, min(127, width), width] * ((rows + 3) // 4))[:rows], dtype=torch.int32)

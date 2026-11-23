@@ -11,9 +11,9 @@
 # distributed on an "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and limitations under the License.
 # -----------------------------------------------------------------------------------------------------------
-"""mixed_quant_sparse_flash_mla_pto_bnn 的 ACLGraph(NPUGraph) 捕获/回放用例。
+"""mixed_quant_sparse_flash_mla 的 ACLGraph(NPUGraph) 捕获/回放用例。
 
-验证安装态 torch 绑定(``torch.ops.pypto_gym.mixed_quant_sparse_flash_mla_pto_bnn``)可被
+验证安装态 torch 绑定(``torch.ops.pypto_gym.mixed_quant_sparse_flash_mla``)可被
 ``torch.npu.NPUGraph`` 整图捕获并多次回放, 且数值与非捕获 eager 执行 bit 级一致:
 
 1. ``test_aclgraph_capture_replay_bitexact`` — 主算子(含可选 metadata AICPU 前置)在
@@ -27,8 +27,8 @@
 (与 LLM serving 的 decode 稳态一致), 不做动态 shape 回放。
 
 用法:
-  pytest ops/pro/deepseek_v4_1/mixed_quant_sparse_flash_mla_pto_bnn/tests/ \\
-      test_mixed_quant_sparse_flash_mla_pto_bnn_aclgraph.py -q --mode torch
+  pytest ops/pro/deepseek_v4_1/mixed_quant_sparse_flash_mla/tests/ \\
+      test_mixed_quant_sparse_flash_mla_aclgraph.py -q --mode torch
 """
 
 from __future__ import annotations
@@ -50,13 +50,13 @@ for _path in (_THIS_DIR, os.path.join(_THIS_DIR, "assets")):
 
 import _standalone_env  # noqa: E402,F401  直跑自举: 注入 tests/common 与安装态 vendor 环境
 
-import mixed_quant_sparse_flash_mla_pto_bnn_golden_cpu as golden  # noqa: E402
-import mixed_quant_sparse_flash_mla_pto_bnn_precision as verify  # noqa: E402
+import mixed_quant_sparse_flash_mla_golden_cpu as golden  # noqa: E402
+import mixed_quant_sparse_flash_mla_precision as verify  # noqa: E402
 
 try:
     from pypto_gym import (  # noqa: E402
-        mixed_quant_sparse_flash_mla_metadata_pto_bnn as _planner,
-        mixed_quant_sparse_flash_mla_pto_bnn as _mla,
+        mixed_quant_sparse_flash_mla_metadata as _planner,
+        mixed_quant_sparse_flash_mla as _mla,
     )
 except ImportError as error:  # 安装态 vendor 不在(torch 绑定未随包构建)时跳过
     pytest.skip(f"installed vendor misses an operator binding: {error}", allow_module_level=True)
@@ -243,7 +243,7 @@ class _MlaModule(torch.nn.Module):
     """aclgraph 编译目标: forward 只调注册算子(参考 ops-transformer quant_flash_attn graph.py)。
 
     所有入参在 __init__(编译区域之外)预处理完成并保存为 self. 属性; forward
-    无 Python 预处理, 仅一次 torch.ops.pypto_gym.mixed_quant_sparse_flash_mla_pto_bnn
+    无 Python 预处理, 仅一次 torch.ops.pypto_gym.mixed_quant_sparse_flash_mla
     调用, 可被 npugraph_ex 捕获。
     """
 
@@ -271,7 +271,7 @@ class _MlaModule(torch.nn.Module):
         )
 
     def forward(self):
-        out, lse = torch.ops.pypto_gym.mixed_quant_sparse_flash_mla_pto_bnn(
+        out, lse = torch.ops.pypto_gym.mixed_quant_sparse_flash_mla(
             *self._args, **self._kwargs)
         return out, lse
 
@@ -279,7 +279,7 @@ class _MlaModule(torch.nn.Module):
 def test_torchair_aclgraph_capture():
     """torchair aclgraph(CompilerConfig mode=npugraph_ex)捕获回放 bit 级一致; 缺 torchair 时跳过。
 
-    依赖 torch_extension/graph_convert_mixed_quant_sparse_flash_mla_pto_bnn.py 注册的
+    依赖 torch_extension/graph_convert_mixed_quant_sparse_flash_mla.py 注册的
     fx 转换器(torchair 缺失时该注册为 no-op, 本用例同步跳过)。
     顺序约束: 本用例须先于 test_aclgraph_npugraph_ex_compile 执行 —— torchair 的
     add_npu_patch 不带 py_kernels 幂等保护, 若 npugraph_ex 后端已在同进程注册过

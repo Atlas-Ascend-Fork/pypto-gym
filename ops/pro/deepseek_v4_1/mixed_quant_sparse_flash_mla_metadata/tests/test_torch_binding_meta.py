@@ -12,7 +12,7 @@
 # INCLUDING BUT NOT LIMITED TO NON-INFRINGEMENT OF MERCHANTABILITY OR FITNESS FOR A PARTICULAR PURPOSE.
 # See LICENSE in the root of the software repository for the full text of the License.
 # -----------------------------------------------------------------------------------------------------------
-"""torch 绑定 Meta kernel 的生效场景验证(mixed_quant_sparse_flash_mla_metadata_pto_bnn)。
+"""torch 绑定 Meta kernel 的生效场景验证(mixed_quant_sparse_flash_mla_metadata)。
 
 Meta 注册前, meta 张量/PT2 编译 API 对该算子直接抛
 ``NotImplementedError: no fake impl or Meta kernel registered``。
@@ -28,7 +28,7 @@ Meta 注册前, meta 张量/PT2 编译 API 对该算子直接抛
 
 依赖安装态 vendor(.run 安装后 ASCEND_CUSTOM_OPP_PATH + PYTHONPATH 生效):
   pytest ops/pro/deepseek_v4_1/mixed_quant_sparse_flash_mla_metadata/tests/ \\
-      test_torch_binding_meta_pto_bnn.py -q --mode torch
+      test_torch_binding_meta.py -q --mode torch
 """
 
 from __future__ import annotations
@@ -45,7 +45,7 @@ pytestmark = [pytest.mark.soc("950"), pytest.mark.usefixtures("device")]
 
 _THIS_DIR = os.path.dirname(os.path.abspath(__file__))
 _OP_DIR = os.path.dirname(_THIS_DIR)
-_MAIN_TESTS = os.path.join(os.path.dirname(_OP_DIR), "mixed_quant_sparse_flash_mla_pto_bnn", "tests")
+_MAIN_TESTS = os.path.join(os.path.dirname(_OP_DIR), "mixed_quant_sparse_flash_mla", "tests")
 for _path in (_THIS_DIR, _MAIN_TESTS):
     if os.path.isdir(_path) and _path not in sys.path:
         sys.path.insert(0, _path)
@@ -53,7 +53,7 @@ for _path in (_THIS_DIR, _MAIN_TESTS):
 import _standalone_env  # noqa: E402,F401  直跑自举: 注入 tests/common、aclnn 桥与 vendor 环境
 
 try:
-    from pypto_gym import mixed_quant_sparse_flash_mla_metadata_pto_bnn as planner
+    from pypto_gym import mixed_quant_sparse_flash_mla_metadata as planner
 except Exception as error:  # 绑定源/vendor 缺失时整文件跳过
     pytest.skip(f"installed pypto_gym torch binding is required: {error}",
                 allow_module_level=True)
@@ -74,7 +74,7 @@ def test_meta_device_call():
     assert tuple(tiling_device.shape) == (16,) and tiling_device.dtype == torch.int32
     assert metadata.device.type == "meta" and tiling_device.device.type == "meta"
     # 直调 torch.ops 绕开 python wrapper 的前置校验, 证明 C++ Meta 侧标量/dtype 校验生效。
-    op = torch.ops.pypto_gym.mixed_quant_sparse_flash_mla_metadata_pto_bnn
+    op = torch.ops.pypto_gym.mixed_quant_sparse_flash_mla_metadata
     with pytest.raises(RuntimeError, match="blocks must be in"):
         op(cu, otl, None, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0)
     bad = torch.zeros(2, 1, dtype=torch.float32, device="meta")
@@ -91,7 +91,7 @@ def test_torch_export_graph():
     exported = torch.export.export(PlanModule(), (cu, otl))
     nodes = [str(node.target) for node in exported.graph.nodes
              if node.op == "call_function"]
-    assert any("mixed_quant_sparse_flash_mla_metadata_pto_bnn" in t for t in nodes), (
+    assert any("mixed_quant_sparse_flash_mla_metadata" in t for t in nodes), (
         f"custom op missing from exported graph: {nodes}")
     metadata, tiling_device = exported.module()(cu, otl)
     assert tuple(metadata.shape) == (1024,) and metadata.dtype == torch.int32

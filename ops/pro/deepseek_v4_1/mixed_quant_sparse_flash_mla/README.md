@@ -2,7 +2,8 @@
 
 `mixed_quant_sparse_flash_mla`（混合量化稀疏 Flash MLA）的 **delivery-form** 交付：同一套
 PyPTO-Pro 稀疏 Flash MLA 计算，kernel 以 raw Ptr + OpTiling 形态编写，既支持 Python 宿主
-直调（jit），也支持经 CANN 框架的 aclnn 接口调用（run 包 built-in）。
+直调（jit）、经 CANN 框架的 aclnn 接口调用（run 包 built-in），以及 whl 安装态的
+`torch.ops.pypto_gym.mixed_quant_sparse_flash_mla` Torch 绑定。
 
 算法设计、流水结构与性能/优化记录见原 jit 形态算子目录
 `ops/pypto_pro/deepseek_v4_1/mixed_quant_sparse_flash_mla/`（`DESIGN.md` / `RESULTS.md`）；
@@ -106,7 +107,7 @@ mixed_quant_sparse_flash_mla/
     │   ├── aclnn_bridge_mixed_quant_sparse_flash_mla.cpp
     │   └── CMakeLists.txt
     ├── assets/                                     # golden / 精度比较器
-    └── test_mixed_quant_sparse_flash_mla.py        # 13 条 P0，jit / aclnn 双模
+    └── test_mixed_quant_sparse_flash_mla.py        # 16 条 P0，jit / aclnn / torch 三模
 ```
 
 ## 构建与测试
@@ -129,9 +130,9 @@ pytest ops/pro/deepseek_v4_1/mixed_quant_sparse_flash_mla/tests -q --mode aclnn
 
 1. `layout_q` 固定 `"TND"`、`layout_kv` 固定 `"PA_BBND"`、`quant_mode` 固定 `1`；
    `num_heads_q=64`、`num_heads_kv=1`、`head_dim=512`。
-2. `ori_kv` / `cmp_kv` 以 uint8 承载 FP8 / FP4 编码字节，内层维度必须连续；算子注册为
-   `FORMAT_ND` + `AutoContiguous`，aclnn 路径下页间 padding 由框架压实（tiling 按
-   `bs*544` / `bs*320` 给出行跨度）。
+2. `ori_kv` / `cmp_kv` 以 uint8 承载 FP8 / FP4 编码字节，**支持页间 padding（axis-0 非连续）**：
+   页内维度必须连续，页跨度取输入真实 `stride(0)`（host tiling 校验，页内非连续或页跨度越界直接报错）；
+   算子注册为 `FORMAT_ND` + `IgnoreContiguous`，aclnn 路径原样传递视图，不做压实拷贝。
 3. sink 只进分母；两侧有效长度均为 0 的行输出严格为 0、`lse` 严格等于该 head 的 `sinks`。
 4. 反量化值与概率 P 均舍入到 BF16，分子分母 FP32 累加——舍入位置是数值契约的一部分。
-5. 精度只在 `tests/` 的 13 条 P0 shape 上验证。
+5. 精度只在 `tests/` 的 16 条 P0 shape 上验证。

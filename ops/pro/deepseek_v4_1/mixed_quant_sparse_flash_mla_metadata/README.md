@@ -1,7 +1,7 @@
-# MixedQuantSparseFlashMlaMetadataPtoBnn (mixed_quant_sparse_flash_mla_metadata_pto_bnn)
+# MixedQuantSparseFlashMlaMetadata (mixed_quant_sparse_flash_mla_metadata)
 
 MQSMLA 的分核计划算子，以 **AICPU built-in 形态**交付：设备侧读长度张量、直接写出主注意力算子消费的
-`int32[1024]` metadata，全程不做 host 回读。计划语义与主算子 `mixed_quant_sparse_flash_mla_pto_bnn`
+`int32[1024]` metadata，全程不做 host 回读。计划语义与主算子 `mixed_quant_sparse_flash_mla`
 host tiling 内的规划器逐字一致（uniform 整行切分，或满足增益门限时的 flat `(row, tile)` FlashDecode 切分）。
 
 ## 产品支持情况
@@ -30,7 +30,7 @@ host tiling 内的规划器逐字一致（uniform 整行切分，或满足增益
 ```python
 import torch
 
-def mixed_quant_sparse_flash_mla_metadata_pto_bnn(
+def mixed_quant_sparse_flash_mla_metadata(
     cu_seqlens_q, ori_topk_length, cmp_topk_length=None, *,
     blocks=None, has_cmp=1, k_ori=0, k_cmp=0,
     bs_ori=0, bs_cmp=0, bt_ori=0, bt_cmp=0,
@@ -39,17 +39,17 @@ def mixed_quant_sparse_flash_mla_metadata_pto_bnn(
 # -> (metadata: int32[1024], tiling_device: int32[16])
 ```
 
-对应 C 接口（`op_api/include/aclnnop/aclnn_mixed_quant_sparse_flash_mla_metadata_pto_bnn.h`）：
+对应 C 接口（`op_api/include/aclnnop/aclnn_mixed_quant_sparse_flash_mla_metadata.h`）：
 
 ```c
-aclnnStatus aclnnMixedQuantSparseFlashMlaMetadataPtoBnnGetWorkspaceSize(
+aclnnStatus aclnnMixedQuantSparseFlashMlaMetadataGetWorkspaceSize(
     const aclTensor *cuSeqlensQ, const aclTensor *oriTopkLength,
     const aclTensor *cmpTopkLengthOptional, int64_t blocks, int64_t hasCmp,
     int64_t kOri, int64_t kCmp, int64_t bsOri, int64_t bsCmp, int64_t btOri,
     int64_t btCmp, int64_t oriPages, int64_t cmpPages, int64_t oriKvStride0,
     int64_t cmpKvStride0, const aclTensor *out, const aclTensor *tilingDevice,
     uint64_t *workspaceSize, aclOpExecutor **executor);
-aclnnStatus aclnnMixedQuantSparseFlashMlaMetadataPtoBnn(
+aclnnStatus aclnnMixedQuantSparseFlashMlaMetadata(
     void *workspace, uint64_t workspaceSize, aclOpExecutor *executor, aclrtStream stream);
 ```
 
@@ -80,18 +80,18 @@ aclnnStatus aclnnMixedQuantSparseFlashMlaMetadataPtoBnn(
 ```python
 import torch, torch_npu
 import pypto_gym  # 安装 run 包后加载 torch.ops
-md = pypto_gym.mixed_quant_sparse_flash_mla_metadata_pto_bnn(
+md = pypto_gym.mixed_quant_sparse_flash_mla_metadata(
     cu_q, ori_len, cmp_len, blocks=28, has_cmp=1, k_ori=128, k_cmp=2048)
-out = pypto_gym.mixed_quant_sparse_flash_mla_pto_bnn(q, ..., metadata=md)
+out = pypto_gym.mixed_quant_sparse_flash_mla(q, ..., metadata=md)
 ```
 
-aicnn 直调走 `aclnnMixedQuantSparseFlashMlaMetadataPtoBnnGetWorkspaceSize` + `aclnnMixedQuantSparseFlashMlaMetadataPtoBnn`；
-jit 直调用 `op_kernel_aicpu` 里的 `mixed_quant_sparse_flash_mla_metadata_pto_bnn_aicpu(...)`。
+aicnn 直调走 `aclnnMixedQuantSparseFlashMlaMetadataGetWorkspaceSize` + `aclnnMixedQuantSparseFlashMlaMetadata`；
+jit 直调用 `op_kernel_aicpu` 里的 `mixed_quant_sparse_flash_mla_metadata_aicpu(...)`。
 
 ## 目录结构
 
 ```
-mixed_quant_sparse_flash_mla_metadata_pto_bnn/
+mixed_quant_sparse_flash_mla_metadata/
 ├── CMakeLists.txt                 # 算子级 dispatcher
 ├── __init__.py                    # 导出 AICPU kernel 与 wrapper
 ├── op_host/
@@ -99,7 +99,7 @@ mixed_quant_sparse_flash_mla_metadata_pto_bnn/
 │   └── op_api/aclnn_*.{h,cpp}     # l0op + aclnn 入口
 ├── op_kernel_aicpu/
 │   ├── CMakeLists.txt             # enable_pypto_aicpu_kernel
-│   └── mixed_quant_sparse_flash_mla_metadata_pto_bnn.py
+│   └── mixed_quant_sparse_flash_mla_metadata.py
 ├── tests/
 │   ├── aclnn_bridge/              # pybind11 测试桥
 │   └── test_*.py                  # 与主算子 host planner 逐字对拍
@@ -110,11 +110,11 @@ mixed_quant_sparse_flash_mla_metadata_pto_bnn/
 
 ```bash
 # 构建（含测试桥）
-python build_ci.py --pkg-type run --ops mixed_quant_sparse_flash_mla_metadata_pto_bnn --soc ascend950 -s
+python build_ci.py --pkg-type run --ops mixed_quant_sparse_flash_mla_metadata --soc ascend950 -s
 
 # 手动跑对拍
-pytest ops/pro/deepseek_v4_1/mixed_quant_sparse_flash_mla_metadata_pto_bnn/tests -q --mode aclnn
+pytest ops/pro/deepseek_v4_1/mixed_quant_sparse_flash_mla_metadata/tests -q --mode aclnn
 ```
 
-对拍基准是主算子 `tests/assets/mixed_quant_sparse_flash_mla_pto_bnn_golden_cpu.py` 的 host planner；
+对拍基准是主算子 `tests/assets/mixed_quant_sparse_flash_mla_golden_cpu.py` 的 host planner；
 `uniform` 与 `FlashDecode` 两条路径都要覆盖。

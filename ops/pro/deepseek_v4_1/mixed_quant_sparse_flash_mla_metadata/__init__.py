@@ -7,14 +7,14 @@
 # INCLUDING BUT NOT LIMITED TO NON-INFRINGEMENT, MERCHANTABILITY, OR FITNESS FOR A PARTICULAR PURPOSE.
 # See LICENSE in the root of the software repository for the full text of the License.
 # -----------------------------------------------------------------------------------------------------------
-"""PyPTO Pro ``mixed_quant_sparse_flash_mla_metadata_pto_bnn`` operator (MQSMLA AICPU metadata planner)."""
+"""PyPTO Pro ``mixed_quant_sparse_flash_mla_metadata`` operator (MQSMLA AICPU metadata planner)."""
 
-from .op_kernel_aicpu.mixed_quant_sparse_flash_mla_metadata_pto_bnn import (
-    mixed_quant_sparse_flash_mla_metadata_pto_bnn,
-    mixed_quant_sparse_flash_mla_metadata_pto_bnn_aicpu,
+from .op_kernel_aicpu.mixed_quant_sparse_flash_mla_metadata import (
+    mixed_quant_sparse_flash_mla_metadata,
+    mixed_quant_sparse_flash_mla_metadata_aicpu,
 )
 
 __all__ = [
-    "mixed_quant_sparse_flash_mla_metadata_pto_bnn",
-    "mixed_quant_sparse_flash_mla_metadata_pto_bnn_aicpu",
+    "mixed_quant_sparse_flash_mla_metadata",
+    "mixed_quant_sparse_flash_mla_metadata_aicpu",
 ]

@@ -10,7 +10,7 @@
  */
 
 /*!
- * \file aclnn_bridge_mixed_quant_sparse_flash_mla_metadata_pto_bnn.cpp
+ * \file aclnn_bridge_mixed_quant_sparse_flash_mla_metadata.cpp
  * \brief pybind11 bridge for the AICPU metadata planner op (aclnn C API -> Python).
  */
 
@@ -31,10 +31,10 @@ typedef aclnnStatus (*RunFunc)(void *, uint64_t, aclOpExecutor *, aclrtStream);
 
 } // namespace
 
-PYBIND11_MODULE(aclnn_bridge_mixed_quant_sparse_flash_mla_metadata_pto_bnn, m) {
+PYBIND11_MODULE(aclnn_bridge_mixed_quant_sparse_flash_mla_metadata, m) {
     m.doc() = "pypto-gym pybind11 test bridge: AICPU metadata planner (aclnn)";
 
-    m.def("mixed_quant_sparse_flash_mla_metadata_pto_bnn",
+    m.def("mixed_quant_sparse_flash_mla_metadata",
           [](torch::Tensor cu_seqlens_q,
              torch::Tensor ori_topk_length,
              c10::optional<torch::Tensor> cmp_topk_length,
@@ -43,9 +43,9 @@ PYBIND11_MODULE(aclnn_bridge_mixed_quant_sparse_flash_mla_metadata_pto_bnn, m) {
              int64_t k_ori,
              int64_t k_cmp) {
               static auto get_ws_size = reinterpret_cast<GetWorkspaceSizeFunc>(
-                  get_opapi_func("aclnnMixedQuantSparseFlashMlaMetadataPtoBnnGetWorkspaceSize"));
+                  get_opapi_func("aclnnMixedQuantSparseFlashMlaMetadataGetWorkspaceSize"));
               static auto aclnn_op = reinterpret_cast<RunFunc>(
-                  get_opapi_func("aclnnMixedQuantSparseFlashMlaMetadataPtoBnn"));
+                  get_opapi_func("aclnnMixedQuantSparseFlashMlaMetadata"));
 
               torch::Tensor md = torch::empty(
                   {1024}, cu_seqlens_q.options().dtype(at::kInt));

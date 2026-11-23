@@ -18,7 +18,7 @@
    FD case 走最深调度路径(word[900] > 0, 三类核按同一份 plan 协作)。
 
 用例均要求安装态 vendor(.run 安装后 ASCEND_CUSTOM_OPP_PATH + PYTHONPATH 生效):
-  pytest ops/pro/deepseek_v4_1/mixed_quant_sparse_flash_mla_pto_bnn/tests \
+  pytest ops/pro/deepseek_v4_1/mixed_quant_sparse_flash_mla/tests \
          ops/pro/deepseek_v4_1/mixed_quant_sparse_flash_mla_metadata/tests -q --mode torch
 """
 
@@ -55,12 +55,12 @@ def _load_asset(module_name, file_path):
 
 try:
     golden = _load_asset(
-        "mixed_quant_sparse_flash_mla_pto_bnn_golden_cpu",
-        os.path.join(_ASSETS_DIR, "mixed_quant_sparse_flash_mla_pto_bnn_golden_cpu.py"),
+        "mixed_quant_sparse_flash_mla_golden_cpu",
+        os.path.join(_ASSETS_DIR, "mixed_quant_sparse_flash_mla_golden_cpu.py"),
     )
     verify = _load_asset(
-        "mixed_quant_sparse_flash_mla_pto_bnn_precision",
-        os.path.join(_ASSETS_DIR, "mixed_quant_sparse_flash_mla_pto_bnn_precision.py"),
+        "mixed_quant_sparse_flash_mla_precision",
+        os.path.join(_ASSETS_DIR, "mixed_quant_sparse_flash_mla_precision.py"),
     )
 except (OSError, ImportError):  # 主算子 assets 未部署时整文件跳过
     pytest.skip("main operator golden assets are required for the torch chain test",
@@ -77,8 +77,8 @@ except ImportError:
 def _torch_entries():
     # vendor 缺任一算子绑定(如 metadata 算子未随包构建)时降级为 skip, 而非用例 ERROR。
     try:
-        from pypto_gym import mixed_quant_sparse_flash_mla_metadata_pto_bnn as planner
-        from pypto_gym import mixed_quant_sparse_flash_mla_pto_bnn as mla
+        from pypto_gym import mixed_quant_sparse_flash_mla_metadata as planner
+        from pypto_gym import mixed_quant_sparse_flash_mla as mla
     except ImportError as error:
         pytest.skip(f"installed vendor misses an operator binding: {error}")
     return planner, mla

@@ -6,5 +6,5 @@
 # See LICENSE in the root of the software repository for the full text of the License.
 # -----------------------------------------------------------------------------------------------------------
 if(ENABLE_TORCH_BINDINGS AND NOT PREPARE_BUILD)
-    gym_add_torch_binding(mixed_quant_sparse_flash_mla_metadata_pto_bnn)
+    gym_add_torch_binding(mixed_quant_sparse_flash_mla_metadata)
 endif()

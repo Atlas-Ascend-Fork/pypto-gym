@@ -8,17 +8,17 @@
 # INCLUDING BUT NOT LIMITED TO NON-INFRINGEMENT, MERCHANTABILITY, OR FITNESS FOR A PARTICULAR PURPOSE.
 # See LICENSE in the root of the software repository for the full text of the License.
 # -----------------------------------------------------------------------------------------------------------
-"""mixed_quant_sparse_flash_mla_metadata_pto_bnn 的测试入口（aclnn 模式）。
+"""mixed_quant_sparse_flash_mla_metadata 的测试入口（aclnn 模式）。
 
-对拍基准是主算子 `mixed_quant_sparse_flash_mla_pto_bnn` 的 host planner
-（`tests/assets/mixed_quant_sparse_flash_mla_pto_bnn_golden_cpu.py` 的 `build_inputs`），
+对拍基准是主算子 `mixed_quant_sparse_flash_mla` 的 host planner
+（`tests/assets/mixed_quant_sparse_flash_mla_golden_cpu.py` 的 `build_inputs`），
 两条规划路径都要覆盖：uniform 整行切分与 flat `(row, tile)` FlashDecode 切分。
 
 * `test_metadata_matches_host_plan`：AICPU 算子写出的 `int32[1024]` 与 host planner 逐字相同；
 * `test_attention_with_aicpu_metadata`：把 AICPU 产物喂给主算子，端到端精度通过（主算子未构建时跳过）。
 
 用法：
-  pytest ops/pro/deepseek_v4_1/mixed_quant_sparse_flash_mla_metadata_pto_bnn/tests -q --mode aclnn
+  pytest ops/pro/deepseek_v4_1/mixed_quant_sparse_flash_mla_metadata/tests -q --mode aclnn
 """
 
 from __future__ import annotations
@@ -34,7 +34,7 @@ import torch_npu  # noqa: F401
 
 _THIS_DIR = os.path.dirname(os.path.abspath(__file__))
 _OP_DIR = os.path.dirname(_THIS_DIR)
-_MAIN_TESTS = os.path.join(os.path.dirname(_OP_DIR), "mixed_quant_sparse_flash_mla_pto_bnn", "tests")
+_MAIN_TESTS = os.path.join(os.path.dirname(_OP_DIR), "mixed_quant_sparse_flash_mla", "tests")
 for _path in (_THIS_DIR, _MAIN_TESTS, os.path.join(_MAIN_TESTS, "assets")):
     if os.path.isdir(_path) and _path not in sys.path:
         sys.path.insert(0, _path)
@@ -42,8 +42,8 @@ for _path in (_THIS_DIR, _MAIN_TESTS, os.path.join(_MAIN_TESTS, "assets")):
 import _standalone_env  # noqa: E402,F401  直跑自举: 注入 tests/common、aclnn 桥与 vendor 环境
 
 try:
-    import mixed_quant_sparse_flash_mla_pto_bnn_golden_cpu as golden  # noqa: E402
-    import mixed_quant_sparse_flash_mla_pto_bnn_precision as verify  # noqa: E402
+    import mixed_quant_sparse_flash_mla_golden_cpu as golden  # noqa: E402
+    import mixed_quant_sparse_flash_mla_precision as verify  # noqa: E402
 except ImportError:  # 主算子用例未随仓部署时，只保留 metadata 的形状/契约检查
     pytest.skip("main operator golden assets are required for the metadata parity test",
                 allow_module_level=True)
@@ -51,11 +51,11 @@ except ImportError:  # 主算子用例未随仓部署时，只保留 metadata �
 try:
     from op_caller import get_op_caller  # noqa: E402
 
-    mixed_quant_sparse_flash_mla_metadata_pto_bnn = get_op_caller(
-        "mixed_quant_sparse_flash_mla_metadata_pto_bnn")
+    mixed_quant_sparse_flash_mla_metadata = get_op_caller(
+        "mixed_quant_sparse_flash_mla_metadata")
 except ImportError:  # standalone run outside pytest
-    from aclnn_bridge_mixed_quant_sparse_flash_mla_metadata_pto_bnn import (  # noqa: E402
-        mixed_quant_sparse_flash_mla_metadata_pto_bnn,
+    from aclnn_bridge_mixed_quant_sparse_flash_mla_metadata import (  # noqa: E402
+        mixed_quant_sparse_flash_mla_metadata,
     )
 
 pytestmark = pytest.mark.soc("950")
@@ -82,7 +82,7 @@ def _run_planner(name, device):
     blocks = int(torch.npu.get_device_properties(device).cube_core_num)
     has_cmp = bool(case["has_cmp"])
     cmp_len = inputs["cmp_topk_length"].to(device) if has_cmp else None
-    plan, tiling_device = mixed_quant_sparse_flash_mla_metadata_pto_bnn(
+    plan, tiling_device = mixed_quant_sparse_flash_mla_metadata(
         inputs["cu_seqlens_q"].to(device),
         inputs["ori_topk_length"].to(device),
         cmp_len,
@@ -126,9 +126,9 @@ def test_metadata_matches_host_plan(case):
 @pytest.mark.parametrize("case", ("mixed_decode",))
 def test_attention_with_aicpu_metadata(case):
     try:
-        mla = get_op_caller("mixed_quant_sparse_flash_mla_pto_bnn")
+        mla = get_op_caller("mixed_quant_sparse_flash_mla")
     except Exception:  # 主算子未构建（aclnn 桥/torch 绑定都不在）时跳过端到端
-        pytest.skip("mixed_quant_sparse_flash_mla_pto_bnn entry is not available")
+        pytest.skip("mixed_quant_sparse_flash_mla entry is not available")
     device = _device()
     inputs, block_dim, _case, plan, tiling_device = _run_planner(case, device)
     reference = golden.reference(case, inputs)
@@ -197,9 +197,9 @@ def test_aicpu_aicore_linkage_fd_plan_and_sk():
       5. vendor 的 AICPU 交付件齐套(cust_aicpu_kernel.json 含 metadata 算子条目).
     """
     try:
-        mla = get_op_caller("mixed_quant_sparse_flash_mla_pto_bnn")
+        mla = get_op_caller("mixed_quant_sparse_flash_mla")
     except Exception:  # 主算子未构建（aclnn 桥/torch 绑定都不在）时跳过端到端
-        pytest.skip("mixed_quant_sparse_flash_mla_pto_bnn entry is not available")
+        pytest.skip("mixed_quant_sparse_flash_mla entry is not available")
     import glob as _glob
     import json as _json
 
@@ -260,7 +260,7 @@ def test_aicpu_aicore_linkage_fd_plan_and_sk():
     vendor = _find_vendor_root()
     assert vendor is not None, "cannot locate installed pypto_gym vendor root"
     bin_jsons = sorted(_glob.glob(os.path.join(
-        vendor, "op_impl/ai_core/tbe/kernel/*/mixed_quant_sparse_flash_mla_pto_bnn/*.json")))
+        vendor, "op_impl/ai_core/tbe/kernel/*/mixed_quant_sparse_flash_mla/*.json")))
     assert bin_jsons, f"no AI Core kernel binary json under {vendor}"
     for path in bin_jsons:
         with open(path, encoding="utf-8") as fh:
@@ -271,7 +271,7 @@ def test_aicpu_aicore_linkage_fd_plan_and_sk():
     assert os.path.isfile(aicpu_cfg), f"missing {aicpu_cfg}"
     with open(aicpu_cfg, encoding="utf-8") as fh:
         aicpu_doc = _json.load(fh)
-    assert "MixedQuantSparseFlashMlaMetadataPtoBnn" in aicpu_doc, \
+    assert "MixedQuantSparseFlashMlaMetadata" in aicpu_doc, \
         "aicpu metadata op entry missing from cust_aicpu_kernel.json"
 
 

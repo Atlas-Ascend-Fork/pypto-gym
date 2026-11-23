@@ -60,7 +60,7 @@ static void CheckOptionalLength(const c10::optional<at::Tensor> &value,
 static void CheckNoGrad(const std::vector<at::Tensor> &inputs) {
   for (const auto &value : inputs)
     TORCH_CHECK(!at::GradMode::is_enabled() || !value.requires_grad(),
-                "MixedQuantSparseFlashMlaPtoBnn provides forward computation "
+                "MixedQuantSparseFlashMla provides forward computation "
                 "only; use torch.no_grad() for inference");
 }
 
@@ -204,7 +204,7 @@ static Result Run(
   (void)block_dim;
   (void)fd_enable;
   TORCH_CHECK(quant_mode == 1,
-              "MixedQuantSparseFlashMlaPtoBnn supports quant_mode=1 only");
+              "MixedQuantSparseFlashMla supports quant_mode=1 only");
   TORCH_CHECK(layout_q == "TND" && layout_kv == "PA_BBND",
               "only layout_q='TND', layout_kv='PA_BBND' are supported");
   const c10::OptionalDeviceGuard guard(q.device());
@@ -247,7 +247,7 @@ static Result Run(
     inputs.push_back(*cmp_topk_length);
   CheckNoGrad(inputs);
 
-  // 全设备端形态: 走 Tensor 变体(aclnnMixedQuantSparseFlashMlaPtoBnnTensor*),
+  // 全设备端形态: 走 Tensor 变体(aclnnMixedQuantSparseFlashMlaTensor*),
   // 13 个输入张量按 def 顺序全部进 tensor 槽位(含三个长度张量与 tiling_device),
   // 无 aclIntArray、无 host 值提取、无同步 D2H。
   // Tensor slots in ACLNN order: q, ori_kv, ori_sparse_indices,
@@ -291,11 +291,11 @@ static Result Run(
       double, const aclTensor *, const aclTensor *, uint64_t *,
       aclOpExecutor **);
   static const auto get_workspace = gym_torch::Symbol<GetWorkspace>(
-      "aclnnMixedQuantSparseFlashMlaPtoBnnTensorGetWorkspaceSize");
+      "aclnnMixedQuantSparseFlashMlaTensorGetWorkspaceSize");
   static const auto execute = gym_torch::Symbol<gym_torch::Execute>(
-      "aclnnMixedQuantSparseFlashMlaPtoBnn");
+      "aclnnMixedQuantSparseFlashMla");
   gym_torch::Enqueue(
-      "aclnnMixedQuantSparseFlashMlaPtoBnn", defined,
+      "aclnnMixedQuantSparseFlashMla", defined,
       [present, softmax_scale, layout_q,
        layout_kv](const std::vector<gym_torch::TensorInfo> &infos, auto stream) {
         std::vector<gym_torch::TensorHandle> handles;
@@ -308,7 +308,7 @@ static Result Run(
           if (present[i])
             slots[i] = handles[cursor++].get();
         TORCH_CHECK(cursor == handles.size(),
-                    "MixedQuantSparseFlashMlaPtoBnn argument mapping mismatch");
+                    "MixedQuantSparseFlashMla argument mapping mismatch");
         uint64_t bytes = 0;
         aclOpExecutor *executor = nullptr;
         const auto status = get_workspace(
@@ -321,7 +321,7 @@ static Result Run(
         if (status == 0)
           gym_torch::ExecuteOp(execute, bytes, executor, stream);
         TORCH_CHECK(status == 0,
-                    "aclnnMixedQuantSparseFlashMlaPtoBnnTensorGetWorkspaceSize "
+                    "aclnnMixedQuantSparseFlashMlaTensorGetWorkspaceSize "
                     "failed, status=",
                     status, ": ", aclGetRecentErrMsg());
         return 0;
@@ -398,7 +398,7 @@ static Result Meta(
 // 编译路径(不传 out/lse)由算子内部新分配输出, 无实际别名; eager 路径
 // 传入 out/lse 时仍原地写回, 语义不变。
 TORCH_LIBRARY_FRAGMENT(pypto_gym, m) {
-  m.def("mixed_quant_sparse_flash_mla_pto_bnn(Tensor q, Tensor ori_kv, "
+  m.def("mixed_quant_sparse_flash_mla(Tensor q, Tensor ori_kv, "
         "Tensor ori_sparse_indices, Tensor ori_block_table, "
         "Tensor cu_seqlens_q, Tensor sinks, Tensor metadata, "
         "Tensor tiling_device, "
@@ -412,8 +412,8 @@ TORCH_LIBRARY_FRAGMENT(pypto_gym, m) {
         "int? fd_enable=None) -> (Tensor, Tensor)");
 }
 TORCH_LIBRARY_IMPL(pypto_gym, PrivateUse1, m) {
-  m.impl("mixed_quant_sparse_flash_mla_pto_bnn", TORCH_FN(Run));
+  m.impl("mixed_quant_sparse_flash_mla", TORCH_FN(Run));
 }
 TORCH_LIBRARY_IMPL(pypto_gym, Meta, m) {
-  m.impl("mixed_quant_sparse_flash_mla_pto_bnn", TORCH_FN(Meta));
+  m.impl("mixed_quant_sparse_flash_mla", TORCH_FN(Meta));
 }

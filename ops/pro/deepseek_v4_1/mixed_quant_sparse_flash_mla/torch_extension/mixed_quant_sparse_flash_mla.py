@@ -10,13 +10,13 @@
 # INCLUDING BUT NOT LIMITED TO NON-INFRINGEMENT, MERCHANTABILITY, OR FITNESS FOR A PARTICULAR PURPOSE.
 # See LICENSE in the root of the software repository for the full text of the License.
 # -----------------------------------------------------------------------------------------------------------
-"""Public Torch frontend for the precompiled MixedQuantSparseFlashMlaPtoBnn operator."""
+"""Public Torch frontend for the precompiled MixedQuantSparseFlashMla operator."""
 import math
 
 import torch
 
 
-def mixed_quant_sparse_flash_mla_pto_bnn(
+def mixed_quant_sparse_flash_mla(
     q,
     *,
     ori_kv,
@@ -83,7 +83,7 @@ def mixed_quant_sparse_flash_mla_pto_bnn(
     if not isinstance(tiling_device, torch.Tensor):
         raise ValueError(
             "tiling_device is required: run the AICPU planner "
-            "(mixed_quant_sparse_flash_mla_metadata_pto_bnn) on the same device "
+            "(mixed_quant_sparse_flash_mla_metadata) on the same device "
             "and pass its tiling_device output here")
     if cmp_kv is not None and (cmp_sparse_indices is None or cmp_block_table is None):
         raise ValueError("cmp_kv is given but cmp_sparse_indices/cmp_block_table is missing")
@@ -92,7 +92,7 @@ def mixed_quant_sparse_flash_mla_pto_bnn(
         scale = float(softmax_scale)
         if not math.isfinite(scale):
             raise ValueError("softmax_scale must be finite")
-    out_t, lse_t = torch.ops.pypto_gym.mixed_quant_sparse_flash_mla_pto_bnn(
+    out_t, lse_t = torch.ops.pypto_gym.mixed_quant_sparse_flash_mla(
         q, ori_kv, ori_sparse_indices, ori_block_table, cu_seqlens_q, sinks,
         metadata, tiling_device, ori_topk_length=ori_topk_length, cmp_kv=cmp_kv,
         cmp_sparse_indices=cmp_sparse_indices, cmp_block_table=cmp_block_table,
@@ -108,6 +108,6 @@ def mixed_quant_sparse_flash_mla_pto_bnn(
 # 需在 torch.ops.pypto_gym 命名空间由 loader 加载原生库之后导入, 故置于模块尾部。
 # torchair 缺失或命名空间未就绪时为纯 no-op, 不影响 eager/NPUGraph 路径。
 try:
-    from . import graph_convert_mixed_quant_sparse_flash_mla_pto_bnn  # noqa: F401,E402
+    from . import graph_convert_mixed_quant_sparse_flash_mla  # noqa: F401,E402
 except Exception:  # pragma: no cover - 环境相关(torchair 缺失/无包上下文)的静默降级
     pass

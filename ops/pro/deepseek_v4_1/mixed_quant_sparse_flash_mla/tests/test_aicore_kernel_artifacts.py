@@ -35,8 +35,8 @@ import _standalone_env  # noqa: F401  直跑自举: 注入 vendor 环境(ASCEND_
 
 pytestmark = pytest.mark.soc("950")
 
-OP_FILE = "mixed_quant_sparse_flash_mla_pto_bnn"
-OP_TYPE = "MixedQuantSparseFlashMlaPtoBnn"
+OP_FILE = "mixed_quant_sparse_flash_mla"
+OP_TYPE = "MixedQuantSparseFlashMla"
 KERNEL_GLOB = os.path.join("op_impl", "ai_core", "tbe", "kernel", "*", OP_FILE)
 CONFIG_GLOB = os.path.join("op_impl", "ai_core", "tbe", "kernel", "config", "*", "binary_info_config.json")
 

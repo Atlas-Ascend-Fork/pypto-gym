@@ -8,9 +8,9 @@
 # INCLUDING BUT NOT LIMITED TO NON-INFRINGEMENT, MERCHANTABILITY, OR FITNESS FOR A PARTICULAR PURPOSE.
 # See LICENSE in the root of the software repository for the full text of the License.
 # -----------------------------------------------------------------------------------------------------------
-"""mixed_quant_sparse_flash_mla 的测试入口（精度矩阵，jit / aclnn 双模）。
+"""mixed_quant_sparse_flash_mla 的测试入口（精度矩阵，jit / aclnn / torch 三模）。
 
-针对合约的全部 P0 case（13 条）：
+针对合约的全部 P0 case（16 条）：
 
 * 用 `tests/assets/mixed_quant_sparse_flash_mla_golden_cpu.py` 的 ``build_inputs``
   造输入（并按 host 规划器生成 kernel 消费的 ``metadata``），在设备上调用公开入口
@@ -19,7 +19,8 @@
 * 额外检查：输出污染门（torch.empty 语义，不允许残留 NaN）、有限性，以及（当 case
   提供紧致容差时）LSE 的 FP32 直接比较。
 * 调用入口由 `tests/common/op_caller.py` 按 `--mode` 选择：`jit` 走本算子
-  `op_kernel/` 宿主入口，`aclnn` 走 `tests/aclnn_bridge/` 的 pybind11 桥
+  `op_kernel/` 宿主入口，`aclnn` 走 `tests/aclnn_bridge/` 的 pybind11 桥，
+  `torch` 走安装态的 `torch.ops.pypto_gym.mixed_quant_sparse_flash_mla`
   （该模式下 `metadata` / `block_dim` / `fd_enable` 由框架 host tiling 决定，
   用例传入的同名参数被桥忽略）。
 
@@ -30,9 +31,10 @@
   # 子集
   python test_mixed_quant_sparse_flash_mla.py --cases mixed_decode,decode_1
 
-  # pytest（jit 直调 / aclnn）
+  # pytest（jit 直调 / aclnn / torch 安装态）
   pytest ops/pro/deepseek_v4_1/mixed_quant_sparse_flash_mla/tests -q --mode jit
   pytest ops/pro/deepseek_v4_1/mixed_quant_sparse_flash_mla/tests -q --mode aclnn
+  pytest ops/pro/deepseek_v4_1/mixed_quant_sparse_flash_mla/tests -q --mode torch
 
 返回码：全部精度通过为 0，否则 1。
 """
@@ -56,6 +58,8 @@ for _path in (_THIS_DIR, os.path.join(_THIS_DIR, "assets"), os.path.join(_OP_DIR
     if _path not in sys.path:
         sys.path.insert(0, _path)
 
+import _standalone_env  # noqa: E402,F401  直跑自举: 注入 tests/common、aclnn 桥与 vendor 环境
+
 import mixed_quant_sparse_flash_mla_golden_cpu as golden  # noqa: E402
 import mixed_quant_sparse_flash_mla_precision as verify  # noqa: E402
 
@@ -66,7 +70,7 @@ try:
 except ImportError:  # standalone run outside pytest (jit only)
     from mixed_quant_sparse_flash_mla import mixed_quant_sparse_flash_mla  # noqa: E402
 
-#: P0 case 名（合约定义的 13 条，按合同顺序）。
+#: P0 case 名（合约定义的 16 条，按合同顺序）。
 P0_CASES = list(golden.load_case_params().keys())
 
 #: 该 case 的空行/尾块附加准出要求严格 LSE：LSE 用 FP32 直接比较。
@@ -101,12 +105,29 @@ _INPUT_KEYS = (
 )
 
 
+def _kv_to_device(tensor, device):
+    """按真实 stride 上板：页间 padding 视图在设备侧重建，避免 .to() 压平成连续张量。"""
+    if tensor.is_contiguous():
+        return tensor.to(device)
+    strides = tuple(int(s) for s in tensor.stride())
+    extent = 1
+    for dim, stride in zip(tensor.shape, strides):
+        extent += (int(dim) - 1) * stride
+    backing = torch.full((extent,), 0xA5, dtype=tensor.dtype, device=device)
+    view = backing.as_strided(tuple(tensor.shape), strides)
+    view.copy_(tensor.to(device))
+    return view
+
+
 def _run_case(name, device):
     inputs, block_dim, case = golden.build_inputs(name, torch.device("cpu"))
     reference = golden.reference(name, inputs)
+    dev = {k: inputs[k].to(device) for k in _INPUT_KEYS if k not in ("ori_kv", "cmp_kv")}
     for key in ("ori_kv", "cmp_kv"):
-        inputs[key] = inputs[key].contiguous()
-    dev = {k: inputs[k].to(device) for k in _INPUT_KEYS}
+        dev[key] = _kv_to_device(inputs[key], device)
+    if case.get("kv_axis0_noncontiguous", False):
+        for key in ("ori_kv", "cmp_kv"):
+            assert not dev[key].is_contiguous(), f"{name}: {key} must stay page-padded on device"
     rows = int(inputs["q"].shape[0])
     out = torch.full(tuple(inputs["q"].shape), float("nan"), dtype=torch.bfloat16, device=device)
     lse = torch.full((1, rows, 64), float("nan"), dtype=torch.float32, device=device)

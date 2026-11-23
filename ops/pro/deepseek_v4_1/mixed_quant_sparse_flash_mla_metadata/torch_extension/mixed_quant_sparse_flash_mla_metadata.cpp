@@ -14,8 +14,8 @@
  */
 
 /*!
- * \file mixed_quant_sparse_flash_mla_metadata_pto_bnn.cpp
- * \brief Precompiled Torch binding for aclnnMixedQuantSparseFlashMlaMetadataPtoBnn.
+ * \file mixed_quant_sparse_flash_mla_metadata.cpp
+ * \brief Precompiled Torch binding for aclnnMixedQuantSparseFlashMlaMetadata.
  */
 
 #include "gym_aclnn.h"
@@ -87,11 +87,11 @@ static void EnqueuePlan(const std::array<bool, 5> &present,
       int64_t, int64_t, const aclTensor *, const aclTensor *, uint64_t *,
       aclOpExecutor **);
   static const auto get_workspace = gym_torch::Symbol<GetWorkspace>(
-      "aclnnMixedQuantSparseFlashMlaMetadataPtoBnnGetWorkspaceSize");
+      "aclnnMixedQuantSparseFlashMlaMetadataGetWorkspaceSize");
   static const auto execute = gym_torch::Symbol<gym_torch::Execute>(
-      "aclnnMixedQuantSparseFlashMlaMetadataPtoBnn");
+      "aclnnMixedQuantSparseFlashMlaMetadata");
   gym_torch::Enqueue(
-      "aclnnMixedQuantSparseFlashMlaMetadataPtoBnn", defined,
+      "aclnnMixedQuantSparseFlashMlaMetadata", defined,
       [present, blocks, has_cmp, k_ori, k_cmp, bs_ori, bs_cmp, bt_ori, bt_cmp,
        ori_pages, cmp_pages, ori_kv_stride0,
        cmp_kv_stride0](const std::vector<gym_torch::TensorInfo> &infos, auto stream) {
@@ -109,7 +109,7 @@ static void EnqueuePlan(const std::array<bool, 5> &present,
             ori_kv_stride0, cmp_kv_stride0, handles[3].get(), handles[4].get(),
             &bytes, &executor);
         TORCH_CHECK(status == 0,
-                    "aclnnMixedQuantSparseFlashMlaMetadataPtoBnnGetWorkspaceSize "
+                    "aclnnMixedQuantSparseFlashMlaMetadataGetWorkspaceSize "
                     "failed, status=", status, ": ", aclGetRecentErrMsg());
         gym_torch::ExecuteOp(execute, bytes, executor, stream);
         return 0;
@@ -188,7 +188,7 @@ static Result Meta(const at::Tensor &cu_seqlens_q,
 } // namespace
 
 TORCH_LIBRARY_FRAGMENT(pypto_gym, m) {
-  m.def("mixed_quant_sparse_flash_mla_metadata_pto_bnn(Tensor cu_seqlens_q, "
+  m.def("mixed_quant_sparse_flash_mla_metadata(Tensor cu_seqlens_q, "
         "Tensor ori_topk_length, Tensor? cmp_topk_length=None, int blocks=28, "
         "int has_cmp=1, int k_ori=0, int k_cmp=0, int bs_ori=0, int bs_cmp=0, "
         "int bt_ori=0, int bt_cmp=0, int ori_pages=0, int cmp_pages=0, "
@@ -196,9 +196,9 @@ TORCH_LIBRARY_FRAGMENT(pypto_gym, m) {
 }
 
 TORCH_LIBRARY_IMPL(pypto_gym, PrivateUse1, m) {
-  m.impl("mixed_quant_sparse_flash_mla_metadata_pto_bnn", TORCH_FN(Run));
+  m.impl("mixed_quant_sparse_flash_mla_metadata", TORCH_FN(Run));
 }
 
 TORCH_LIBRARY_IMPL(pypto_gym, Meta, m) {
-  m.impl("mixed_quant_sparse_flash_mla_metadata_pto_bnn", TORCH_FN(Meta));
+  m.impl("mixed_quant_sparse_flash_mla_metadata", TORCH_FN(Meta));
 }

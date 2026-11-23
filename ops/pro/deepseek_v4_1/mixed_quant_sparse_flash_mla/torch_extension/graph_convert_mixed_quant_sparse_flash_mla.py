@@ -14,7 +14,7 @@
 
 作用（与 cann_ops_transformer 的 quant_flash_attn_grad / flash_mla 一致）:
 
-1. 在 torchair 的 fx2ge 转换表里注册本算子(``torch.ops.pypto_gym.mixed_quant_sparse_flash_mla_pto_bnn``),
+1. 在 torchair 的 fx2ge 转换表里注册本算子(``torch.ops.pypto_gym.mixed_quant_sparse_flash_mla``),
    使 torch.compile(torchair backend) 遇到该节点时不再报 "unsupported op", 而是得到
    明确的 "GE not supported!" —— 本算子只支持 aclgraph(NPUGraph 捕获)路径, 不提供 GE
    算子下沉;
@@ -53,7 +53,7 @@ if _TORCHAIR_AVAILABLE:
          False, True, True, True, True, True, True, True,
          True, True, True],
     )
-    def MixedQuantSparseFlashMlaPtoBnn(
+    def MixedQuantSparseFlashMla(
         q: Tensor,
         ori_kv: Tensor,
         ori_sparse_indices: Tensor,
@@ -85,9 +85,9 @@ if _TORCHAIR_AVAILABLE:
         return result, lse_result
 
     @register_fx_node_ge_converter(
-        torch.ops.pypto_gym.mixed_quant_sparse_flash_mla_pto_bnn.default
+        torch.ops.pypto_gym.mixed_quant_sparse_flash_mla.default
     )
-    def convert_mixed_quant_sparse_flash_mla_pto_bnn(
+    def convert_mixed_quant_sparse_flash_mla(
         q: Tensor,
         ori_kv: Tensor,
         ori_sparse_indices: Tensor,

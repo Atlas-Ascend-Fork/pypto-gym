@@ -9,4 +9,4 @@
 # -----------------------------------------------------------------------------------------------------------
 # 算子 aclnn 模式 pybind11 桥: torch.Tensor 接口 → dlopen libcust_opapi.so 调 C++ aclnn 接口.
 # 命名(源文件/目标/产物/模块)由 gym_add_aclnn_bridge 按 aclnn_bridge_<op> 约定统一生成.
-gym_add_aclnn_bridge(mixed_quant_sparse_flash_mla_metadata_pto_bnn)
+gym_add_aclnn_bridge(mixed_quant_sparse_flash_mla_metadata)

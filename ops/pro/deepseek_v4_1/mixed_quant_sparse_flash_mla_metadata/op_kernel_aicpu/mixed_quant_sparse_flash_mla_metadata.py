@@ -10,7 +10,7 @@
 # -----------------------------------------------------------------------------------------------------------
 """MQSMLA metadata planner as an AICPU kernel (device-side, no host readback).
 
-Same plan as the host entry ``mixed_quant_sparse_flash_mla_metadata_pto_bnn``: uniform whole-row split, or the flat
+Same plan as the host entry ``mixed_quant_sparse_flash_mla_metadata``: uniform whole-row split, or the flat
 ``(row, tile)`` FlashDecode split when it saves at least ``FD_MIN_SAVED_TILES`` of the modelled critical path.
 The kernel reads every length tensor on device and writes the ``int32[1024]`` metadata in place.
 
@@ -240,7 +240,7 @@ def _write_zeros(md):
 # AICPU DSL 不支持 dataclass 组包, 而 15 参 helper 会触发 G.FNM.03, 故按字序内联。
 # 签名参数即算子 ABI(每个标量对应一个 aclnn attr 槽位), 不可组包精简(G.FNM.03 固有)。
 @pl.jit(mode="aicpu_kernel", arch="3510")
-def mixed_quant_sparse_flash_mla_metadata_pto_bnn(
+def mixed_quant_sparse_flash_mla_metadata(
     cu_seqlens_q: pl.Tensor[[pl.DYNAMIC], pl.DT_INT32],
     ori_topk_length: pl.Tensor[[pl.DYNAMIC, pl.DYNAMIC], pl.DT_INT32],
     cmp_topk_length: pl.Tensor[[pl.DYNAMIC, pl.DYNAMIC], pl.DT_INT32],
@@ -362,7 +362,7 @@ def _cube_core_num(device):
     return int(torch.npu.get_device_properties(device).cube_core_num)
 
 
-def mixed_quant_sparse_flash_mla_metadata_pto_bnn_aicpu(
+def mixed_quant_sparse_flash_mla_metadata_aicpu(
     ori_topk_length,
     cmp_topk_length=None,
     *,
@@ -402,7 +402,7 @@ def mixed_quant_sparse_flash_mla_metadata_pto_bnn_aicpu(
     has_cmp = 1 if (has_cmp_kv and cmp_topk_length is not None) else 0
     metadata = torch.empty(MQSMLA_METADATA_TOTAL_SIZE, dtype=torch.int32, device=device)
     tiling_device = torch.empty(TILING_DEVICE_SIZE, dtype=torch.int32, device=device)
-    mixed_quant_sparse_flash_mla_metadata_pto_bnn(
+    mixed_quant_sparse_flash_mla_metadata(
         cu_q, ori_topk_length, cmp_topk_length if has_cmp else None,
         metadata, tiling_device, blocks, has_cmp, int(k_ori), int(k_cmp),
         int(bs_ori), int(bs_cmp), int(bt_ori), int(bt_cmp),
