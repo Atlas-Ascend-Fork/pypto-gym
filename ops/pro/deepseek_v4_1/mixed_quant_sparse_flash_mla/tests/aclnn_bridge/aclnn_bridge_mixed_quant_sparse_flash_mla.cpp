@@ -52,7 +52,7 @@ typedef aclnnStatus (*aclnnMixedQuantSparseFlashMlaGetWorkspaceSizeFunc)(
     const aclIntArray *, const aclTensor *,
     const aclTensor *, const aclTensor *, const aclTensor *,
     const aclIntArray *, const aclIntArray *,
-    const aclTensor *,
+    const aclTensor *, const aclTensor *,
     char *, char *, double,
     const aclTensor *, const aclTensor *,
     uint64_t *, aclOpExecutor **);
@@ -72,6 +72,7 @@ PYBIND11_MODULE(aclnn_bridge_mixed_quant_sparse_flash_mla, m) {
              torch::Tensor cu_seqlens_q,
              torch::Tensor sinks,
              c10::optional<torch::Tensor> metadata,
+             c10::optional<torch::Tensor> tiling_device,
              int64_t quant_mode,
              c10::optional<double> softmax_scale,
              c10::optional<torch::Tensor> cmp_kv,
@@ -97,6 +98,8 @@ PYBIND11_MODULE(aclnn_bridge_mixed_quant_sparse_flash_mla, m) {
               TORCH_CHECK(quant_mode == 1, "aclnn: only quant_mode=1 is supported");
               TORCH_CHECK(metadata.has_value() && metadata->defined(),
                           "aclnn: metadata is required");
+              TORCH_CHECK(tiling_device.has_value() && tiling_device->defined(),
+                          "aclnn: tiling_device is required");
               TORCH_CHECK(layout_q == "TND" && layout_kv == "PA_BBND",
                           "aclnn: only layout_q='TND', layout_kv='PA_BBND' are supported");
 
@@ -140,6 +143,7 @@ PYBIND11_MODULE(aclnn_bridge_mixed_quant_sparse_flash_mla, m) {
                   make_acl_tensor(cmp_sparse_indices),
                   make_acl_tensor(cmp_block_table)};
               aclTensor *metadata_t = make_acl_tensor(*metadata);
+              aclTensor *tiling_device_t = make_acl_tensor(*tiling_device);
               std::vector<aclTensor *> acl_outputs = {
                   make_acl_tensor(out_t), make_acl_tensor(lse_t)};
 
@@ -151,6 +155,7 @@ PYBIND11_MODULE(aclnn_bridge_mixed_quant_sparse_flash_mla, m) {
                   acl_inputs[5], acl_inputs[6], acl_inputs[7],
                   cmp_len_arr, cu_arr,
                   metadata_t,
+                  tiling_device_t,
                   layout_q_value.data(), layout_kv_value.data(), scale_v,
                   acl_outputs[0], acl_outputs[1],
                   &workspace_size, &executor);
@@ -175,6 +180,7 @@ PYBIND11_MODULE(aclnn_bridge_mixed_quant_sparse_flash_mla, m) {
                   destroy_acl_tensor(tensor);
               }
               destroy_acl_tensor(metadata_t);
+              destroy_acl_tensor(tiling_device_t);
               destroy_acl_int_array(ori_len_arr);
               destroy_acl_int_array(cmp_len_arr);
               destroy_acl_int_array(cu_arr);
@@ -192,6 +198,7 @@ PYBIND11_MODULE(aclnn_bridge_mixed_quant_sparse_flash_mla, m) {
           pybind11::arg("cu_seqlens_q"),
           pybind11::arg("sinks"),
           pybind11::arg("metadata") = pybind11::none(),
+          pybind11::arg("tiling_device") = pybind11::none(),
           pybind11::arg("quant_mode") = 1,
           pybind11::arg("softmax_scale") = pybind11::none(),
           pybind11::arg("cmp_kv") = pybind11::none(),

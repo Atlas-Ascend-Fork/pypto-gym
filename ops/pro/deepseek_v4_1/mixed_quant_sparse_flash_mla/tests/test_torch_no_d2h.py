@@ -50,8 +50,27 @@ for _path in (_THIS_DIR, os.path.join(_THIS_DIR, "assets")):
 
 import _standalone_env  # noqa: E402,F401  直跑自举: 注入 tests/common 与安装态 vendor 环境
 
-import mixed_quant_sparse_flash_mla_golden_cpu as golden  # noqa: E402
-import mixed_quant_sparse_flash_mla_precision as verify  # noqa: E402
+
+def _load_asset(module_name, file_path):
+    # 显式路径加载: ops/pypto_pro 下同名算子目录的 assets 会经根 conftest 注入
+    # sys.path 并遮蔽本目录同名 golden, 必须按文件路径加载
+    import importlib.util
+
+    spec = importlib.util.spec_from_file_location(module_name, file_path)
+    module = importlib.util.module_from_spec(spec)
+    sys.modules[module_name] = module
+    spec.loader.exec_module(module)
+    return module
+
+
+golden = _load_asset(
+    "mixed_quant_sparse_flash_mla_golden_cpu",
+    os.path.join(_THIS_DIR, "assets", "mixed_quant_sparse_flash_mla_golden_cpu.py"),
+)
+verify = _load_asset(
+    "mixed_quant_sparse_flash_mla_precision",
+    os.path.join(_THIS_DIR, "assets", "mixed_quant_sparse_flash_mla_precision.py"),
+)
 
 try:
     from pypto_gym import (  # noqa: E402

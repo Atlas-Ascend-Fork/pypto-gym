@@ -23,10 +23,14 @@ using gym_test_bridge::get_current_npu_stream;
 using gym_test_bridge::get_opapi_func;
 using gym_test_bridge::make_acl_tensor;
 
+// 形参顺序 = 手写 op_api aclnn_mixed_quant_sparse_flash_mla_metadata.cpp
+// (3 输入张量 + 12 标量 + out/tilingDevice 两个输出张量)
 typedef aclnnStatus (*GetWorkspaceSizeFunc)(
     const aclTensor *, const aclTensor *, const aclTensor *,
     int64_t, int64_t, int64_t, int64_t,
-    const aclTensor *, uint64_t *, aclOpExecutor **);
+    int64_t, int64_t, int64_t, int64_t, int64_t, int64_t, int64_t, int64_t,
+    const aclTensor *, const aclTensor *,
+    uint64_t *, aclOpExecutor **);
 typedef aclnnStatus (*RunFunc)(void *, uint64_t, aclOpExecutor *, aclrtStream);
 
 } // namespace
@@ -41,7 +45,15 @@ PYBIND11_MODULE(aclnn_bridge_mixed_quant_sparse_flash_mla_metadata, m) {
              int64_t blocks,
              int64_t has_cmp,
              int64_t k_ori,
-             int64_t k_cmp) {
+             int64_t k_cmp,
+             int64_t bs_ori,
+             int64_t bs_cmp,
+             int64_t bt_ori,
+             int64_t bt_cmp,
+             int64_t ori_pages,
+             int64_t cmp_pages,
+             int64_t ori_kv_stride0,
+             int64_t cmp_kv_stride0) {
               static auto get_ws_size = reinterpret_cast<GetWorkspaceSizeFunc>(
                   get_opapi_func("aclnnMixedQuantSparseFlashMlaMetadataGetWorkspaceSize"));
               static auto aclnn_op = reinterpret_cast<RunFunc>(
@@ -49,6 +61,8 @@ PYBIND11_MODULE(aclnn_bridge_mixed_quant_sparse_flash_mla_metadata, m) {
 
               torch::Tensor md = torch::empty(
                   {1024}, cu_seqlens_q.options().dtype(at::kInt));
+              torch::Tensor td = torch::empty(
+                  {16}, cu_seqlens_q.options().dtype(at::kInt));
               aclTensor *cu_t = make_acl_tensor(cu_seqlens_q);
               aclTensor *ori_t = make_acl_tensor(ori_topk_length);
               // A null input tensor aborts the AICPU task; an absent cmp side passes a
@@ -60,11 +74,14 @@ PYBIND11_MODULE(aclnn_bridge_mixed_quant_sparse_flash_mla_metadata, m) {
               aclTensor *cmp_t = make_acl_tensor(
                   cmp_topk_length.has_value() && cmp_topk_length->defined() ? *cmp_topk_length : cmp_holder);
               aclTensor *md_t = make_acl_tensor(md);
+              aclTensor *td_t = make_acl_tensor(td);
 
               uint64_t workspace_size = 0;
               aclOpExecutor *executor = nullptr;
               aclnnStatus status = get_ws_size(
-                  cu_t, ori_t, cmp_t, blocks, has_cmp, k_ori, k_cmp, md_t,
+                  cu_t, ori_t, cmp_t, blocks, has_cmp, k_ori, k_cmp,
+                  bs_ori, bs_cmp, bt_ori, bt_cmp, ori_pages, cmp_pages,
+                  ori_kv_stride0, cmp_kv_stride0, md_t, td_t,
                   &workspace_size, &executor);
               if (status == 0) {
                   at::Tensor workspace;
@@ -83,8 +100,9 @@ PYBIND11_MODULE(aclnn_bridge_mixed_quant_sparse_flash_mla_metadata, m) {
               destroy_acl_tensor(ori_t);
               destroy_acl_tensor(cmp_t);
               destroy_acl_tensor(md_t);
+              destroy_acl_tensor(td_t);
               TORCH_CHECK(status == 0, "aclnn metadata planner failed, status=", status);
-              return md;
+              return pybind11::make_tuple(md, td);
           },
           pybind11::arg("cu_seqlens_q"),
           pybind11::arg("ori_topk_length"),
@@ -92,5 +110,13 @@ PYBIND11_MODULE(aclnn_bridge_mixed_quant_sparse_flash_mla_metadata, m) {
           pybind11::arg("blocks") = 28,
           pybind11::arg("has_cmp") = 1,
           pybind11::arg("k_ori") = 0,
-          pybind11::arg("k_cmp") = 0);
+          pybind11::arg("k_cmp") = 0,
+          pybind11::arg("bs_ori") = 0,
+          pybind11::arg("bs_cmp") = 0,
+          pybind11::arg("bt_ori") = 0,
+          pybind11::arg("bt_cmp") = 0,
+          pybind11::arg("ori_pages") = 0,
+          pybind11::arg("cmp_pages") = 0,
+          pybind11::arg("ori_kv_stride0") = 0,
+          pybind11::arg("cmp_kv_stride0") = 0);
 }

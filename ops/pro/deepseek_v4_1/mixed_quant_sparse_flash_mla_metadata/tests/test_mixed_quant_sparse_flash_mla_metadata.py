@@ -41,10 +41,29 @@ for _path in (_THIS_DIR, _MAIN_TESTS, os.path.join(_MAIN_TESTS, "assets")):
 
 import _standalone_env  # noqa: E402,F401  直跑自举: 注入 tests/common、aclnn 桥与 vendor 环境
 
+
+def _load_asset(module_name, file_path):
+    # 显式路径加载: ops/pypto_pro 下同名算子目录的 assets 会经根 conftest 注入
+    # sys.path 并遮蔽主算子目录的同名 golden, 必须按文件路径加载
+    import importlib.util
+
+    spec = importlib.util.spec_from_file_location(module_name, file_path)
+    module = importlib.util.module_from_spec(spec)
+    sys.modules[module_name] = module
+    spec.loader.exec_module(module)
+    return module
+
+
 try:
-    import mixed_quant_sparse_flash_mla_golden_cpu as golden  # noqa: E402
-    import mixed_quant_sparse_flash_mla_precision as verify  # noqa: E402
-except ImportError:  # 主算子用例未随仓部署时，只保留 metadata 的形状/契约检查
+    golden = _load_asset(
+        "mixed_quant_sparse_flash_mla_golden_cpu",
+        os.path.join(_MAIN_TESTS, "assets", "mixed_quant_sparse_flash_mla_golden_cpu.py"),
+    )
+    verify = _load_asset(
+        "mixed_quant_sparse_flash_mla_precision",
+        os.path.join(_MAIN_TESTS, "assets", "mixed_quant_sparse_flash_mla_precision.py"),
+    )
+except OSError:  # 主算子用例未随仓部署时，只保留 metadata 的形状/契约检查
     pytest.skip("main operator golden assets are required for the metadata parity test",
                 allow_module_level=True)
 
