@@ -13,11 +13,6 @@
 Same plan as the host entry ``mixed_quant_sparse_flash_mla_metadata``: uniform whole-row split, or the flat
 ``(row, tile)`` FlashDecode split when it saves at least ``FD_MIN_SAVED_TILES`` of the modelled critical path.
 The kernel reads every length tensor on device and writes the ``int32[1024]`` metadata in place.
-
-Device-side tiling (``tiling_device``): the second output carries the tiling
-parameters the AI Core kernel consumes (shape scalars passed through from the
-host plus the value-derived planning results), so the main operator's host
-tiling stays value-free and no binding ever needs a D2H copy.
 """
 
 import torch
@@ -55,25 +50,6 @@ FD_MIN_SAVED_TILES_LONG = 2
 FD_MIN_ROWS_LONG = 96
 FD_TARGET_TILES_PER_CORE = 4
 FD_MIN_ROW_TILES = 5
-
-# tiling_device word layout (int32[16]): shape scalars + value-derived planning.
-TILING_DEVICE_SIZE = 16
-TD_T1 = 0
-TD_B_NUM = 1
-TD_K_ORI = 2
-TD_K_CMP = 3
-TD_BS_ORI = 4
-TD_BS_CMP = 5
-TD_BT_ORI = 6
-TD_BT_CMP = 7
-TD_ORI_PAGES = 8
-TD_CMP_PAGES = 9
-TD_ORI_KV_STRIDE0 = 10
-TD_CMP_KV_STRIDE0 = 11
-TD_PLANNED_BLOCK_DIM = 12
-TD_FD_ENABLE = 13
-TD_RESERVED0 = 14
-TD_RESERVED1 = 15
 
 
 def _ceil_div(a, b):
@@ -236,35 +212,23 @@ def _write_zeros(md):
         pl.setval(md, i, 0)
 
 
-# tiling_device 写入内联在 kernel 体内(12 个透传标量 + planned_blocks/fd_enable):
-# AICPU DSL 不支持 dataclass 组包, 而 15 参 helper 会触发 G.FNM.03, 故按字序内联。
-# 签名参数即算子 ABI(每个标量对应一个 aclnn attr 槽位), 不可组包精简(G.FNM.03 固有)。
 @pl.jit(mode="aicpu_kernel", arch="3510")
 def mixed_quant_sparse_flash_mla_metadata(
     cu_seqlens_q: pl.Tensor[[pl.DYNAMIC], pl.DT_INT32],
     ori_topk_length: pl.Tensor[[pl.DYNAMIC, pl.DYNAMIC], pl.DT_INT32],
     cmp_topk_length: pl.Tensor[[pl.DYNAMIC, pl.DYNAMIC], pl.DT_INT32],
     metadata: pl.Tensor[[MQSMLA_METADATA_TOTAL_SIZE], pl.DT_INT32, pl.Output],
-    tiling_device: pl.Tensor[[TILING_DEVICE_SIZE], pl.DT_INT32, pl.Output],
     blocks: pl.DT_INT32,
     has_cmp: pl.DT_INT32,
     k_ori: pl.DT_INT32,
     k_cmp: pl.DT_INT32,
-    bs_ori: pl.DT_INT32,
-    bs_cmp: pl.DT_INT32,
-    bt_ori: pl.DT_INT32,
-    bt_cmp: pl.DT_INT32,
-    ori_pages: pl.DT_INT32,
-    cmp_pages: pl.DT_INT32,
-    ori_kv_stride0: pl.DT_INT32,
-    cmp_kv_stride0: pl.DT_INT32,
 ):
     n_cu = pl.numel(cu_seqlens_q)
     rows = pl.getval(cu_seqlens_q, n_cu - 1)
     _write_zeros(metadata)
-    # 单趟同时求 total / worst / ub_max：每行只读一次长度，避免三趟重复的标量 GM 读。
+    # 单趟同时求 total / min_tiles / ub_max：每行只读一次长度，避免三趟重复的标量 GM 读。
     total = 0
-    worst = 0
+    min_tiles = 0
     ub_max = 0
     _u = pl.min(blocks, rows)
     _base = 0
@@ -279,7 +243,10 @@ def mixed_quant_sparse_flash_mla_metadata(
     for r in pl.range(rows):
         rt = _row_tiles(ori_topk_length, cmp_topk_length, r, has_cmp, k_ori, k_cmp)
         total = total + rt
-        worst = pl.max(worst, rt)
+        if r == 0:
+            min_tiles = rt
+        else:
+            min_tiles = pl.min(min_tiles, rt)
         _s = _s + rt
         if r + 1 == _next_end:
             ub_max = pl.max(ub_max, _s)
@@ -289,11 +256,10 @@ def mixed_quant_sparse_flash_mla_metadata(
 
     fd_ok = 1
     n_blocks = 0
-    n_splits = 0
-    # ub_max 已由上方单趟循环累积(见循环前注释); 此处历史上是第二趟扫描前的初始化,
-    # 合并单趟后遗留会把累积值清零, 使 saved_tiles 恒 <= 0, FD 路径永不可达.
     fd_floor = 0
-    if worst < FD_MIN_ROW_TILES:
+    # 短行（< FD_MIN_ROW_TILES 个 tile）落在 FD 切分边界会破坏 partial/LSE 归约；
+    # 混合长度行回退 uniform，与 host/C++ 规划器保持一致。
+    if min_tiles < FD_MIN_ROW_TILES:
         fd_ok = 0
     if rows <= 0 or blocks <= 0:
         fd_ok = 0
@@ -329,33 +295,9 @@ def mixed_quant_sparse_flash_mla_metadata(
             metadata, cu_seqlens_q, n_cu, ori_topk_length, cmp_topk_length,
             rows, n_blocks, total, has_cmp, k_ori, k_cmp,
         )
-        planned_blocks = n_blocks
     else:
         ublocks = pl.min(blocks, pl.max(rows, 1))
         _write_uniform(metadata, cu_seqlens_q, n_cu, rows, ublocks)
-        planned_blocks = ublocks
-
-    # 设备端 tiling 推导: 与原 op_host tiling.cpp 的 PlanMetadata 决策一致
-    # (FD 采纳 -> n_blocks, 否则 -> min(blocks, rows)); fd_enable 对齐
-    # md[900] > 0 (FD 写入但无 split 行时为 0)。主算子 host tiling 不再消费
-    # 任何张量值, launch 走全核超集, 这两个规划字仅作运行期参考信息。
-    fd_enable = 1 if (fd_ok == 1 and n_splits > 0) else 0
-    for i in pl.range(TILING_DEVICE_SIZE):
-        pl.setval(tiling_device, i, 0)
-    pl.setval(tiling_device, TD_T1, rows)
-    pl.setval(tiling_device, TD_B_NUM, n_cu)
-    pl.setval(tiling_device, TD_K_ORI, k_ori)
-    pl.setval(tiling_device, TD_K_CMP, k_cmp)
-    pl.setval(tiling_device, TD_BS_ORI, bs_ori)
-    pl.setval(tiling_device, TD_BS_CMP, bs_cmp)
-    pl.setval(tiling_device, TD_BT_ORI, bt_ori)
-    pl.setval(tiling_device, TD_BT_CMP, bt_cmp)
-    pl.setval(tiling_device, TD_ORI_PAGES, ori_pages)
-    pl.setval(tiling_device, TD_CMP_PAGES, cmp_pages)
-    pl.setval(tiling_device, TD_ORI_KV_STRIDE0, ori_kv_stride0)
-    pl.setval(tiling_device, TD_CMP_KV_STRIDE0, cmp_kv_stride0)
-    pl.setval(tiling_device, TD_PLANNED_BLOCK_DIM, planned_blocks)
-    pl.setval(tiling_device, TD_FD_ENABLE, fd_enable)
 
 
 def _cube_core_num(device):
@@ -371,29 +313,17 @@ def mixed_quant_sparse_flash_mla_metadata_aicpu(
     block_num=None,
     k_ori=0,
     k_cmp=0,
-    bs_ori=0,
-    bs_cmp=0,
-    bt_ori=0,
-    bt_cmp=0,
-    ori_pages=0,
-    cmp_pages=0,
-    ori_kv_stride0=0,
-    cmp_kv_stride0=0,
 ):
-    """Plan ``int32[1024]`` metadata and the ``int32[16]`` device tiling on the
-    AICPU core; no tensor value is read on the host.
-
-    Returns ``(metadata, tiling_device)``: the metadata schedule plus the
-    device-side tiling parameters consumed by the main operator's kernel.
-    """
+    """Plan ``int32[1024]`` metadata on the AICPU core; no tensor value is read on the host."""
     if not isinstance(ori_topk_length, torch.Tensor) or ori_topk_length.dtype != torch.int32:
         raise ValueError("ori_topk_length must be an int32 torch.Tensor")
     if cmp_topk_length is not None:
         if not isinstance(cmp_topk_length, torch.Tensor) or cmp_topk_length.dtype != torch.int32:
             raise ValueError("cmp_topk_length must be an int32 torch.Tensor or None")
+    rows = int(ori_topk_length.shape[0])
     device = ori_topk_length.device
     if cu_seqlens_q is None:
-        cu_q = torch.tensor([0, int(ori_topk_length.shape[0])], dtype=torch.int32, device=device)
+        cu_q = torch.tensor([0, rows], dtype=torch.int32, device=device)
     else:
         cu_q = cu_seqlens_q
     blocks = _cube_core_num(device.index) if block_num is None else int(block_num)
@@ -401,11 +331,8 @@ def mixed_quant_sparse_flash_mla_metadata_aicpu(
         raise ValueError(f"block_num must be in 1..{AIC_CORE_MAX_NUM}, got {blocks}")
     has_cmp = 1 if (has_cmp_kv and cmp_topk_length is not None) else 0
     metadata = torch.empty(MQSMLA_METADATA_TOTAL_SIZE, dtype=torch.int32, device=device)
-    tiling_device = torch.empty(TILING_DEVICE_SIZE, dtype=torch.int32, device=device)
     mixed_quant_sparse_flash_mla_metadata(
         cu_q, ori_topk_length, cmp_topk_length if has_cmp else None,
-        metadata, tiling_device, blocks, has_cmp, int(k_ori), int(k_cmp),
-        int(bs_ori), int(bs_cmp), int(bt_ori), int(bt_cmp),
-        int(ori_pages), int(cmp_pages), int(ori_kv_stride0), int(cmp_kv_stride0),
+        metadata, blocks, has_cmp, int(k_ori), int(k_cmp),
     )
-    return metadata, tiling_device
+    return metadata

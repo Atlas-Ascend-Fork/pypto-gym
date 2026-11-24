@@ -18,6 +18,7 @@
 import dataclasses
 import functools
 import math
+import weakref
 
 import torch
 
@@ -40,8 +41,12 @@ class MqsmlaTilingKey:
     FD_ENABLE: the planner produced split rows (FlashDecode); the block barrier and
     the split-row reduction are gated on it.
 
+    The KV gather always consumes the pre-resolved GM physical-row table: the
+    ``ori_sparse_indices`` / ``cmp_sparse_indices`` pointers address the
+    ``[T1, 1, k]`` views of that table, and ``row_tab_stride`` is its row stride.
     Only these conditions are compile-time; every numeric parameter
-    (softmax_scale / strides / b_num / k / bs / bt) is a runtime scalar.
+    (softmax_scale / strides / b_num / k / bs / bt / row_tab_stride) is a runtime
+    scalar.
     """
 
     HAS_ORI_LEN = TilingKeyField(bits=1, values=[0, 1])
@@ -71,12 +76,16 @@ class MqsmlaTiling:
     b_num: int
     k_ori: int
     k_cmp: int
+    k_ori_raw: int
+    k_cmp_raw: int
     bs_ori: int
     bs_cmp: int
     bt_ori: int
     bt_cmp: int
     ori_kv_stride0: int
     cmp_kv_stride0: int
+    ori_row_tab_stride: int
+    cmp_row_tab_stride: int
 
 
 @pl.vector_function
@@ -98,50 +107,70 @@ def zero_outc_vf(outc):
 
 
 @pl.vector_function
-def build_pair_tab_vf(idx_t, bt_t, tab, fan, tbase, bs_v, st_v, rb_v, segneg, win, cmax, cxl, pow2, shift):
+def build_pair_tab_row_vf(idx_t, tab, tbase, bs_v, st_v, rb_v, pow2, shift):
+    """Resolve 64 row indices to int64 byte addresses and pack row pairs.
+
+    Inputs stay int32.  ``vf.mull`` produces the 32x32->64 product as a lo/hi
+    register pair; ``vf.addc``/``vf.subc`` do the 64-bit add/minus.  The pair
+    table stores ``(min_addr, abs_gap)`` as int64 entries, so the main loop
+    can issue one 2-D load with an int64 stride.
+    """
     _pall_i32 = vf.create_mask(pattern=pl.MaskPattern.ALL, dtype=pl.DT_INT32)
     _pall_u32 = vf.create_mask(pattern=pl.MaskPattern.ALL, dtype=pl.DT_UINT32)
-    m_even = vf.create_mask(pattern=pl.MaskPattern.ALL, dtype=pl.DT_FP32)
+    zero_mask = vf.update_mask(0, dtype=pl.DT_UINT32)
     lane = vf.arange(0, dtype=pl.DT_INT32)
-    c = vf.adds(lane, win, _pall_i32)
-    c = vf.mins(c, cmax, _pall_i32)
-    rel = vf.adds(c, segneg, _pall_i32)
-    view = vf.bit_cast(rel, dtype=pl.DT_UINT32)
-    relu = vf.move(view, _pall_u32)
+    relu = vf.move(vf.bit_cast(lane, dtype=pl.DT_UINT32), _pall_u32)
     idxv = vf.gather(idx_t, relu, _pall_i32)
+    bs_minus_one_i32 = vf.full(bs_v - 1, dtype=pl.DT_INT32)
     if pow2 != 0:
         page = vf.shift_right(idxv, shift, _pall_i32)
-        msk = vf.full(bs_v - 1, dtype=pl.DT_INT32)
-        off = vf.and_(idxv, msk, _pall_i32)
+        off = vf.and_(idxv, bs_minus_one_i32, _pall_i32)
     else:
         bs_r = vf.full(bs_v, dtype=pl.DT_INT32)
         page = vf.div(idxv, bs_r, _pall_i32)
-        off = vf.mul(page, bs_r, _pall_i32)
-        off = vf.sub(idxv, off, _pall_i32)
-    view_1 = vf.bit_cast(page, dtype=pl.DT_UINT32)
-    pgu = vf.move(view_1, _pall_u32)
-    phys = vf.gather(bt_t, pgu, _pall_i32)
-    st_r = vf.full(st_v, dtype=pl.DT_INT32)
-    rb_r = vf.full(rb_v, dtype=pl.DT_INT32)
-    addr = vf.mul(phys, st_r, _pall_i32)
-    off = vf.mul(off, rb_r, _pall_i32)
-    addr = vf.add(addr, off, _pall_i32)
-    one = vf.full(1, dtype=pl.DT_INT32)
-    zero_r = vf.full(0, dtype=pl.DT_INT32)
-    ix = vf.xor(lane, one, _pall_i32)
-    asw = vf.gather(addr, ix)
-    lo = vf.min(addr, asw, _pall_i32)
-    df = vf.max(addr, asw, _pall_i32)
-    df = vf.sub(df, lo, _pall_i32)
-    par = vf.and_(lane, one, _pall_i32)
-    m_even = vf.eq(par, zero_r, _pall_i32)
-    packed = vf.select(lo, df, m_even)
-    vf.store_align(
-        tab + (64 * tbase), packed, _pall_i32, data_copy_mode=pl.DataCopyMode.DATA_BLOCK_COPY, block_stride=1
-    )
-    c = vf.full(cxl, dtype=pl.DT_INT32)
-    addr = vf.gather(addr, c)
-    vf.store_align(fan, addr, _pall_i32, [0, (8 * tbase)], dist=pl.StoreDist.FIRST_ELEMENT)
+        off = vf.sub(idxv, vf.mul(page, bs_r, _pall_i32), _pall_i32)
+    page_u = vf.move(vf.bit_cast(page, dtype=pl.DT_UINT32), _pall_u32)
+    off_u = vf.move(vf.bit_cast(off, dtype=pl.DT_UINT32), _pall_u32)
+    st_u = vf.full(st_v, dtype=pl.DT_UINT32)
+    rb_u = vf.full(rb_v, dtype=pl.DT_UINT32)
+    p_lo, p_hi = vf.mull(page_u, st_u, _pall_u32)
+    o_lo, o_hi = vf.mull(off_u, rb_u, _pall_u32)
+    carry, lo = vf.addc(p_lo, o_lo, zero_mask, _pall_u32)
+    _, hi = vf.addc(p_hi, o_hi, carry, _pall_u32)
+    # Store all 64 address words; the main loop forms (min, gap) scalars.
+    vf.store_align(tab + (64 * tbase), lo, hi, _pall_u32, dist=pl.StoreDist.INTLV_B32)
+
+
+@pl.vector_function
+def build_row_seg128_vf(idx_t, bt_t, out, col_base, out_off, wlast, nso_win, bs_v, bs_pow2, bs_shift):
+    """Fused-prologue row resolver: one 128-column tile per call."""
+    _pall_i32 = vf.create_mask(pattern=pl.MaskPattern.ALL, dtype=pl.DT_INT32)
+    _pall_u32 = vf.create_mask(pattern=pl.MaskPattern.ALL, dtype=pl.DT_UINT32)
+    lane = vf.arange(0, dtype=pl.DT_INT32)
+    zero_i32 = vf.full(0, dtype=pl.DT_INT32)
+    bs_full_i32 = vf.full(bs_v, dtype=pl.DT_INT32)
+    bs_minus_one_i32 = vf.full(bs_v - 1, dtype=pl.DT_INT32)
+    neg_one_i32 = vf.full(-1, dtype=pl.DT_INT32)
+    nso_win_i32 = vf.full(nso_win, dtype=pl.DT_INT32)
+    for seg in pl.range(0, 2, 1):
+        rel = vf.adds(lane, col_base + seg * 64, _pall_i32)
+        rel = vf.mins(rel, wlast, _pall_i32)
+        rel_u = vf.move(vf.bit_cast(rel, dtype=pl.DT_UINT32), _pall_u32)
+        idxv = vf.gather(idx_t, rel_u, _pall_i32)
+        idxv = vf.max(idxv, zero_i32, _pall_i32)
+        if bs_pow2 != 0:
+            page = vf.shift_right(idxv, bs_shift, _pall_i32)
+            off = vf.and_(idxv, bs_minus_one_i32, _pall_i32)
+        else:
+            page = vf.div(idxv, bs_full_i32, _pall_i32)
+            off = vf.sub(idxv, vf.mul(page, bs_full_i32, _pall_i32), _pall_i32)
+        pgu = vf.move(vf.bit_cast(page, dtype=pl.DT_UINT32), _pall_u32)
+        phys = vf.gather(bt_t, pgu, _pall_i32)
+        row = vf.add(vf.mul(phys, bs_full_i32, _pall_i32), off, _pall_i32)
+        row = vf.select(row, neg_one_i32, vf.lt(page, nso_win_i32, _pall_i32))
+        vf.store_align(
+            out + out_off + seg * 64, row, _pall_i32, data_copy_mode=pl.DataCopyMode.DATA_BLOCK_COPY, block_stride=1
+        )
 
 
 @pl.vector_function
@@ -533,8 +562,7 @@ def accum_last_init_vf(o0, o1, o2, o3, o4, o5, o6, o7, l_buf, outc):
         pk = vf.pack(vf.bit_cast(b, dtype=pl.DT_UINT32), part=pl.PackPart.LOWER, dtype=pl.DT_UINT16)
         pv = vf.bit_cast(pk, dtype=pl.DT_BF16)
         vf.store_align(
-            outc + (mul_1 + 0), pv, _pall_bf16,
-            data_copy_mode=pl.DataCopyMode.DATA_BLOCK_COPY, block_stride=1,
+            outc + (mul_1 + 0), pv, _pall_bf16, data_copy_mode=pl.DataCopyMode.DATA_BLOCK_COPY, block_stride=1
         )
         r = vf.load_align(o1, h * 64)
         r = vf.mul(r, inv, _pall_f32)
@@ -542,8 +570,7 @@ def accum_last_init_vf(o0, o1, o2, o3, o4, o5, o6, o7, l_buf, outc):
         pk = vf.pack(vf.bit_cast(b, dtype=pl.DT_UINT32), part=pl.PackPart.LOWER, dtype=pl.DT_UINT16)
         pv = vf.bit_cast(pk, dtype=pl.DT_BF16)
         vf.store_align(
-            outc + (mul_1 + 64), pv, _pall_bf16,
-            data_copy_mode=pl.DataCopyMode.DATA_BLOCK_COPY, block_stride=1,
+            outc + (mul_1 + 64), pv, _pall_bf16, data_copy_mode=pl.DataCopyMode.DATA_BLOCK_COPY, block_stride=1
         )
         r = vf.load_align(o2, h * 64)
         r = vf.mul(r, inv, _pall_f32)
@@ -551,8 +578,7 @@ def accum_last_init_vf(o0, o1, o2, o3, o4, o5, o6, o7, l_buf, outc):
         pk = vf.pack(vf.bit_cast(b, dtype=pl.DT_UINT32), part=pl.PackPart.LOWER, dtype=pl.DT_UINT16)
         pv = vf.bit_cast(pk, dtype=pl.DT_BF16)
         vf.store_align(
-            outc + (mul_1 + 128), pv, _pall_bf16,
-            data_copy_mode=pl.DataCopyMode.DATA_BLOCK_COPY, block_stride=1,
+            outc + (mul_1 + 128), pv, _pall_bf16, data_copy_mode=pl.DataCopyMode.DATA_BLOCK_COPY, block_stride=1
         )
         r = vf.load_align(o3, h * 64)
         r = vf.mul(r, inv, _pall_f32)
@@ -560,8 +586,7 @@ def accum_last_init_vf(o0, o1, o2, o3, o4, o5, o6, o7, l_buf, outc):
         pk = vf.pack(vf.bit_cast(b, dtype=pl.DT_UINT32), part=pl.PackPart.LOWER, dtype=pl.DT_UINT16)
         pv = vf.bit_cast(pk, dtype=pl.DT_BF16)
         vf.store_align(
-            outc + (mul_1 + 192), pv, _pall_bf16,
-            data_copy_mode=pl.DataCopyMode.DATA_BLOCK_COPY, block_stride=1,
+            outc + (mul_1 + 192), pv, _pall_bf16, data_copy_mode=pl.DataCopyMode.DATA_BLOCK_COPY, block_stride=1
         )
         r = vf.load_align(o4, h * 64)
         r = vf.mul(r, inv, _pall_f32)
@@ -569,8 +594,7 @@ def accum_last_init_vf(o0, o1, o2, o3, o4, o5, o6, o7, l_buf, outc):
         pk = vf.pack(vf.bit_cast(b, dtype=pl.DT_UINT32), part=pl.PackPart.LOWER, dtype=pl.DT_UINT16)
         pv = vf.bit_cast(pk, dtype=pl.DT_BF16)
         vf.store_align(
-            outc + (mul_1 + 256), pv, _pall_bf16,
-            data_copy_mode=pl.DataCopyMode.DATA_BLOCK_COPY, block_stride=1,
+            outc + (mul_1 + 256), pv, _pall_bf16, data_copy_mode=pl.DataCopyMode.DATA_BLOCK_COPY, block_stride=1
         )
         r = vf.load_align(o5, h * 64)
         r = vf.mul(r, inv, _pall_f32)
@@ -578,8 +602,7 @@ def accum_last_init_vf(o0, o1, o2, o3, o4, o5, o6, o7, l_buf, outc):
         pk = vf.pack(vf.bit_cast(b, dtype=pl.DT_UINT32), part=pl.PackPart.LOWER, dtype=pl.DT_UINT16)
         pv = vf.bit_cast(pk, dtype=pl.DT_BF16)
         vf.store_align(
-            outc + (mul_1 + 320), pv, _pall_bf16,
-            data_copy_mode=pl.DataCopyMode.DATA_BLOCK_COPY, block_stride=1,
+            outc + (mul_1 + 320), pv, _pall_bf16, data_copy_mode=pl.DataCopyMode.DATA_BLOCK_COPY, block_stride=1
         )
         r = vf.load_align(o6, h * 64)
         r = vf.mul(r, inv, _pall_f32)
@@ -587,8 +610,7 @@ def accum_last_init_vf(o0, o1, o2, o3, o4, o5, o6, o7, l_buf, outc):
         pk = vf.pack(vf.bit_cast(b, dtype=pl.DT_UINT32), part=pl.PackPart.LOWER, dtype=pl.DT_UINT16)
         pv = vf.bit_cast(pk, dtype=pl.DT_BF16)
         vf.store_align(
-            outc + (mul_1 + 384), pv, _pall_bf16,
-            data_copy_mode=pl.DataCopyMode.DATA_BLOCK_COPY, block_stride=1,
+            outc + (mul_1 + 384), pv, _pall_bf16, data_copy_mode=pl.DataCopyMode.DATA_BLOCK_COPY, block_stride=1
         )
         r = vf.load_align(o7, h * 64)
         r = vf.mul(r, inv, _pall_f32)
@@ -596,8 +618,7 @@ def accum_last_init_vf(o0, o1, o2, o3, o4, o5, o6, o7, l_buf, outc):
         pk = vf.pack(vf.bit_cast(b, dtype=pl.DT_UINT32), part=pl.PackPart.LOWER, dtype=pl.DT_UINT16)
         pv = vf.bit_cast(pk, dtype=pl.DT_BF16)
         vf.store_align(
-            outc + (mul_1 + 448), pv, _pall_bf16,
-            data_copy_mode=pl.DataCopyMode.DATA_BLOCK_COPY, block_stride=1,
+            outc + (mul_1 + 448), pv, _pall_bf16, data_copy_mode=pl.DataCopyMode.DATA_BLOCK_COPY, block_stride=1
         )
 
 
@@ -622,38 +643,31 @@ def accum_init_vf(res, o0, o1, o2, o3, o4, o5, o6, o7):
         vf.store_align(res + (mul_1 + 0), oo, _pall_f32, data_copy_mode=pl.DataCopyMode.DATA_BLOCK_COPY, block_stride=1)
         oo = vf.load_align(o1, h * 64)
         vf.store_align(
-            res + (mul_1 + 64), oo, _pall_f32,
-            data_copy_mode=pl.DataCopyMode.DATA_BLOCK_COPY, block_stride=1,
+            res + (mul_1 + 64), oo, _pall_f32, data_copy_mode=pl.DataCopyMode.DATA_BLOCK_COPY, block_stride=1
         )
         oo = vf.load_align(o2, h * 64)
         vf.store_align(
-            res + (mul_1 + 128), oo, _pall_f32,
-            data_copy_mode=pl.DataCopyMode.DATA_BLOCK_COPY, block_stride=1,
+            res + (mul_1 + 128), oo, _pall_f32, data_copy_mode=pl.DataCopyMode.DATA_BLOCK_COPY, block_stride=1
         )
         oo = vf.load_align(o3, h * 64)
         vf.store_align(
-            res + (mul_1 + 192), oo, _pall_f32,
-            data_copy_mode=pl.DataCopyMode.DATA_BLOCK_COPY, block_stride=1,
+            res + (mul_1 + 192), oo, _pall_f32, data_copy_mode=pl.DataCopyMode.DATA_BLOCK_COPY, block_stride=1
         )
         oo = vf.load_align(o4, h * 64)
         vf.store_align(
-            res + (mul_1 + 256), oo, _pall_f32,
-            data_copy_mode=pl.DataCopyMode.DATA_BLOCK_COPY, block_stride=1,
+            res + (mul_1 + 256), oo, _pall_f32, data_copy_mode=pl.DataCopyMode.DATA_BLOCK_COPY, block_stride=1
         )
         oo = vf.load_align(o5, h * 64)
         vf.store_align(
-            res + (mul_1 + 320), oo, _pall_f32,
-            data_copy_mode=pl.DataCopyMode.DATA_BLOCK_COPY, block_stride=1,
+            res + (mul_1 + 320), oo, _pall_f32, data_copy_mode=pl.DataCopyMode.DATA_BLOCK_COPY, block_stride=1
         )
         oo = vf.load_align(o6, h * 64)
         vf.store_align(
-            res + (mul_1 + 384), oo, _pall_f32,
-            data_copy_mode=pl.DataCopyMode.DATA_BLOCK_COPY, block_stride=1,
+            res + (mul_1 + 384), oo, _pall_f32, data_copy_mode=pl.DataCopyMode.DATA_BLOCK_COPY, block_stride=1
         )
         oo = vf.load_align(o7, h * 64)
         vf.store_align(
-            res + (mul_1 + 448), oo, _pall_f32,
-            data_copy_mode=pl.DataCopyMode.DATA_BLOCK_COPY, block_stride=1,
+            res + (mul_1 + 448), oo, _pall_f32, data_copy_mode=pl.DataCopyMode.DATA_BLOCK_COPY, block_stride=1
         )
 
 
@@ -684,8 +698,7 @@ def accum_last_vf(res, o0, o1, o2, o3, o4, o5, o6, o7, al, l_buf, outc):
         pk = vf.pack(vf.bit_cast(b, dtype=pl.DT_UINT32), part=pl.PackPart.LOWER, dtype=pl.DT_UINT16)
         pv = vf.bit_cast(pk, dtype=pl.DT_BF16)
         vf.store_align(
-            outc + (mul + 64), pv, _pall_bf16,
-            data_copy_mode=pl.DataCopyMode.DATA_BLOCK_COPY, block_stride=1,
+            outc + (mul + 64), pv, _pall_bf16, data_copy_mode=pl.DataCopyMode.DATA_BLOCK_COPY, block_stride=1
         )
         r = vf.load_align(res, mul + 128)
         oo = vf.load_align(o2, h * 64)
@@ -695,8 +708,7 @@ def accum_last_vf(res, o0, o1, o2, o3, o4, o5, o6, o7, al, l_buf, outc):
         pk = vf.pack(vf.bit_cast(b, dtype=pl.DT_UINT32), part=pl.PackPart.LOWER, dtype=pl.DT_UINT16)
         pv = vf.bit_cast(pk, dtype=pl.DT_BF16)
         vf.store_align(
-            outc + (mul + 128), pv, _pall_bf16,
-            data_copy_mode=pl.DataCopyMode.DATA_BLOCK_COPY, block_stride=1,
+            outc + (mul + 128), pv, _pall_bf16, data_copy_mode=pl.DataCopyMode.DATA_BLOCK_COPY, block_stride=1
         )
         r = vf.load_align(res, mul + 192)
         oo = vf.load_align(o3, h * 64)
@@ -706,8 +718,7 @@ def accum_last_vf(res, o0, o1, o2, o3, o4, o5, o6, o7, al, l_buf, outc):
         pk = vf.pack(vf.bit_cast(b, dtype=pl.DT_UINT32), part=pl.PackPart.LOWER, dtype=pl.DT_UINT16)
         pv = vf.bit_cast(pk, dtype=pl.DT_BF16)
         vf.store_align(
-            outc + (mul + 192), pv, _pall_bf16,
-            data_copy_mode=pl.DataCopyMode.DATA_BLOCK_COPY, block_stride=1,
+            outc + (mul + 192), pv, _pall_bf16, data_copy_mode=pl.DataCopyMode.DATA_BLOCK_COPY, block_stride=1
         )
         r = vf.load_align(res, mul + 256)
         oo = vf.load_align(o4, h * 64)
@@ -717,8 +728,7 @@ def accum_last_vf(res, o0, o1, o2, o3, o4, o5, o6, o7, al, l_buf, outc):
         pk = vf.pack(vf.bit_cast(b, dtype=pl.DT_UINT32), part=pl.PackPart.LOWER, dtype=pl.DT_UINT16)
         pv = vf.bit_cast(pk, dtype=pl.DT_BF16)
         vf.store_align(
-            outc + (mul + 256), pv, _pall_bf16,
-            data_copy_mode=pl.DataCopyMode.DATA_BLOCK_COPY, block_stride=1,
+            outc + (mul + 256), pv, _pall_bf16, data_copy_mode=pl.DataCopyMode.DATA_BLOCK_COPY, block_stride=1
         )
         r = vf.load_align(res, mul + 320)
         oo = vf.load_align(o5, h * 64)
@@ -728,8 +738,7 @@ def accum_last_vf(res, o0, o1, o2, o3, o4, o5, o6, o7, al, l_buf, outc):
         pk = vf.pack(vf.bit_cast(b, dtype=pl.DT_UINT32), part=pl.PackPart.LOWER, dtype=pl.DT_UINT16)
         pv = vf.bit_cast(pk, dtype=pl.DT_BF16)
         vf.store_align(
-            outc + (mul + 320), pv, _pall_bf16,
-            data_copy_mode=pl.DataCopyMode.DATA_BLOCK_COPY, block_stride=1,
+            outc + (mul + 320), pv, _pall_bf16, data_copy_mode=pl.DataCopyMode.DATA_BLOCK_COPY, block_stride=1
         )
         r = vf.load_align(res, mul + 384)
         oo = vf.load_align(o6, h * 64)
@@ -739,8 +748,7 @@ def accum_last_vf(res, o0, o1, o2, o3, o4, o5, o6, o7, al, l_buf, outc):
         pk = vf.pack(vf.bit_cast(b, dtype=pl.DT_UINT32), part=pl.PackPart.LOWER, dtype=pl.DT_UINT16)
         pv = vf.bit_cast(pk, dtype=pl.DT_BF16)
         vf.store_align(
-            outc + (mul + 384), pv, _pall_bf16,
-            data_copy_mode=pl.DataCopyMode.DATA_BLOCK_COPY, block_stride=1,
+            outc + (mul + 384), pv, _pall_bf16, data_copy_mode=pl.DataCopyMode.DATA_BLOCK_COPY, block_stride=1
         )
         r = vf.load_align(res, mul + 448)
         oo = vf.load_align(o7, h * 64)
@@ -750,8 +758,7 @@ def accum_last_vf(res, o0, o1, o2, o3, o4, o5, o6, o7, al, l_buf, outc):
         pk = vf.pack(vf.bit_cast(b, dtype=pl.DT_UINT32), part=pl.PackPart.LOWER, dtype=pl.DT_UINT16)
         pv = vf.bit_cast(pk, dtype=pl.DT_BF16)
         vf.store_align(
-            outc + (mul + 448), pv, _pall_bf16,
-            data_copy_mode=pl.DataCopyMode.DATA_BLOCK_COPY, block_stride=1,
+            outc + (mul + 448), pv, _pall_bf16, data_copy_mode=pl.DataCopyMode.DATA_BLOCK_COPY, block_stride=1
         )
 
 
@@ -1059,8 +1066,6 @@ def fd_lse_vf(m0, m1, l0, l1, lset):
 # ===========================================================================
 # Cube-section stages, inlined into mixed_quant_sparse_flash_mla_kernel
 # ===========================================================================
-
-
 def compute_qk(clk, _l0acnt, _l0bcnt, cube):
     """Cube QK stage: eight (64x64)x(64x128) chunks accumulated into l0c_s, moved to ub_s."""
     l1q = cube.l1q
@@ -1224,9 +1229,9 @@ def compute_pv(clk, m_wo, m_wc, m_ot, m_first, m_ms, m_t, _l0acnt, _l0bcnt, cube
     if mod_29 == 0:
         slot_14 = l1k_grp[slotm_slot_3]
         if actnm <= 16:
-            pv_a_bank_a = _l0a_re_1[_l0acnt_slot_2_1]
+            pv_a_a = _l0a_re_1[_l0acnt_slot_2_1]
             pl.set_validshape(l1p0, [64, 16])
-            pl.move(pv_a_bank_a, l1p0, offset=[0, 0])
+            pl.move(pv_a_a, l1p0, offset=[0, 0])
             pl.set_validshape(l1p0, [64, 128])
             _l0acnt = _l0acnt + 1
             _sb_a0 = _l0bcnt_slot_2_1
@@ -1234,7 +1239,7 @@ def compute_pv(clk, m_wo, m_wc, m_ot, m_first, m_ms, m_t, _l0acnt, _l0bcnt, cube
             pl.set_validshape(slot_14, [16, 64])
             pl.move(pv_b_a0, slot_14, offset=[0, 0])
             pl.set_validshape(slot_14, [128, 512])
-            pl.matmul(l0c_o_grp[_ob0], pv_a_bank_a, pv_b_a0)
+            pl.matmul(l0c_o_grp[_ob0], pv_a_a, pv_b_a0)
             _l0bcnt = _l0bcnt + 1
             pl.system.wait_cross_core(pipe=P.FIX, event_id=7, sync_mode=pl.CrossCoreSyncMode.INTRA_BLOCK)
             pl.move(t_4, l0c_o_grp[_ob0], acc_to_vec_mode=pl.AccToVecMode.DualModeSplitM)
@@ -1243,7 +1248,7 @@ def compute_pv(clk, m_wo, m_wc, m_ot, m_first, m_ms, m_t, _l0acnt, _l0bcnt, cube
             pl.set_validshape(slot_14, [16, 64])
             pl.move(pv_b_a1, slot_14, offset=[0, 64])
             pl.set_validshape(slot_14, [128, 512])
-            pl.matmul(l0c_o_grp[_ob1], pv_a_bank_a, pv_b_a1)
+            pl.matmul(l0c_o_grp[_ob1], pv_a_a, pv_b_a1)
             _l0bcnt = _l0bcnt + 1
             pl.move(t_5, l0c_o_grp[_ob1], acc_to_vec_mode=pl.AccToVecMode.DualModeSplitM)
             _sb_a2 = _l0bcnt & 3
@@ -1251,7 +1256,7 @@ def compute_pv(clk, m_wo, m_wc, m_ot, m_first, m_ms, m_t, _l0acnt, _l0bcnt, cube
             pl.set_validshape(slot_14, [16, 64])
             pl.move(pv_b_a2, slot_14, offset=[0, 128])
             pl.set_validshape(slot_14, [128, 512])
-            pl.matmul(l0c_o_grp[_ob2], pv_a_bank_a, pv_b_a2)
+            pl.matmul(l0c_o_grp[_ob2], pv_a_a, pv_b_a2)
             _l0bcnt = _l0bcnt + 1
             pl.move(t_6, l0c_o_grp[_ob2], acc_to_vec_mode=pl.AccToVecMode.DualModeSplitM)
             _sb_a3 = _l0bcnt & 3
@@ -1259,7 +1264,7 @@ def compute_pv(clk, m_wo, m_wc, m_ot, m_first, m_ms, m_t, _l0acnt, _l0bcnt, cube
             pl.set_validshape(slot_14, [16, 64])
             pl.move(pv_b_a3, slot_14, offset=[0, 192])
             pl.set_validshape(slot_14, [128, 512])
-            pl.matmul(l0c_o_grp[_ob3], pv_a_bank_a, pv_b_a3)
+            pl.matmul(l0c_o_grp[_ob3], pv_a_a, pv_b_a3)
             _l0bcnt = _l0bcnt + 1
             pl.move(t_7, l0c_o_grp[_ob3], acc_to_vec_mode=pl.AccToVecMode.DualModeSplitM)
             _sb_a4 = _l0bcnt & 3
@@ -1267,7 +1272,7 @@ def compute_pv(clk, m_wo, m_wc, m_ot, m_first, m_ms, m_t, _l0acnt, _l0bcnt, cube
             pl.set_validshape(slot_14, [16, 64])
             pl.move(pv_b_a4, slot_14, offset=[0, 256])
             pl.set_validshape(slot_14, [128, 512])
-            pl.matmul(l0c_o_grp[_ob4], pv_a_bank_a, pv_b_a4)
+            pl.matmul(l0c_o_grp[_ob4], pv_a_a, pv_b_a4)
             _l0bcnt = _l0bcnt + 1
             pl.move(t_8, l0c_o_grp[_ob4], acc_to_vec_mode=pl.AccToVecMode.DualModeSplitM)
             _sb_a5 = _l0bcnt & 3
@@ -1275,7 +1280,7 @@ def compute_pv(clk, m_wo, m_wc, m_ot, m_first, m_ms, m_t, _l0acnt, _l0bcnt, cube
             pl.set_validshape(slot_14, [16, 64])
             pl.move(pv_b_a5, slot_14, offset=[0, 320])
             pl.set_validshape(slot_14, [128, 512])
-            pl.matmul(l0c_o_grp[_ob5], pv_a_bank_a, pv_b_a5)
+            pl.matmul(l0c_o_grp[_ob5], pv_a_a, pv_b_a5)
             _l0bcnt = _l0bcnt + 1
             pl.move(t_9, l0c_o_grp[_ob5], acc_to_vec_mode=pl.AccToVecMode.DualModeSplitM)
             _sb_a6 = _l0bcnt & 3
@@ -1283,7 +1288,7 @@ def compute_pv(clk, m_wo, m_wc, m_ot, m_first, m_ms, m_t, _l0acnt, _l0bcnt, cube
             pl.set_validshape(slot_14, [16, 64])
             pl.move(pv_b_a6, slot_14, offset=[0, 384])
             pl.set_validshape(slot_14, [128, 512])
-            pl.matmul(l0c_o_grp[_ob6], pv_a_bank_a, pv_b_a6)
+            pl.matmul(l0c_o_grp[_ob6], pv_a_a, pv_b_a6)
             _l0bcnt = _l0bcnt + 1
             pl.move(t_10, l0c_o_grp[_ob6], acc_to_vec_mode=pl.AccToVecMode.DualModeSplitM)
             _sb_a7 = _l0bcnt & 3
@@ -1291,19 +1296,19 @@ def compute_pv(clk, m_wo, m_wc, m_ot, m_first, m_ms, m_t, _l0acnt, _l0bcnt, cube
             pl.set_validshape(slot_14, [16, 64])
             pl.move(pv_b_a7, slot_14, offset=[0, 448])
             pl.set_validshape(slot_14, [128, 512])
-            pl.matmul(l0c_o_grp[_ob7], pv_a_bank_a, pv_b_a7)
+            pl.matmul(l0c_o_grp[_ob7], pv_a_a, pv_b_a7)
             _l0bcnt = _l0bcnt + 1
             pl.move(t_11, l0c_o_grp[_ob7], acc_to_vec_mode=pl.AccToVecMode.DualModeSplitM)
         else:
-            pv_a_bank_b = _l0a_re[_l0acnt_slot_2_1]
-            pl.move(pv_a_bank_b, l1p0)
+            pv_a_b = _l0a_re[_l0acnt_slot_2_1]
+            pl.move(pv_a_b, l1p0)
             _l0acnt = _l0acnt + 1
             _sb_b0 = _l0bcnt_slot_2_1
             pv_b_b0 = _l0b_re_64[_sb_b0]
             pl.set_validshape(slot_14, [128, 64])
             pl.move(pv_b_b0, slot_14, offset=[0, 0])
             pl.set_validshape(slot_14, [128, 512])
-            pl.matmul(l0c_o_grp[_ob0], pv_a_bank_b, pv_b_b0)
+            pl.matmul(l0c_o_grp[_ob0], pv_a_b, pv_b_b0)
             _l0bcnt = _l0bcnt + 1
             pl.system.wait_cross_core(pipe=P.FIX, event_id=7, sync_mode=pl.CrossCoreSyncMode.INTRA_BLOCK)
             pl.move(t_4, l0c_o_grp[_ob0], acc_to_vec_mode=pl.AccToVecMode.DualModeSplitM)
@@ -1312,7 +1317,7 @@ def compute_pv(clk, m_wo, m_wc, m_ot, m_first, m_ms, m_t, _l0acnt, _l0bcnt, cube
             pl.set_validshape(slot_14, [128, 64])
             pl.move(pv_b_b1, slot_14, offset=[0, 64])
             pl.set_validshape(slot_14, [128, 512])
-            pl.matmul(l0c_o_grp[_ob1], pv_a_bank_b, pv_b_b1)
+            pl.matmul(l0c_o_grp[_ob1], pv_a_b, pv_b_b1)
             _l0bcnt = _l0bcnt + 1
             pl.move(t_5, l0c_o_grp[_ob1], acc_to_vec_mode=pl.AccToVecMode.DualModeSplitM)
             _sb_b2 = _l0bcnt & 3
@@ -1320,7 +1325,7 @@ def compute_pv(clk, m_wo, m_wc, m_ot, m_first, m_ms, m_t, _l0acnt, _l0bcnt, cube
             pl.set_validshape(slot_14, [128, 64])
             pl.move(pv_b_b2, slot_14, offset=[0, 128])
             pl.set_validshape(slot_14, [128, 512])
-            pl.matmul(l0c_o_grp[_ob2], pv_a_bank_b, pv_b_b2)
+            pl.matmul(l0c_o_grp[_ob2], pv_a_b, pv_b_b2)
             _l0bcnt = _l0bcnt + 1
             pl.move(t_6, l0c_o_grp[_ob2], acc_to_vec_mode=pl.AccToVecMode.DualModeSplitM)
             _sb_b3 = _l0bcnt & 3
@@ -1328,7 +1333,7 @@ def compute_pv(clk, m_wo, m_wc, m_ot, m_first, m_ms, m_t, _l0acnt, _l0bcnt, cube
             pl.set_validshape(slot_14, [128, 64])
             pl.move(pv_b_b3, slot_14, offset=[0, 192])
             pl.set_validshape(slot_14, [128, 512])
-            pl.matmul(l0c_o_grp[_ob3], pv_a_bank_b, pv_b_b3)
+            pl.matmul(l0c_o_grp[_ob3], pv_a_b, pv_b_b3)
             _l0bcnt = _l0bcnt + 1
             pl.move(t_7, l0c_o_grp[_ob3], acc_to_vec_mode=pl.AccToVecMode.DualModeSplitM)
             _sb_b4 = _l0bcnt & 3
@@ -1336,7 +1341,7 @@ def compute_pv(clk, m_wo, m_wc, m_ot, m_first, m_ms, m_t, _l0acnt, _l0bcnt, cube
             pl.set_validshape(slot_14, [128, 64])
             pl.move(pv_b_b4, slot_14, offset=[0, 256])
             pl.set_validshape(slot_14, [128, 512])
-            pl.matmul(l0c_o_grp[_ob4], pv_a_bank_b, pv_b_b4)
+            pl.matmul(l0c_o_grp[_ob4], pv_a_b, pv_b_b4)
             _l0bcnt = _l0bcnt + 1
             pl.move(t_8, l0c_o_grp[_ob4], acc_to_vec_mode=pl.AccToVecMode.DualModeSplitM)
             _sb_b5 = _l0bcnt & 3
@@ -1344,7 +1349,7 @@ def compute_pv(clk, m_wo, m_wc, m_ot, m_first, m_ms, m_t, _l0acnt, _l0bcnt, cube
             pl.set_validshape(slot_14, [128, 64])
             pl.move(pv_b_b5, slot_14, offset=[0, 320])
             pl.set_validshape(slot_14, [128, 512])
-            pl.matmul(l0c_o_grp[_ob5], pv_a_bank_b, pv_b_b5)
+            pl.matmul(l0c_o_grp[_ob5], pv_a_b, pv_b_b5)
             _l0bcnt = _l0bcnt + 1
             pl.move(t_9, l0c_o_grp[_ob5], acc_to_vec_mode=pl.AccToVecMode.DualModeSplitM)
             _sb_b6 = _l0bcnt & 3
@@ -1352,7 +1357,7 @@ def compute_pv(clk, m_wo, m_wc, m_ot, m_first, m_ms, m_t, _l0acnt, _l0bcnt, cube
             pl.set_validshape(slot_14, [128, 64])
             pl.move(pv_b_b6, slot_14, offset=[0, 384])
             pl.set_validshape(slot_14, [128, 512])
-            pl.matmul(l0c_o_grp[_ob6], pv_a_bank_b, pv_b_b6)
+            pl.matmul(l0c_o_grp[_ob6], pv_a_b, pv_b_b6)
             _l0bcnt = _l0bcnt + 1
             pl.move(t_10, l0c_o_grp[_ob6], acc_to_vec_mode=pl.AccToVecMode.DualModeSplitM)
             _sb_b7 = _l0bcnt & 3
@@ -1360,15 +1365,15 @@ def compute_pv(clk, m_wo, m_wc, m_ot, m_first, m_ms, m_t, _l0acnt, _l0bcnt, cube
             pl.set_validshape(slot_14, [128, 64])
             pl.move(pv_b_b7, slot_14, offset=[0, 448])
             pl.set_validshape(slot_14, [128, 512])
-            pl.matmul(l0c_o_grp[_ob7], pv_a_bank_b, pv_b_b7)
+            pl.matmul(l0c_o_grp[_ob7], pv_a_b, pv_b_b7)
             _l0bcnt = _l0bcnt + 1
             pl.move(t_11, l0c_o_grp[_ob7], acc_to_vec_mode=pl.AccToVecMode.DualModeSplitM)
     else:
         slot_15 = l1k_grp[slotm_slot_3]
         if actnm <= 16:
-            pv_a_bank_c = _l0a_re_1[_l0acnt_slot_2_1]
+            pv_a_c = _l0a_re_1[_l0acnt_slot_2_1]
             pl.set_validshape(l1p1, [64, 16])
-            pl.move(pv_a_bank_c, l1p1, offset=[0, 0])
+            pl.move(pv_a_c, l1p1, offset=[0, 0])
             pl.set_validshape(l1p1, [64, 128])
             _l0acnt = _l0acnt + 1
             _sb_c0 = _l0bcnt_slot_2_1
@@ -1376,7 +1381,7 @@ def compute_pv(clk, m_wo, m_wc, m_ot, m_first, m_ms, m_t, _l0acnt, _l0bcnt, cube
             pl.set_validshape(slot_15, [16, 64])
             pl.move(pv_b_c0, slot_15, offset=[0, 0])
             pl.set_validshape(slot_15, [128, 512])
-            pl.matmul(l0c_o_grp[_ob0], pv_a_bank_c, pv_b_c0)
+            pl.matmul(l0c_o_grp[_ob0], pv_a_c, pv_b_c0)
             _l0bcnt = _l0bcnt + 1
             pl.system.wait_cross_core(pipe=P.FIX, event_id=7, sync_mode=pl.CrossCoreSyncMode.INTRA_BLOCK)
             pl.move(t_4, l0c_o_grp[_ob0], acc_to_vec_mode=pl.AccToVecMode.DualModeSplitM)
@@ -1385,7 +1390,7 @@ def compute_pv(clk, m_wo, m_wc, m_ot, m_first, m_ms, m_t, _l0acnt, _l0bcnt, cube
             pl.set_validshape(slot_15, [16, 64])
             pl.move(pv_b_c1, slot_15, offset=[0, 64])
             pl.set_validshape(slot_15, [128, 512])
-            pl.matmul(l0c_o_grp[_ob1], pv_a_bank_c, pv_b_c1)
+            pl.matmul(l0c_o_grp[_ob1], pv_a_c, pv_b_c1)
             _l0bcnt = _l0bcnt + 1
             pl.move(t_5, l0c_o_grp[_ob1], acc_to_vec_mode=pl.AccToVecMode.DualModeSplitM)
             _sb_c2 = _l0bcnt & 3
@@ -1393,7 +1398,7 @@ def compute_pv(clk, m_wo, m_wc, m_ot, m_first, m_ms, m_t, _l0acnt, _l0bcnt, cube
             pl.set_validshape(slot_15, [16, 64])
             pl.move(pv_b_c2, slot_15, offset=[0, 128])
             pl.set_validshape(slot_15, [128, 512])
-            pl.matmul(l0c_o_grp[_ob2], pv_a_bank_c, pv_b_c2)
+            pl.matmul(l0c_o_grp[_ob2], pv_a_c, pv_b_c2)
             _l0bcnt = _l0bcnt + 1
             pl.move(t_6, l0c_o_grp[_ob2], acc_to_vec_mode=pl.AccToVecMode.DualModeSplitM)
             _sb_c3 = _l0bcnt & 3
@@ -1401,7 +1406,7 @@ def compute_pv(clk, m_wo, m_wc, m_ot, m_first, m_ms, m_t, _l0acnt, _l0bcnt, cube
             pl.set_validshape(slot_15, [16, 64])
             pl.move(pv_b_c3, slot_15, offset=[0, 192])
             pl.set_validshape(slot_15, [128, 512])
-            pl.matmul(l0c_o_grp[_ob3], pv_a_bank_c, pv_b_c3)
+            pl.matmul(l0c_o_grp[_ob3], pv_a_c, pv_b_c3)
             _l0bcnt = _l0bcnt + 1
             pl.move(t_7, l0c_o_grp[_ob3], acc_to_vec_mode=pl.AccToVecMode.DualModeSplitM)
             _sb_c4 = _l0bcnt & 3
@@ -1409,7 +1414,7 @@ def compute_pv(clk, m_wo, m_wc, m_ot, m_first, m_ms, m_t, _l0acnt, _l0bcnt, cube
             pl.set_validshape(slot_15, [16, 64])
             pl.move(pv_b_c4, slot_15, offset=[0, 256])
             pl.set_validshape(slot_15, [128, 512])
-            pl.matmul(l0c_o_grp[_ob4], pv_a_bank_c, pv_b_c4)
+            pl.matmul(l0c_o_grp[_ob4], pv_a_c, pv_b_c4)
             _l0bcnt = _l0bcnt + 1
             pl.move(t_8, l0c_o_grp[_ob4], acc_to_vec_mode=pl.AccToVecMode.DualModeSplitM)
             _sb_c5 = _l0bcnt & 3
@@ -1417,7 +1422,7 @@ def compute_pv(clk, m_wo, m_wc, m_ot, m_first, m_ms, m_t, _l0acnt, _l0bcnt, cube
             pl.set_validshape(slot_15, [16, 64])
             pl.move(pv_b_c5, slot_15, offset=[0, 320])
             pl.set_validshape(slot_15, [128, 512])
-            pl.matmul(l0c_o_grp[_ob5], pv_a_bank_c, pv_b_c5)
+            pl.matmul(l0c_o_grp[_ob5], pv_a_c, pv_b_c5)
             _l0bcnt = _l0bcnt + 1
             pl.move(t_9, l0c_o_grp[_ob5], acc_to_vec_mode=pl.AccToVecMode.DualModeSplitM)
             _sb_c6 = _l0bcnt & 3
@@ -1425,7 +1430,7 @@ def compute_pv(clk, m_wo, m_wc, m_ot, m_first, m_ms, m_t, _l0acnt, _l0bcnt, cube
             pl.set_validshape(slot_15, [16, 64])
             pl.move(pv_b_c6, slot_15, offset=[0, 384])
             pl.set_validshape(slot_15, [128, 512])
-            pl.matmul(l0c_o_grp[_ob6], pv_a_bank_c, pv_b_c6)
+            pl.matmul(l0c_o_grp[_ob6], pv_a_c, pv_b_c6)
             _l0bcnt = _l0bcnt + 1
             pl.move(t_10, l0c_o_grp[_ob6], acc_to_vec_mode=pl.AccToVecMode.DualModeSplitM)
             _sb_c7 = _l0bcnt & 3
@@ -1433,19 +1438,19 @@ def compute_pv(clk, m_wo, m_wc, m_ot, m_first, m_ms, m_t, _l0acnt, _l0bcnt, cube
             pl.set_validshape(slot_15, [16, 64])
             pl.move(pv_b_c7, slot_15, offset=[0, 448])
             pl.set_validshape(slot_15, [128, 512])
-            pl.matmul(l0c_o_grp[_ob7], pv_a_bank_c, pv_b_c7)
+            pl.matmul(l0c_o_grp[_ob7], pv_a_c, pv_b_c7)
             _l0bcnt = _l0bcnt + 1
             pl.move(t_11, l0c_o_grp[_ob7], acc_to_vec_mode=pl.AccToVecMode.DualModeSplitM)
         else:
-            pv_a_bank_d = _l0a_re[_l0acnt_slot_2_1]
-            pl.move(pv_a_bank_d, l1p1)
+            pv_a_d = _l0a_re[_l0acnt_slot_2_1]
+            pl.move(pv_a_d, l1p1)
             _l0acnt = _l0acnt + 1
             _sb_d0 = _l0bcnt_slot_2_1
             pv_b_d0 = _l0b_re_64[_sb_d0]
             pl.set_validshape(slot_15, [128, 64])
             pl.move(pv_b_d0, slot_15, offset=[0, 0])
             pl.set_validshape(slot_15, [128, 512])
-            pl.matmul(l0c_o_grp[_ob0], pv_a_bank_d, pv_b_d0)
+            pl.matmul(l0c_o_grp[_ob0], pv_a_d, pv_b_d0)
             _l0bcnt = _l0bcnt + 1
             pl.system.wait_cross_core(pipe=P.FIX, event_id=7, sync_mode=pl.CrossCoreSyncMode.INTRA_BLOCK)
             pl.move(t_4, l0c_o_grp[_ob0], acc_to_vec_mode=pl.AccToVecMode.DualModeSplitM)
@@ -1454,7 +1459,7 @@ def compute_pv(clk, m_wo, m_wc, m_ot, m_first, m_ms, m_t, _l0acnt, _l0bcnt, cube
             pl.set_validshape(slot_15, [128, 64])
             pl.move(pv_b_d1, slot_15, offset=[0, 64])
             pl.set_validshape(slot_15, [128, 512])
-            pl.matmul(l0c_o_grp[_ob1], pv_a_bank_d, pv_b_d1)
+            pl.matmul(l0c_o_grp[_ob1], pv_a_d, pv_b_d1)
             _l0bcnt = _l0bcnt + 1
             pl.move(t_5, l0c_o_grp[_ob1], acc_to_vec_mode=pl.AccToVecMode.DualModeSplitM)
             _sb_d2 = _l0bcnt & 3
@@ -1462,7 +1467,7 @@ def compute_pv(clk, m_wo, m_wc, m_ot, m_first, m_ms, m_t, _l0acnt, _l0bcnt, cube
             pl.set_validshape(slot_15, [128, 64])
             pl.move(pv_b_d2, slot_15, offset=[0, 128])
             pl.set_validshape(slot_15, [128, 512])
-            pl.matmul(l0c_o_grp[_ob2], pv_a_bank_d, pv_b_d2)
+            pl.matmul(l0c_o_grp[_ob2], pv_a_d, pv_b_d2)
             _l0bcnt = _l0bcnt + 1
             pl.move(t_6, l0c_o_grp[_ob2], acc_to_vec_mode=pl.AccToVecMode.DualModeSplitM)
             _sb_d3 = _l0bcnt & 3
@@ -1470,7 +1475,7 @@ def compute_pv(clk, m_wo, m_wc, m_ot, m_first, m_ms, m_t, _l0acnt, _l0bcnt, cube
             pl.set_validshape(slot_15, [128, 64])
             pl.move(pv_b_d3, slot_15, offset=[0, 192])
             pl.set_validshape(slot_15, [128, 512])
-            pl.matmul(l0c_o_grp[_ob3], pv_a_bank_d, pv_b_d3)
+            pl.matmul(l0c_o_grp[_ob3], pv_a_d, pv_b_d3)
             _l0bcnt = _l0bcnt + 1
             pl.move(t_7, l0c_o_grp[_ob3], acc_to_vec_mode=pl.AccToVecMode.DualModeSplitM)
             _sb_d4 = _l0bcnt & 3
@@ -1478,7 +1483,7 @@ def compute_pv(clk, m_wo, m_wc, m_ot, m_first, m_ms, m_t, _l0acnt, _l0bcnt, cube
             pl.set_validshape(slot_15, [128, 64])
             pl.move(pv_b_d4, slot_15, offset=[0, 256])
             pl.set_validshape(slot_15, [128, 512])
-            pl.matmul(l0c_o_grp[_ob4], pv_a_bank_d, pv_b_d4)
+            pl.matmul(l0c_o_grp[_ob4], pv_a_d, pv_b_d4)
             _l0bcnt = _l0bcnt + 1
             pl.move(t_8, l0c_o_grp[_ob4], acc_to_vec_mode=pl.AccToVecMode.DualModeSplitM)
             _sb_d5 = _l0bcnt & 3
@@ -1486,7 +1491,7 @@ def compute_pv(clk, m_wo, m_wc, m_ot, m_first, m_ms, m_t, _l0acnt, _l0bcnt, cube
             pl.set_validshape(slot_15, [128, 64])
             pl.move(pv_b_d5, slot_15, offset=[0, 320])
             pl.set_validshape(slot_15, [128, 512])
-            pl.matmul(l0c_o_grp[_ob5], pv_a_bank_d, pv_b_d5)
+            pl.matmul(l0c_o_grp[_ob5], pv_a_d, pv_b_d5)
             _l0bcnt = _l0bcnt + 1
             pl.move(t_9, l0c_o_grp[_ob5], acc_to_vec_mode=pl.AccToVecMode.DualModeSplitM)
             _sb_d6 = _l0bcnt & 3
@@ -1494,7 +1499,7 @@ def compute_pv(clk, m_wo, m_wc, m_ot, m_first, m_ms, m_t, _l0acnt, _l0bcnt, cube
             pl.set_validshape(slot_15, [128, 64])
             pl.move(pv_b_d6, slot_15, offset=[0, 384])
             pl.set_validshape(slot_15, [128, 512])
-            pl.matmul(l0c_o_grp[_ob6], pv_a_bank_d, pv_b_d6)
+            pl.matmul(l0c_o_grp[_ob6], pv_a_d, pv_b_d6)
             _l0bcnt = _l0bcnt + 1
             pl.move(t_10, l0c_o_grp[_ob6], acc_to_vec_mode=pl.AccToVecMode.DualModeSplitM)
             _sb_d7 = _l0bcnt & 3
@@ -1502,7 +1507,7 @@ def compute_pv(clk, m_wo, m_wc, m_ot, m_first, m_ms, m_t, _l0acnt, _l0bcnt, cube
             pl.set_validshape(slot_15, [128, 64])
             pl.move(pv_b_d7, slot_15, offset=[0, 448])
             pl.set_validshape(slot_15, [128, 512])
-            pl.matmul(l0c_o_grp[_ob7], pv_a_bank_d, pv_b_d7)
+            pl.matmul(l0c_o_grp[_ob7], pv_a_d, pv_b_d7)
             _l0bcnt = _l0bcnt + 1
             pl.move(t_11, l0c_o_grp[_ob7], acc_to_vec_mode=pl.AccToVecMode.DualModeSplitM)
     pl.system.set_cross_core(pipe=P.MTE1, event_id=1, sync_mode=pl.CrossCoreSyncMode.INTRA_BLOCK)
@@ -1918,9 +1923,44 @@ def compute_gu(clk_1, t_ms_1, t_t_1, gu):
     pl.system.set_cross_core(pipe=P.V, event_id=7, sync_mode=pl.CrossCoreSyncMode.INTRA_BLOCK)
 
 
-def _dq_ori_body(g, nv, ori_kv, slot, sub, tt, ttf, ub_pt, phase, par,
-                 slot_ring, p0, p1, p2, p3, p4, p5, p6, p7,
-                 f8_half, f8_full, bf_half, bf_full_row, f8_bank, bf_bank, knz, nz_out, vrow):
+def _pair_vals(tab, idx):
+    """Read two int64 addresses at ``idx``/``idx+1`` and return (min, gap)."""
+    a0 = pl.getval(tab, idx)
+    a1 = pl.getval(tab, idx + 1)
+    lo = pl.min(a0, a1)
+    return lo, pl.max(a0, a1) - lo
+
+
+def _dq_ori_body(
+    g,
+    nv,
+    ori_kv,
+    slot,
+    sub,
+    tt,
+    ttf,
+    ub_pt,
+    phase,
+    par,
+    slot_ring,
+    p0,
+    p1,
+    p2,
+    p3,
+    p4,
+    p5,
+    p6,
+    p7,
+    fp8_half,
+    fp8_full,
+    bf16_half,
+    bf16_full,
+    fp8_base,
+    bf16_base,
+    knz,
+    nz_out,
+    vrow,
+):
     """ORI KV dequant 主体: 一个 16 行 half-bank 的 gather/dequant/insert."""
     mul_19 = g * 16
     ng = pl.min(pl.max((nv - mul_19), 0), 16)
@@ -1929,100 +1969,83 @@ def _dq_ori_body(g, nv, ori_kv, slot, sub, tt, ttf, ub_pt, phase, par,
     if phase == 0:
         if nb > 0:
             if par == 0:
-                lov = pl.getval(ub_pt, (tb0))
-                dfv = pl.getval(ub_pt, ((tb0) + 1))
+                lov, dfv = _pair_vals(ub_pt, (tb0))
                 psrc_0 = pl.make_tensor(pl.addptr(pl.make_ptr(ori_kv), lov), [2, 544], [dfv, 1])
-                pl.load(p0, psrc_0, [0, 0], l2_cache_mode=pl.TLoadL2Hint.NotAllocKeep)
-                lov_1 = pl.getval(ub_pt, ((tb0) + 2))
-                dfv_1 = pl.getval(ub_pt, ((tb0) + 3))
+                pl.load(p0, psrc_0, [0, 0])
+                lov_1, dfv_1 = _pair_vals(ub_pt, ((tb0) + 2))
                 psrc_1 = pl.make_tensor(pl.addptr(pl.make_ptr(ori_kv), lov_1), [2, 544], [dfv_1, 1])
-                pl.load(p1, psrc_1, [0, 0], l2_cache_mode=pl.TLoadL2Hint.NotAllocKeep)
-                lov_2 = pl.getval(ub_pt, ((tb0) + 4))
-                dfv_2 = pl.getval(ub_pt, ((tb0) + 5))
+                pl.load(p1, psrc_1, [0, 0])
+                lov_2, dfv_2 = _pair_vals(ub_pt, ((tb0) + 4))
                 psrc_2 = pl.make_tensor(pl.addptr(pl.make_ptr(ori_kv), lov_2), [2, 544], [dfv_2, 1])
-                pl.load(p2, psrc_2, [0, 0], l2_cache_mode=pl.TLoadL2Hint.NotAllocKeep)
-                lov_3 = pl.getval(ub_pt, ((tb0) + 6))
-                dfv_3 = pl.getval(ub_pt, ((tb0) + 7))
+                pl.load(p2, psrc_2, [0, 0])
+                lov_3, dfv_3 = _pair_vals(ub_pt, ((tb0) + 6))
                 psrc_3 = pl.make_tensor(pl.addptr(pl.make_ptr(ori_kv), lov_3), [2, 544], [dfv_3, 1])
-                pl.load(p3, psrc_3, [0, 0], l2_cache_mode=pl.TLoadL2Hint.NotAllocKeep)
+                pl.load(p3, psrc_3, [0, 0])
             else:
-                lov_4 = pl.getval(ub_pt, (tb0))
-                dfv_4 = pl.getval(ub_pt, ((tb0) + 1))
+                lov_4, dfv_4 = _pair_vals(ub_pt, (tb0))
                 psrc_4 = pl.make_tensor(pl.addptr(pl.make_ptr(ori_kv), lov_4), [2, 544], [dfv_4, 1])
-                pl.load(p0, psrc_4, [0, 0], l2_cache_mode=pl.TLoadL2Hint.NotAllocKeep)
-                lov_5 = pl.getval(ub_pt, ((tb0) + 2))
-                dfv_5 = pl.getval(ub_pt, ((tb0) + 3))
+                pl.load(p0, psrc_4, [0, 0])
+                lov_5, dfv_5 = _pair_vals(ub_pt, ((tb0) + 2))
                 psrc_5 = pl.make_tensor(pl.addptr(pl.make_ptr(ori_kv), lov_5), [2, 544], [dfv_5, 1])
-                pl.load(p1, psrc_5, [0, 0], l2_cache_mode=pl.TLoadL2Hint.NotAllocKeep)
-                lov_6 = pl.getval(ub_pt, ((tb0) + 4))
-                dfv_6 = pl.getval(ub_pt, ((tb0) + 5))
+                pl.load(p1, psrc_5, [0, 0])
+                lov_6, dfv_6 = _pair_vals(ub_pt, ((tb0) + 4))
                 psrc_6 = pl.make_tensor(pl.addptr(pl.make_ptr(ori_kv), lov_6), [2, 544], [dfv_6, 1])
-                pl.load(p2, psrc_6, [0, 0], l2_cache_mode=pl.TLoadL2Hint.NotAllocKeep)
-                lov_7 = pl.getval(ub_pt, ((tb0) + 6))
-                dfv_7 = pl.getval(ub_pt, ((tb0) + 7))
+                pl.load(p2, psrc_6, [0, 0])
+                lov_7, dfv_7 = _pair_vals(ub_pt, ((tb0) + 6))
                 psrc_7 = pl.make_tensor(pl.addptr(pl.make_ptr(ori_kv), lov_7), [2, 544], [dfv_7, 1])
-                pl.load(p3, psrc_7, [0, 0], l2_cache_mode=pl.TLoadL2Hint.NotAllocKeep)
+                pl.load(p3, psrc_7, [0, 0])
         if nb > 1:
             mod_7 = g & 1
             if mod_7 == 0:
-                lov_8 = pl.getval(ub_pt, (tb0 + 8))
-                dfv_8 = pl.getval(ub_pt, ((tb0 + 8) + 1))
+                lov_8, dfv_8 = _pair_vals(ub_pt, (tb0 + 8))
                 psrc_8 = pl.make_tensor(pl.addptr(pl.make_ptr(ori_kv), lov_8), [2, 544], [dfv_8, 1])
-                pl.load(p4, psrc_8, [0, 0], l2_cache_mode=pl.TLoadL2Hint.NotAllocKeep)
-                lov_9 = pl.getval(ub_pt, ((tb0 + 8) + 2))
-                dfv_9 = pl.getval(ub_pt, ((tb0 + 8) + 3))
+                pl.load(p4, psrc_8, [0, 0])
+                lov_9, dfv_9 = _pair_vals(ub_pt, ((tb0 + 8) + 2))
                 psrc_9 = pl.make_tensor(pl.addptr(pl.make_ptr(ori_kv), lov_9), [2, 544], [dfv_9, 1])
-                pl.load(p5, psrc_9, [0, 0], l2_cache_mode=pl.TLoadL2Hint.NotAllocKeep)
-                lov_10 = pl.getval(ub_pt, ((tb0 + 8) + 4))
-                dfv_10 = pl.getval(ub_pt, ((tb0 + 8) + 5))
+                pl.load(p5, psrc_9, [0, 0])
+                lov_10, dfv_10 = _pair_vals(ub_pt, ((tb0 + 8) + 4))
                 psrc_10 = pl.make_tensor(pl.addptr(pl.make_ptr(ori_kv), lov_10), [2, 544], [dfv_10, 1])
-                pl.load(p6, psrc_10, [0, 0], l2_cache_mode=pl.TLoadL2Hint.NotAllocKeep)
-                lov_11 = pl.getval(ub_pt, ((tb0 + 8) + 6))
-                dfv_11 = pl.getval(ub_pt, ((tb0 + 8) + 7))
+                pl.load(p6, psrc_10, [0, 0])
+                lov_11, dfv_11 = _pair_vals(ub_pt, ((tb0 + 8) + 6))
                 psrc_11 = pl.make_tensor(pl.addptr(pl.make_ptr(ori_kv), lov_11), [2, 544], [dfv_11, 1])
-                pl.load(p7, psrc_11, [0, 0], l2_cache_mode=pl.TLoadL2Hint.NotAllocKeep)
+                pl.load(p7, psrc_11, [0, 0])
             else:
-                lov_12 = pl.getval(ub_pt, (tb0 + 8))
-                dfv_12 = pl.getval(ub_pt, ((tb0 + 8) + 1))
+                lov_12, dfv_12 = _pair_vals(ub_pt, (tb0 + 8))
                 psrc_12 = pl.make_tensor(pl.addptr(pl.make_ptr(ori_kv), lov_12), [2, 544], [dfv_12, 1])
-                pl.load(p4, psrc_12, [0, 0], l2_cache_mode=pl.TLoadL2Hint.NotAllocKeep)
-                lov_13 = pl.getval(ub_pt, ((tb0 + 8) + 2))
-                dfv_13 = pl.getval(ub_pt, ((tb0 + 8) + 3))
+                pl.load(p4, psrc_12, [0, 0])
+                lov_13, dfv_13 = _pair_vals(ub_pt, ((tb0 + 8) + 2))
                 psrc_13 = pl.make_tensor(pl.addptr(pl.make_ptr(ori_kv), lov_13), [2, 544], [dfv_13, 1])
-                pl.load(p5, psrc_13, [0, 0], l2_cache_mode=pl.TLoadL2Hint.NotAllocKeep)
-                lov_14 = pl.getval(ub_pt, ((tb0 + 8) + 4))
-                dfv_14 = pl.getval(ub_pt, ((tb0 + 8) + 5))
+                pl.load(p5, psrc_13, [0, 0])
+                lov_14, dfv_14 = _pair_vals(ub_pt, ((tb0 + 8) + 4))
                 psrc_14 = pl.make_tensor(pl.addptr(pl.make_ptr(ori_kv), lov_14), [2, 544], [dfv_14, 1])
-                pl.load(p6, psrc_14, [0, 0], l2_cache_mode=pl.TLoadL2Hint.NotAllocKeep)
-                lov_15 = pl.getval(ub_pt, ((tb0 + 8) + 6))
-                dfv_15 = pl.getval(ub_pt, ((tb0 + 8) + 7))
+                pl.load(p6, psrc_14, [0, 0])
+                lov_15, dfv_15 = _pair_vals(ub_pt, ((tb0 + 8) + 6))
                 psrc_15 = pl.make_tensor(pl.addptr(pl.make_ptr(ori_kv), lov_15), [2, 544], [dfv_15, 1])
-                pl.load(p7, psrc_15, [0, 0], l2_cache_mode=pl.TLoadL2Hint.NotAllocKeep)
+                pl.load(p7, psrc_15, [0, 0])
     if phase == 1:
         if nb > 1:
             mod_9 = g & 1
             if mod_9 == 0:
-                dequant_ori_pairgrp16_vf(f8_full, bf_full_row, knz)
+                dequant_ori_pairgrp16_vf(fp8_full, bf16_full, knz)
             else:
-                dequant_ori_pairgrp16_vf(f8_full, bf_full_row, knz)
+                dequant_ori_pairgrp16_vf(fp8_full, bf16_full, knz)
         else:
             if nb > 0:
                 mod_8 = g & 1
                 if mod_8 == 0:
-                    dequant_ori_pairgrp_vf(f8_half, bf_half, knz, 0)
+                    dequant_ori_pairgrp_vf(fp8_half, bf16_half, knz, 0)
                 else:
-                    dequant_ori_pairgrp_vf(f8_half, bf_half, knz, 0)
+                    dequant_ori_pairgrp_vf(fp8_half, bf16_half, knz, 0)
                 rfill = nb * 8
-                load_46 = pl.getval(ub_pt, ttf)
-                fanv = load_46
+                fanv = pl.getval(ub_pt, (tt + 63))
                 row_of = pl.make_tensor(pl.addptr(pl.make_ptr(ori_kv), fanv), [1, 544], [544, 1])
                 mod_10 = g & 1
                 if mod_10 == 0:
-                    pl.load(vrow, row_of, [0, 0], l2_cache_mode=pl.TLoadL2Hint.NotAllocKeep)
-                    dequant_ori_row_fan_vf(f8_half, bf_half, knz, rfill, (16 - rfill))
+                    pl.load(vrow, row_of, [0, 0])
+                    dequant_ori_row_fan_vf(fp8_half, bf16_half, knz, rfill, (16 - rfill))
                 else:
-                    pl.load(vrow, row_of, [0, 0], l2_cache_mode=pl.TLoadL2Hint.NotAllocKeep)
-                    dequant_ori_row_fan_vf(f8_half, bf_half, knz, rfill, (16 - rfill))
+                    pl.load(vrow, row_of, [0, 0])
+                    dequant_ori_row_fan_vf(fp8_half, bf16_half, knz, rfill, (16 - rfill))
         mod_11 = g & 1
         add_254 = (sub * 64) + (g * 16)
         if mod_11 == 0:
@@ -2035,44 +2058,194 @@ def _dq_ori_body(g, nv, ori_kv, slot, sub, tt, ttf, ub_pt, phase, par,
             pl.set_validshape(nz_out, [17, 512])
 
 
-
-
 def dequant_ori(g, nv, ori_kv, slot, sub, tt, ttf, tail16, sub0, dq, pt, phase, hb):
-    """ORI KV dequant 分派: 6 个 16 行 half-bank = 3 个 32 行槽(DSL ch_batch_bytes 形态)."""
+    """ORI KV dequant 分派: 6 个 16 行 half-bank = 3 个 32 行槽."""
     if hb == 0:
-        _dq_ori_body(g, nv, ori_kv, slot, sub, tt, ttf, pt, phase, 0, dq.slot_ring,
-                     dq.pair_53, dq.pair_57, dq.pair_61, dq.pair_65, dq.pair_85, dq.pair_89, dq.pair_93, dq.pair_97,
-                     dq.g_fp8_0, dq.g_fp8_0f, dq.g_bf_0, dq.g_bf_0f, dq.g_fp8b_0, dq.g_bfb_0,
-                     dq.ub_knz0, dq.nzsrc, dq.view_116)
+        _dq_ori_body(
+            g,
+            nv,
+            ori_kv,
+            slot,
+            sub,
+            tt,
+            ttf,
+            pt,
+            phase,
+            0,
+            dq.slot_ring,
+            dq.pair_53,
+            dq.pair_57,
+            dq.pair_61,
+            dq.pair_65,
+            dq.pair_85,
+            dq.pair_89,
+            dq.pair_93,
+            dq.pair_97,
+            dq.g_fp8_0,
+            dq.g_fp8_0f,
+            dq.g_bf_0,
+            dq.g_bf_0f,
+            dq.g_fp8b_0,
+            dq.g_bfb_0,
+            dq.ub_knz0,
+            dq.nzsrc,
+            dq.view_116,
+        )
     elif hb == 1:
-        _dq_ori_body(g, nv, ori_kv, slot, sub, tt, ttf, pt, phase, 1, dq.slot_ring,
-                     dq.pair_69, dq.pair_73, dq.pair_77, dq.pair_81, dq.pair_101, dq.pair_105, dq.pair_109, dq.pair_113,
-                     dq.g_fp8_2, dq.g_fp8_2f, dq.g_bf_2, dq.g_bf_2f, dq.g_fp8b_2, dq.g_bfb_2,
-                     dq.ub_knz1, dq.nzsrc_1, dq.view_117)
+        _dq_ori_body(
+            g,
+            nv,
+            ori_kv,
+            slot,
+            sub,
+            tt,
+            ttf,
+            pt,
+            phase,
+            1,
+            dq.slot_ring,
+            dq.pair_69,
+            dq.pair_73,
+            dq.pair_77,
+            dq.pair_81,
+            dq.pair_101,
+            dq.pair_105,
+            dq.pair_109,
+            dq.pair_113,
+            dq.g_fp8_2,
+            dq.g_fp8_2f,
+            dq.g_bf_2,
+            dq.g_bf_2f,
+            dq.g_fp8b_2,
+            dq.g_bfb_2,
+            dq.ub_knz1,
+            dq.nzsrc_1,
+            dq.view_117,
+        )
     elif hb == 2:
-        _dq_ori_body(g, nv, ori_kv, slot, sub, tt, ttf, pt, phase, 0, dq.slot_ring,
-                     dq.pair_401, dq.pair_402, dq.pair_403, dq.pair_404, dq.pair_405, dq.pair_406, dq.pair_407,
-                     dq.pair_408,
-                     dq.h0_f8h, dq.h0_f8f, dq.h0_bfh, dq.h0_bff, dq.h0_f8b, dq.h0_bfb,
-                     dq.ub_knz0, dq.nzsrc, dq.view_116)
+        _dq_ori_body(
+            g,
+            nv,
+            ori_kv,
+            slot,
+            sub,
+            tt,
+            ttf,
+            pt,
+            phase,
+            0,
+            dq.slot_ring,
+            dq.pair_401,
+            dq.pair_402,
+            dq.pair_403,
+            dq.pair_404,
+            dq.pair_405,
+            dq.pair_406,
+            dq.pair_407,
+            dq.pair_408,
+            dq.h0_f8h,
+            dq.h0_f8f,
+            dq.h0_bfh,
+            dq.h0_bff,
+            dq.h0_f8b,
+            dq.h0_bfb,
+            dq.ub_knz0,
+            dq.nzsrc,
+            dq.view_116,
+        )
     elif hb == 3:
-        _dq_ori_body(g, nv, ori_kv, slot, sub, tt, ttf, pt, phase, 1, dq.slot_ring,
-                     dq.pair_409, dq.pair_410, dq.pair_411, dq.pair_412, dq.pair_413, dq.pair_414, dq.pair_415,
-                     dq.pair_416,
-                     dq.h1_f8h, dq.h1_f8f, dq.h1_bfh, dq.h1_bff, dq.h1_f8b, dq.h1_bfb,
-                     dq.ub_knz1, dq.nzsrc_1, dq.view_117)
+        _dq_ori_body(
+            g,
+            nv,
+            ori_kv,
+            slot,
+            sub,
+            tt,
+            ttf,
+            pt,
+            phase,
+            1,
+            dq.slot_ring,
+            dq.pair_409,
+            dq.pair_410,
+            dq.pair_411,
+            dq.pair_412,
+            dq.pair_413,
+            dq.pair_414,
+            dq.pair_415,
+            dq.pair_416,
+            dq.h1_f8h,
+            dq.h1_f8f,
+            dq.h1_bfh,
+            dq.h1_bff,
+            dq.h1_f8b,
+            dq.h1_bfb,
+            dq.ub_knz1,
+            dq.nzsrc_1,
+            dq.view_117,
+        )
     elif hb == 4:
-        _dq_ori_body(g, nv, ori_kv, slot, sub, tt, ttf, pt, phase, 0, dq.slot_ring,
-                     dq.pair_417, dq.pair_418, dq.pair_419, dq.pair_420, dq.pair_421, dq.pair_422, dq.pair_423,
-                     dq.pair_424,
-                     dq.h2_f8h, dq.h2_f8f, dq.h2_bfh, dq.h2_bff, dq.h0_f8b, dq.h0_bfb,
-                     dq.ub_knz0, dq.nzsrc, dq.view_116)
+        _dq_ori_body(
+            g,
+            nv,
+            ori_kv,
+            slot,
+            sub,
+            tt,
+            ttf,
+            pt,
+            phase,
+            0,
+            dq.slot_ring,
+            dq.pair_417,
+            dq.pair_418,
+            dq.pair_419,
+            dq.pair_420,
+            dq.pair_421,
+            dq.pair_422,
+            dq.pair_423,
+            dq.pair_424,
+            dq.h2_f8h,
+            dq.h2_f8f,
+            dq.h2_bfh,
+            dq.h2_bff,
+            dq.h0_f8b,
+            dq.h0_bfb,
+            dq.ub_knz0,
+            dq.nzsrc,
+            dq.view_116,
+        )
     elif hb == 5:
-        _dq_ori_body(g, nv, ori_kv, slot, sub, tt, ttf, pt, phase, 1, dq.slot_ring,
-                     dq.pair_425, dq.pair_426, dq.pair_427, dq.pair_428, dq.pair_429, dq.pair_430, dq.pair_431,
-                     dq.pair_432,
-                     dq.h3_f8h, dq.h3_f8f, dq.h3_bfh, dq.h3_bff, dq.h1_f8b, dq.h1_bfb,
-                     dq.ub_knz1, dq.nzsrc_1, dq.view_117)
+        _dq_ori_body(
+            g,
+            nv,
+            ori_kv,
+            slot,
+            sub,
+            tt,
+            ttf,
+            pt,
+            phase,
+            1,
+            dq.slot_ring,
+            dq.pair_425,
+            dq.pair_426,
+            dq.pair_427,
+            dq.pair_428,
+            dq.pair_429,
+            dq.pair_430,
+            dq.pair_431,
+            dq.pair_432,
+            dq.h3_f8h,
+            dq.h3_f8f,
+            dq.h3_bfh,
+            dq.h3_bff,
+            dq.h1_f8b,
+            dq.h1_bfb,
+            dq.ub_knz1,
+            dq.nzsrc_1,
+            dq.view_117,
+        )
 
 
 def dequant_cmp(
@@ -2168,51 +2341,43 @@ def dequant_cmp(
     knz = ub_knz0 if (g_1 & 1) == 0 else ub_knz1
     if phase == 0:
         if nb_1 > 0:
-            lov_0 = pl.getval(ub_pt, (tb0_1 + 0))
-            dfv_0 = pl.getval(ub_pt, (tb0_1 + 1))
-            lov_1 = pl.getval(ub_pt, (tb0_1 + 2))
-            dfv_1 = pl.getval(ub_pt, (tb0_1 + 3))
-            lov_2 = pl.getval(ub_pt, (tb0_1 + 4))
-            dfv_2 = pl.getval(ub_pt, (tb0_1 + 5))
-            lov_3 = pl.getval(ub_pt, (tb0_1 + 6))
-            dfv_3 = pl.getval(ub_pt, (tb0_1 + 7))
+            lov_0, dfv_0 = _pair_vals(ub_pt, (tb0_1 + 0))
+            lov_1, dfv_1 = _pair_vals(ub_pt, (tb0_1 + 2))
+            lov_2, dfv_2 = _pair_vals(ub_pt, (tb0_1 + 4))
+            lov_3, dfv_3 = _pair_vals(ub_pt, (tb0_1 + 6))
             cq = (dfv_0 == 320) & (dfv_1 == 320) & (dfv_2 == 320) & (dfv_3 == 320)
             cq = cq & (lov_1 == (lov_0 + 640)) & (lov_2 == (lov_1 + 640)) & (lov_3 == (lov_2 + 640))
             if cq != 0:
                 psrc_m = pl.make_tensor(pl.addptr(pl.make_ptr(cmp_kv), lov_0), [8, 320], [320, 1])
-                pl.load(t_first, psrc_m, [0, 0], l2_cache_mode=pl.TLoadL2Hint.NotAllocKeep)
+                pl.load(t_first, psrc_m, [0, 0])
             else:
                 psrc_0 = pl.make_tensor(pl.addptr(pl.make_ptr(cmp_kv), lov_0), [2, 320], [dfv_0, 1])
-                pl.load(p0, psrc_0, [0, 0], l2_cache_mode=pl.TLoadL2Hint.NotAllocKeep)
+                pl.load(p0, psrc_0, [0, 0])
                 psrc_1 = pl.make_tensor(pl.addptr(pl.make_ptr(cmp_kv), lov_1), [2, 320], [dfv_1, 1])
-                pl.load(p1, psrc_1, [0, 0], l2_cache_mode=pl.TLoadL2Hint.NotAllocKeep)
+                pl.load(p1, psrc_1, [0, 0])
                 psrc_2 = pl.make_tensor(pl.addptr(pl.make_ptr(cmp_kv), lov_2), [2, 320], [dfv_2, 1])
-                pl.load(p2, psrc_2, [0, 0], l2_cache_mode=pl.TLoadL2Hint.NotAllocKeep)
+                pl.load(p2, psrc_2, [0, 0])
                 psrc_3 = pl.make_tensor(pl.addptr(pl.make_ptr(cmp_kv), lov_3), [2, 320], [dfv_3, 1])
-                pl.load(p3, psrc_3, [0, 0], l2_cache_mode=pl.TLoadL2Hint.NotAllocKeep)
+                pl.load(p3, psrc_3, [0, 0])
         if nb_1 > 1:
-            lov_0 = pl.getval(ub_pt, (tb0_1 + 8))
-            dfv_0 = pl.getval(ub_pt, (tb0_1 + 9))
-            lov_1 = pl.getval(ub_pt, (tb0_1 + 10))
-            dfv_1 = pl.getval(ub_pt, (tb0_1 + 11))
-            lov_2 = pl.getval(ub_pt, (tb0_1 + 12))
-            dfv_2 = pl.getval(ub_pt, (tb0_1 + 13))
-            lov_3 = pl.getval(ub_pt, (tb0_1 + 14))
-            dfv_3 = pl.getval(ub_pt, (tb0_1 + 15))
+            lov_0, dfv_0 = _pair_vals(ub_pt, (tb0_1 + 8))
+            lov_1, dfv_1 = _pair_vals(ub_pt, (tb0_1 + 10))
+            lov_2, dfv_2 = _pair_vals(ub_pt, (tb0_1 + 12))
+            lov_3, dfv_3 = _pair_vals(ub_pt, (tb0_1 + 14))
             cq = (dfv_0 == 320) & (dfv_1 == 320) & (dfv_2 == 320) & (dfv_3 == 320)
             cq = cq & (lov_1 == (lov_0 + 640)) & (lov_2 == (lov_1 + 640)) & (lov_3 == (lov_2 + 640))
             if cq != 0:
                 psrc_m = pl.make_tensor(pl.addptr(pl.make_ptr(cmp_kv), lov_0), [8, 320], [320, 1])
-                pl.load(t_second, psrc_m, [0, 0], l2_cache_mode=pl.TLoadL2Hint.NotAllocKeep)
+                pl.load(t_second, psrc_m, [0, 0])
             else:
                 psrc_0 = pl.make_tensor(pl.addptr(pl.make_ptr(cmp_kv), lov_0), [2, 320], [dfv_0, 1])
-                pl.load(p4, psrc_0, [0, 0], l2_cache_mode=pl.TLoadL2Hint.NotAllocKeep)
+                pl.load(p4, psrc_0, [0, 0])
                 psrc_1 = pl.make_tensor(pl.addptr(pl.make_ptr(cmp_kv), lov_1), [2, 320], [dfv_1, 1])
-                pl.load(p5, psrc_1, [0, 0], l2_cache_mode=pl.TLoadL2Hint.NotAllocKeep)
+                pl.load(p5, psrc_1, [0, 0])
                 psrc_2 = pl.make_tensor(pl.addptr(pl.make_ptr(cmp_kv), lov_2), [2, 320], [dfv_2, 1])
-                pl.load(p6, psrc_2, [0, 0], l2_cache_mode=pl.TLoadL2Hint.NotAllocKeep)
+                pl.load(p6, psrc_2, [0, 0])
                 psrc_3 = pl.make_tensor(pl.addptr(pl.make_ptr(cmp_kv), lov_3), [2, 320], [dfv_3, 1])
-                pl.load(p7, psrc_3, [0, 0], l2_cache_mode=pl.TLoadL2Hint.NotAllocKeep)
+                pl.load(p7, psrc_3, [0, 0])
     if phase == 1:
         if nb_1 > 1:
             dequant_cmp_pairgrp16_vf(t_full, bf_full, knz)
@@ -2220,13 +2385,13 @@ def dequant_cmp(
             if nb_1 > 0:
                 dequant_cmp_pairgrp_vf(t_first, bf_first, knz, 0)
             rfill_1 = nb_1 * 8
-            fanv_1 = pl.getval(ub_pt, ttf)
+            fanv_1 = pl.getval(ub_pt, (tt + 63))
             row_cf = pl.make_tensor(pl.addptr(pl.make_ptr(cmp_kv), fanv_1), [1, 320], [320, 1])
             if (g_1 & 1) == 0:
-                pl.load(view_206, row_cf, [0, 0], l2_cache_mode=pl.TLoadL2Hint.NotAllocKeep)
+                pl.load(view_206, row_cf, [0, 0])
                 dequant_cmp_row_fan_vf(t_first, g_bfc_0, ub_knz0, rfill_1, (16 - rfill_1))
             else:
-                pl.load(view_207, row_cf, [0, 0], l2_cache_mode=pl.TLoadL2Hint.NotAllocKeep)
+                pl.load(view_207, row_cf, [0, 0])
                 dequant_cmp_row_fan_vf(t_first, g_bfc_2, ub_knz1, rfill_1, (16 - rfill_1))
         add_484 = (sub * 64) + (g_1 * 16)
         if (g_1 & 1) == 0:
@@ -2239,15 +2404,7 @@ def dequant_cmp(
             pl.set_validshape(nzsrc_1, [17, 512])
 
 
-@pl.jit(
-    auto_mutex=True,
-    # SK(SuperKernel)融合入口: CAP_4 为惯用裸开启项(发射 __sk__ 入口 + SK_BIND 记录);
-    # 本 kernel 使用 pl.system.sync_all(), 按 pypto_pro 文档配 schedmode=1(batch 调度,
-    # 多流并发下避免死锁), 并按文档要求搭配 CAP_8 关闭 batchmode 检查以保留 SK 融合资格.
-    sk_cap=pl.SkCap.CAP_4_DISABLE_DCCI_ALL | pl.SkCap.CAP_8_DISABLE_BATCHMODE_CHECK,
-    schedmode=1,
-    tiling_key=MqsmlaTilingKey,
-)
+@pl.jit(auto_mutex=True, tiling_key=MqsmlaTilingKey)
 def mixed_quant_sparse_flash_mla_kernel(
     q_ptr: pl.Ptr[pl.DT_UINT8],
     ori_kv: pl.Ptr[pl.DT_UINT8],
@@ -2261,33 +2418,43 @@ def mixed_quant_sparse_flash_mla_kernel(
     cmp_topk_length: pl.Ptr[pl.DT_INT32],
     cu_seqlens_q_ptr: pl.Ptr[pl.DT_UINT8],
     metadata_ptr: pl.Ptr[pl.DT_INT32],
-    tiling_device_ptr: pl.Ptr[pl.DT_INT32],
     out_ptr: pl.Ptr[pl.DT_UINT8],
     lse_ptr: pl.Ptr[pl.DT_UINT8],
     fd_partial_ws: pl.Ptr[pl.DT_UINT8],
     tiling: MqsmlaTiling,
 ):
-    # ========== Delivery-form derivation: tiling params from the device tensor ==========
-    # tiling_device(int32[16])由 AICPU metadata 算子在板上产出(形状标量+规划结果),
-    # 本 kernel 执行期逐字读取 —— host 侧无值依赖、无 D2H; softmax_scale 为属性
-    # 标量, 仍经 tiling struct 传入。
-    tiling_device = pl.make_tensor(tiling_device_ptr, [16], [1], dtype=pl.DT_INT32)
-    t1 = pl.getval(tiling_device, 0)
-    b_num = pl.getval(tiling_device, 1)
-    k_ori = pl.getval(tiling_device, 2)
-    k_cmp = pl.getval(tiling_device, 3)
-    bs_ori = pl.getval(tiling_device, 4)
-    bs_cmp = pl.getval(tiling_device, 5)
-    bt_ori = pl.getval(tiling_device, 6)
-    bt_cmp = pl.getval(tiling_device, 7)
+    # ========== Delivery-form shape derivation (all from OpTiling) ==========
+    t1 = tiling.t1
+    b_num = tiling.b_num
+    k_ori = tiling.k_ori
+    k_cmp = tiling.k_cmp
+    k_ori_raw = tiling.k_ori_raw
+    k_cmp_raw = tiling.k_cmp_raw
+    bs_ori = tiling.bs_ori
+    bs_cmp = tiling.bs_cmp
+    bt_ori = tiling.bt_ori
+    bt_cmp = tiling.bt_cmp
     scale_arg = tiling.scale
-    ori_kv_stride0 = pl.getval(tiling_device, 10)
-    cmp_kv_stride0 = pl.getval(tiling_device, 11)
+    ori_kv_stride0 = tiling.ori_kv_stride0
+    cmp_kv_stride0 = tiling.cmp_kv_stride0
+    ori_row_tab_stride = tiling.ori_row_tab_stride
+    cmp_row_tab_stride = tiling.cmp_row_tab_stride
     q = pl.make_tensor(q_ptr, [t1, 64, 512], [64 * 512, 512, 1], dtype=pl.DT_BF16)
-    ori_sparse_indices = pl.make_tensor(
-        ori_sparse_indices_ptr, [t1, 1, k_ori], [k_ori, k_ori, 1], dtype=pl.DT_INT32)
-    ori_block_table = pl.make_tensor(
-        ori_block_table_ptr, [b_num - 1, bt_ori], [bt_ori, 1], dtype=pl.DT_INT32)
+    # Fused GM row-table workspace: FD partials first (when enabled), table last.
+    tab_base_off = MQSMLA_WORKSPACE_BYTES if FD_ENABLE == 1 else 0
+    tab_cols = k_ori + k_cmp
+    tab_ptr = pl.addptr(pl.make_ptr(fd_partial_ws), tab_base_off)
+    row_tab = pl.make_tensor(tab_ptr, [t1, tab_cols], [tab_cols, 1], dtype=pl.DT_INT32)
+    ori_sparse_indices = pl.make_tensor(tab_ptr, [t1, 1, k_ori], [tab_cols, tab_cols, 1], dtype=pl.DT_INT32)
+    cmp_row_tab = pl.make_tensor(
+        pl.addptr(tab_ptr, k_ori * 4), [t1, 1, k_cmp], [tab_cols, tab_cols, 1], dtype=pl.DT_INT32
+    )
+    ori_row_src = pl.make_tensor(
+        ori_sparse_indices_ptr, [t1, 1, k_ori_raw], [k_ori_raw, k_ori_raw, 1], dtype=pl.DT_INT32
+    )
+    cmp_row_src = pl.make_tensor(cmp_sparse_indices, [t1, 1, k_cmp_raw], [k_cmp_raw, k_cmp_raw, 1], dtype=pl.DT_INT32)
+    ori_bt_t = pl.make_tensor(ori_block_table_ptr, [b_num - 1, bt_ori], [bt_ori, 1], dtype=pl.DT_INT32)
+    cmp_bt_t = pl.make_tensor(cmp_block_table, [b_num - 1, bt_cmp], [bt_cmp, 1], dtype=pl.DT_INT32)
     sinks = pl.make_tensor(sinks_ptr, [64], [1], dtype=pl.DT_FP32)
     vdep_dtype = pl.DT_INT64 if VDEP64 == 1 else pl.DT_INT32
     cu_seqlens_q = pl.make_tensor(cu_seqlens_q_ptr, [b_num], [1], dtype=vdep_dtype)
@@ -2595,7 +2762,7 @@ def mixed_quant_sparse_flash_mla_kernel(
                             clk, m_wo, m_wc, m_ot, m_first, m_ms, m_t, _l0acnt, _l0bcnt, cube_tiles
                         )
                     if t == 0:
-                        pl.load(l1q, q, [m, 0, 0], l2_cache_mode=pl.TLoadL2Hint.NotAllocKeep)
+                        pl.load(l1q, q, [m, 0, 0])
                     if t < tpc:
                         m_ms = h_ms
                         m_t = h_t
@@ -2617,6 +2784,26 @@ def mixed_quant_sparse_flash_mla_kernel(
                         m_ot = h_ot
                     clk = clk + 1
     with pl.section_vector():
+        # Fused builder staging, aliased with vector-only main-loop tiles that
+        # are not live before the prologue completes.
+        row_bt_tile = pl.make_tile_group(
+            type=pl.TileType(shape=[1, 8192], dtype=pl.DT_INT32, target_memory=pl.MemorySpace.Vec),
+            addrs=[0],
+            mutex_ids=[0],
+            depth=1,
+        )[0]
+        row_idx_tile = pl.make_tile_group(
+            type=pl.TileType(shape=[1, 2304], dtype=pl.DT_INT32, target_memory=pl.MemorySpace.Vec),
+            addrs=[32768],
+            mutex_ids=[6],
+            depth=1,
+        )[0]
+        row_out_tile = pl.make_tile_group(
+            type=pl.TileType(shape=[1, 2304], dtype=pl.DT_INT32, target_memory=pl.MemorySpace.Vec),
+            addrs=[41984],
+            mutex_ids=[7],
+            depth=1,
+        )[0]
         t_1_native = pl.make_tile_group(
             type=pl.TileType(shape=[8, 320], dtype=pl.DT_UINT8, target_memory=pl.MemorySpace.Vec),
             addrs=[0],
@@ -2663,20 +2850,13 @@ def mixed_quant_sparse_flash_mla_kernel(
         # bank (t+2)&1 while the dequant of tile t reads bank t&1, so the tile-level
         # wait no longer serialises the staging MTE2 behind the neighbouring build.
         ub_pt_native = pl.make_tile_group(
-            type=pl.TileType(shape=[1, 576], dtype=pl.DT_INT32, target_memory=pl.MemorySpace.Vec),
+            type=pl.TileType(shape=[1, 256], dtype=pl.DT_INT64, target_memory=pl.MemorySpace.Vec),
             addrs=[26624, 247808],
             mutex_ids=[5, 30],
             depth=2,
         )
         ub_pt = ub_pt_native[0]
         ub_pt_b = ub_pt_native[1]
-        fan_grp_native = pl.make_tile_group(
-            type=pl.TileType(shape=[1, 64], dtype=pl.DT_INT32, target_memory=pl.MemorySpace.Vec),
-            addrs=[28672, 249856],
-            mutex_ids=[5, 30],
-            depth=2,
-        )
-        fan_grp = fan_grp_native
         ub_knz0_native = pl.make_tile_group(
             type=pl.TileType(shape=[17, 512], dtype=pl.DT_BF16, target_memory=pl.MemorySpace.Vec, compact=0),
             addrs=[28928],
@@ -2823,41 +3003,6 @@ def mixed_quant_sparse_flash_mla_kernel(
             depth=1,
         )
         view_21 = view_21_native[0]
-        view_22_native = pl.make_tile_group(
-            type=pl.TileType(shape=[1, 8], dtype=pl.DT_INT32, target_memory=pl.MemorySpace.Vec),
-            addrs=[18432],
-            mutex_ids=[4],
-            depth=1,
-        )
-        view_22 = view_22_native[0]
-        view_24_native = pl.make_tile_group(
-            type=pl.TileType(shape=[1, 8], dtype=pl.DT_INT32, target_memory=pl.MemorySpace.Vec),
-            addrs=[22528],
-            mutex_ids=[4],
-            depth=1,
-        )
-        view_24 = view_24_native[0]
-        view_28_native = pl.make_tile_group(
-            type=pl.TileType(shape=[1, 128], dtype=pl.DT_INT32, target_memory=pl.MemorySpace.Vec),
-            addrs=[17408],
-            mutex_ids=[4],
-            depth=1,
-        )
-        view_28 = view_28_native[0]
-        view_29_native = pl.make_tile_group(
-            type=pl.TileType(shape=[1, 1024], dtype=pl.DT_INT32, target_memory=pl.MemorySpace.Vec),
-            addrs=[18432],
-            mutex_ids=[4],
-            depth=1,
-        )
-        view_29 = view_29_native[0]
-        view_34_native = pl.make_tile_group(
-            type=pl.TileType(shape=[1, 1024], dtype=pl.DT_INT32, target_memory=pl.MemorySpace.Vec),
-            addrs=[22528],
-            mutex_ids=[4],
-            depth=1,
-        )
-        view_34 = view_34_native[0]
         view_37_native = pl.make_tile_group(
             type=pl.TileType(shape=[1, 64], dtype=pl.DT_FP32, target_memory=pl.MemorySpace.Vec),
             addrs=[219904],
@@ -2971,8 +3116,7 @@ def mixed_quant_sparse_flash_mla_kernel(
         )
         nzsrc_native = pl.make_tile_group(
             type=pl.TileType(
-                shape=[17, 512], dtype=pl.DT_BF16, target_memory=pl.MemorySpace.Vec,
-                layout=pl.NZ, compact=0,
+                shape=[17, 512], dtype=pl.DT_BF16, target_memory=pl.MemorySpace.Vec, layout=pl.NZ, compact=0
             ),
             addrs=[28928],
             mutex_ids=[6],
@@ -2981,8 +3125,7 @@ def mixed_quant_sparse_flash_mla_kernel(
         nzsrc = nzsrc_native[0]
         nzsrc_1_native = pl.make_tile_group(
             type=pl.TileType(
-                shape=[17, 512], dtype=pl.DT_BF16, target_memory=pl.MemorySpace.Vec,
-                layout=pl.NZ, compact=0,
+                shape=[17, 512], dtype=pl.DT_BF16, target_memory=pl.MemorySpace.Vec, layout=pl.NZ, compact=0
             ),
             addrs=[46336],
             mutex_ids=[7],
@@ -3205,7 +3348,7 @@ def mixed_quant_sparse_flash_mla_kernel(
         )
         pair_113 = pair_113_native[0]
 
-        # DSL 形态: 4 个额外 16 行 half-bank(与 FD 段/空缺段复用), 凑齐 6 half = 3 个 32 行槽
+        # 4 个额外 16 行 half-bank(与 FD 段/空缺段复用), 凑齐 6 half = 3 个 32 行槽
         pair_401_native = pl.make_tile_group(
             type=pl.TileType(shape=[2, 544], dtype=pl.DT_UINT8, target_memory=pl.MemorySpace.Vec),
             addrs=[239104],
@@ -3989,8 +4132,7 @@ def mixed_quant_sparse_flash_mla_kernel(
         )
         nzsrc_2_native = pl.make_tile_group(
             type=pl.TileType(
-                shape=[33, 128], dtype=pl.DT_BF16, target_memory=pl.MemorySpace.Vec,
-                layout=pl.NZ, compact=0,
+                shape=[33, 128], dtype=pl.DT_BF16, target_memory=pl.MemorySpace.Vec, layout=pl.NZ, compact=0
             ),
             addrs=[63744],
             mutex_ids=[8],
@@ -4068,8 +4210,7 @@ def mixed_quant_sparse_flash_mla_kernel(
         t_t_1 = 0
         ln_o_v = pl.make_tensor(ori_topk_length, [t1, 1], [1, 1], dtype=vdep_dtype)
         ln_c_v = pl.make_tensor(cmp_topk_length, [t1, 1], [1, 1], dtype=vdep_dtype)
-        bt_c_v = pl.make_tensor(cmp_block_table, [b_num - 1, bt_cmp], [bt_cmp, 1], dtype=pl.DT_INT32)
-        si_v = pl.make_tensor(cmp_sparse_indices, [t1, 1, k_cmp], [k_cmp, k_cmp, 1], dtype=pl.DT_INT32)
+        si_v = cmp_row_tab
         gu = pl.make_tuple(
             h_ws_1=h_ws_1,
             t_ws_1=t_ws_1,
@@ -4306,15 +4447,89 @@ def mixed_quant_sparse_flash_mla_kernel(
                     bs_shift_c = bs_shift_c + 1
         if _bs_c != 1:
             bs_pow2_c = 0
+        # Fused GM row-table prologue: this block builds exactly the rows it
+        # later consumes.  Ori/cmp run in two passes so the wide block-table
+        # tile is reused; both passes overlap the concurrent cube section.
+        build_first = m_first_1
+        build_end = m_last_1
+        if s2_e_1 > 0:
+            build_end = build_end + 1
+        cur_b = -1
+        for bm in pl.range(build_first, build_end, 1):
+            batch_b = 0
+            for bb in pl.range(0, b_num, 1):
+                if pl.getval(cu_seqlens_q, bb) <= bm:
+                    batch_b = bb
+            if batch_b != cur_b:
+                pl.set_validshape(row_bt_tile, [1, bt_ori])
+                pl.load(row_bt_tile, ori_bt_t, [batch_b, 0])
+                pl.set_validshape(row_bt_tile, [1, bt_ori])
+                cur_b = batch_b
+            pl.set_validshape(row_idx_tile, [1, k_ori_raw])
+            pl.load(row_idx_tile, ori_row_src, [bm, 0, 0])
+            pl.set_validshape(row_idx_tile, [1, k_ori])
+            w_o_b = k_ori_raw
+            if HAS_ORI_LEN == 1:
+                w_o_b = pl.getval(ln_o_v, bm)
+            wlast_o_b = pl.max(pl.min(w_o_b, k_ori_raw) - 1, 0)
+            for tile in pl.range(0, k_ori // 128, 1):
+                build_row_seg128_vf(
+                    row_idx_tile,
+                    row_bt_tile,
+                    row_out_tile,
+                    tile * 128,
+                    tile * 128,
+                    wlast_o_b,
+                    bt_ori,
+                    bs_ori,
+                    bs_pow2_o,
+                    bs_shift_o,
+                )
+            pl.set_validshape(row_out_tile, [1, k_ori])
+            pl.store(row_tab, row_out_tile, [bm, 0])
+            pl.set_validshape(row_out_tile, [1, 2304])
+        if HAS_CMP == 1:
+            cur_b = -1
+            for bm in pl.range(build_first, build_end, 1):
+                batch_b = 0
+                for bb in pl.range(0, b_num, 1):
+                    if pl.getval(cu_seqlens_q, bb) <= bm:
+                        batch_b = bb
+                if batch_b != cur_b:
+                    pl.set_validshape(row_bt_tile, [1, bt_cmp])
+                    pl.load(row_bt_tile, cmp_bt_t, [batch_b, 0])
+                    pl.set_validshape(row_bt_tile, [1, bt_cmp])
+                    cur_b = batch_b
+                pl.set_validshape(row_idx_tile, [1, k_cmp_raw])
+                pl.load(row_idx_tile, cmp_row_src, [bm, 0, 0])
+                pl.set_validshape(row_idx_tile, [1, k_cmp])
+                w_c_b = k_cmp_raw
+                if HAS_CMP_LEN == 1:
+                    w_c_b = pl.getval(ln_c_v, bm)
+                wlast_c_b = pl.max(pl.min(w_c_b, k_cmp_raw) - 1, 0)
+                for tile in pl.range(0, k_cmp // 128, 1):
+                    build_row_seg128_vf(
+                        row_idx_tile,
+                        row_bt_tile,
+                        row_out_tile,
+                        tile * 128,
+                        tile * 128,
+                        wlast_c_b,
+                        bt_cmp,
+                        bs_cmp,
+                        bs_pow2_c,
+                        bs_shift_c,
+                    )
+                pl.set_validshape(row_out_tile, [1, k_cmp])
+                pl.store(row_tab, row_out_tile, [bm, k_ori])
+                pl.set_validshape(row_out_tile, [1, 2304])
+        # Order this AIV's table MTE3 stores before its first MTE2 table load.
+        # A block-wide barrier here also stalls AIC while the prologue runs.
+        pl.system.sync_src(set_pipe=P.MTE3, wait_pipe=P.MTE2, event_id=2)
+        pl.system.sync_dst(set_pipe=P.MTE3, wait_pipe=P.MTE2, event_id=2)
         for ms_1 in pl.range(0, pl.max(row_count_1, 0), 1):
             m_1 = m_first_1 + ms_1
             rpar = ms_1 & 1
-            acc_b_1 = 0
-            for bb_1 in pl.range(0, b_num, 1):
-                cuv_1 = pl.getval(cu_seqlens_q, bb_1)
-                d_1 = (m_1 - cuv_1) + 1
-                acc_b_1 = acc_b_1 + pl.min(pl.max(d_1, 0), 1)
-            b = acc_b_1 - 1
             w_o_1 = k_ori
             if HAS_ORI_LEN == 1:
                 w_o_1 = pl.getval(ln_o_v, m_1)
@@ -4349,12 +4564,6 @@ def mixed_quant_sparse_flash_mla_kernel(
                 tab_fast = 1
                 fit_row = 0  # 逐 tile 预建快于整行预建（T=96 A/B：41.0 vs 46.5 µs）
                 prime = 1 - fit_row
-                pl.set_validshape(view_22, [1, bt_ori])
-                pl.load(view_22, ori_block_table, [b, 0])
-                pl.set_validshape(view_22, [1, 8])
-                pl.set_validshape(view_24, [1, bt_cmp])
-                pl.load(view_24, bt_c_v, [b, 0])
-                pl.set_validshape(view_24, [1, 8])
                 if prime != 0:
                     segb = 0
                     wb = 0
@@ -4376,25 +4585,21 @@ def mixed_quant_sparse_flash_mla_kernel(
                         cxlb = 0
                     if cxlb > 63:
                         cxlb = 63
-                    t8b = clk_1 & 7
-                    v_nb = 0
+                    t8b = clk_1 & 3
+                    tab_col = s128 + (sub * 64)
                     if cmp_9:
-                        v_nb = pl.min(128, (k_ori - mul_6))
-                        pl.set_validshape(ub_tabs, [1, v_nb])
-                        pl.load(ub_tabs, ori_sparse_indices, [m_1, 0, s128])
+                        pl.set_validshape(ub_tabs, [1, 64])
+                        pl.load(ub_tabs, ori_sparse_indices, [m_1, 0, tab_col])
                         pl.set_validshape(ub_tabs, [1, 2304])
-                        build_pair_tab_vf(
-                            view_28, view_29, ub_pt_native[clk_1 & 1], fan_grp[clk_1 & 1], t8b, bso_v, stro_v, 544,
-                            negb, winb, cmb, cxlb, bs_pow2_o, bs_shift_o
+                        build_pair_tab_row_vf(
+                            ub_tabs, ub_pt_native[clk_1 & 1], t8b, bso_v, stro_v, 544, bs_pow2_o, bs_shift_o
                         )
                     else:
-                        v_nb = pl.min(128, (k_cmp - mul_6))
-                        pl.set_validshape(ub_tabs, [1, v_nb])
-                        pl.load(ub_tabs, si_v, [m_1, 0, s128])
+                        pl.set_validshape(ub_tabs, [1, 64])
+                        pl.load(ub_tabs, si_v, [m_1, 0, tab_col])
                         pl.set_validshape(ub_tabs, [1, 2304])
-                        build_pair_tab_vf(
-                            view_28, view_34, ub_pt_native[clk_1 & 1], fan_grp[clk_1 & 1], t8b, bsc_v, strc_v, 320,
-                            negb, winb, cmb, cxlb, bs_pow2_c, bs_shift_c
+                        build_pair_tab_row_vf(
+                            ub_tabs, ub_pt_native[clk_1 & 1], t8b, bsc_v, strc_v, 320, bs_pow2_c, bs_shift_c
                         )
                 # Second priming on its own index staging buffer (ub_tabs_b), so the two
                 # load->VF pairs do not share one single-buffered region.
@@ -4404,7 +4609,7 @@ def mixed_quant_sparse_flash_mla_kernel(
                         wb = 0
                         cmp_9 = (tl_1 + 1) < ori_tiles_1
                         if cmp_9:
-                            segb = (tl_1 + 1)
+                            segb = tl_1 + 1
                             wb = w_o_1
                         else:
                             segb = (tl_1 + 1) - ori_tiles_1
@@ -4420,25 +4625,21 @@ def mixed_quant_sparse_flash_mla_kernel(
                             cxlb2 = 0
                         if cxlb2 > 63:
                             cxlb2 = 63
-                        t8b = (clk_1 + 1) & 7
-                        v_nb = 0
+                        t8b = (clk_1 + 1) & 3
+                        tab_col = s128 + (sub * 64)
                         if cmp_9:
-                            v_nb = pl.min(128, (k_ori - mul_6))
-                            pl.set_validshape(ub_tabs_b, [1, v_nb])
-                            pl.load(ub_tabs_b, ori_sparse_indices, [m_1, 0, s128])
+                            pl.set_validshape(ub_tabs_b, [1, 64])
+                            pl.load(ub_tabs_b, ori_sparse_indices, [m_1, 0, tab_col])
                             pl.set_validshape(ub_tabs_b, [1, 128])
-                            build_pair_tab_vf(
-                                ub_tabs_b, view_29, ub_pt_native[(clk_1 + 1) & 1], fan_grp[(clk_1 + 1) & 1], t8b,
-                                bso_v, stro_v, 544, negb, winb, cmb, cxlb2, bs_pow2_o, bs_shift_o
+                            build_pair_tab_row_vf(
+                                ub_tabs_b, ub_pt_native[(clk_1 + 1) & 1], t8b, bso_v, stro_v, 544, bs_pow2_o, bs_shift_o
                             )
                         else:
-                            v_nb = pl.min(128, (k_cmp - mul_6))
-                            pl.set_validshape(ub_tabs_b, [1, v_nb])
-                            pl.load(ub_tabs_b, si_v, [m_1, 0, s128])
+                            pl.set_validshape(ub_tabs_b, [1, 64])
+                            pl.load(ub_tabs_b, si_v, [m_1, 0, tab_col])
                             pl.set_validshape(ub_tabs_b, [1, 128])
-                            build_pair_tab_vf(
-                                ub_tabs_b, view_34, ub_pt_native[(clk_1 + 1) & 1], fan_grp[(clk_1 + 1) & 1], t8b,
-                                bsc_v, strc_v, 320, negb, winb, cmb, cxlb2, bs_pow2_c, bs_shift_c
+                            build_pair_tab_row_vf(
+                                ub_tabs_b, ub_pt_native[(clk_1 + 1) & 1], t8b, bsc_v, strc_v, 320, bs_pow2_c, bs_shift_c
                             )
                 if fit_row != 0:
                     for tp in pl.range(tl_1, th_1, 1):
@@ -4461,24 +4662,20 @@ def mixed_quant_sparse_flash_mla_kernel(
                         if cxlg > 63:
                             cxlg = 63
                         tbg = tp - tl_1
-                        v_ng = 0
+                        tab_col = mulg + (sub * 64)
                         if tp < ori_tiles_1:
-                            v_ng = pl.min(128, (k_ori - mulg))
-                            pl.set_validshape(ub_tabs, [1, v_ng])
-                            pl.load(ub_tabs, ori_sparse_indices, [m_1, 0, mulg])
+                            pl.set_validshape(ub_tabs, [1, 64])
+                            pl.load(ub_tabs, ori_sparse_indices, [m_1, 0, tab_col])
                             pl.set_validshape(ub_tabs, [1, 2304])
-                            build_pair_tab_vf(
-                                view_28, view_29, ub_pt_native[0], fan_grp[0], tbg, bso_v, stro_v, 544, negg, wing,
-                                cmg, cxlg, bs_pow2_o, bs_shift_o
+                            build_pair_tab_row_vf(
+                                ub_tabs, ub_pt_native[0], tbg, bso_v, stro_v, 544, bs_pow2_o, bs_shift_o
                             )
                         else:
-                            v_ng = pl.min(128, (k_cmp - mulg))
-                            pl.set_validshape(ub_tabs, [1, v_ng])
-                            pl.load(ub_tabs, si_v, [m_1, 0, mulg])
+                            pl.set_validshape(ub_tabs, [1, 64])
+                            pl.load(ub_tabs, si_v, [m_1, 0, tab_col])
                             pl.set_validshape(ub_tabs, [1, 2304])
-                            build_pair_tab_vf(
-                                view_28, view_34, ub_pt_native[0], fan_grp[0], tbg, bsc_v, strc_v, 320, negg, wing,
-                                cmg, cxlg, bs_pow2_c, bs_shift_c
+                            build_pair_tab_row_vf(
+                                ub_tabs, ub_pt_native[0], tbg, bsc_v, strc_v, 320, bs_pow2_c, bs_shift_c
                             )
                 if tl_1 == 0:
                     if rpar == 0:
@@ -4495,7 +4692,7 @@ def mixed_quant_sparse_flash_mla_kernel(
                     nt_1 = tpc_1 + 3
                 for t_13 in pl.range(0, pl.max(nt_1, 0), 1):
                     tgo = 0
-                    clk_slot_8 = clk_1 & 7
+                    clk_slot_8 = clk_1 & 3
                     if t_13 < tpc_1:
                         tgo = tl_1 + t_13
                         seg = 0
@@ -4529,62 +4726,162 @@ def mixed_quant_sparse_flash_mla_kernel(
                             cxlm = 63
                         if cmp_16:
                             if tab_fast == 0:
-                                v_n = pl.min(128, (k_ori - mul_11))
-                                pl.set_validshape(ub_tabs, [1, v_n])
-                                pl.load(ub_tabs, ori_sparse_indices, [m_1, 0, seg128])
+                                tab_col = seg128 + (sub * 64)
+                                pl.set_validshape(ub_tabs, [1, 64])
+                                pl.load(ub_tabs, ori_sparse_indices, [m_1, 0, tab_col])
                                 pl.set_validshape(ub_tabs, [1, 2304])
-                                build_pair_tab_vf(
-                                    view_28, view_29, ub_pt_native[clk_1 & 1], fan_grp[clk_1 & 1], clk_slot_8, bso_v,
-                                    stro_v, 544, sneg, win, cmx, cxlm, bs_pow2_o, bs_shift_o
+                                build_pair_tab_row_vf(
+                                    ub_tabs,
+                                    ub_pt_native[clk_1 & 1],
+                                    clk_slot_8,
+                                    bso_v,
+                                    stro_v,
+                                    544,
+                                    bs_pow2_o,
+                                    bs_shift_o,
                                 )
                             nv = pl.min(pl.max((actual_n - mul_15), 0), 64)
                             ptb = ub_pt_native[clk_1 & 1]
                             if fit_row != 0:
                                 ptb = ub_pt_native[0]
                             dequant_ori(
-                                0, nv, ori_kv, slot, sub, tt, ttf, tail16, sub0, dq_ori, ptb, 0,
+                                0,
+                                nv,
+                                ori_kv,
+                                slot,
+                                sub,
+                                tt,
+                                ttf,
+                                tail16,
+                                sub0,
+                                dq_ori,
+                                ptb,
+                                0,
                                 ((((clk_1 * 2) % 2) * 2) + 0),
                             )
                             dequant_ori(
-                                1, nv, ori_kv, slot, sub, tt, ttf, tail16, sub0, dq_ori, ptb, 0,
+                                1,
+                                nv,
+                                ori_kv,
+                                slot,
+                                sub,
+                                tt,
+                                ttf,
+                                tail16,
+                                sub0,
+                                dq_ori,
+                                ptb,
+                                0,
                                 ((((clk_1 * 2) % 2) * 2) + 1),
                             )
                             pl.system.wait_cross_core(
                                 pipe=P.MTE3, event_id=1, sync_mode=pl.CrossCoreSyncMode.INTRA_BLOCK
                             )
                             dequant_ori(
-                                0, nv, ori_kv, slot, sub, tt, ttf, tail16, sub0, dq_ori, ptb, 1,
+                                0,
+                                nv,
+                                ori_kv,
+                                slot,
+                                sub,
+                                tt,
+                                ttf,
+                                tail16,
+                                sub0,
+                                dq_ori,
+                                ptb,
+                                1,
                                 ((((clk_1 * 2) % 2) * 2) + 0),
                             )
                             dequant_ori(
-                                2, nv, ori_kv, slot, sub, tt, ttf, tail16, sub0, dq_ori, ptb, 0,
+                                2,
+                                nv,
+                                ori_kv,
+                                slot,
+                                sub,
+                                tt,
+                                ttf,
+                                tail16,
+                                sub0,
+                                dq_ori,
+                                ptb,
+                                0,
                                 (((((clk_1 * 2) + 1) % 2) * 2) + 0),
                             )
                             dequant_ori(
-                                1, nv, ori_kv, slot, sub, tt, ttf, tail16, sub0, dq_ori, ptb, 1,
+                                1,
+                                nv,
+                                ori_kv,
+                                slot,
+                                sub,
+                                tt,
+                                ttf,
+                                tail16,
+                                sub0,
+                                dq_ori,
+                                ptb,
+                                1,
                                 ((((clk_1 * 2) % 2) * 2) + 1),
                             )
                             dequant_ori(
-                                3, nv, ori_kv, slot, sub, tt, ttf, tail16, sub0, dq_ori, ptb, 0,
+                                3,
+                                nv,
+                                ori_kv,
+                                slot,
+                                sub,
+                                tt,
+                                ttf,
+                                tail16,
+                                sub0,
+                                dq_ori,
+                                ptb,
+                                0,
                                 (((((clk_1 * 2) + 1) % 2) * 2) + 1),
                             )
                             dequant_ori(
-                                2, nv, ori_kv, slot, sub, tt, ttf, tail16, sub0, dq_ori, ptb, 1,
+                                2,
+                                nv,
+                                ori_kv,
+                                slot,
+                                sub,
+                                tt,
+                                ttf,
+                                tail16,
+                                sub0,
+                                dq_ori,
+                                ptb,
+                                1,
                                 (((((clk_1 * 2) + 1) % 2) * 2) + 0),
                             )
                             dequant_ori(
-                                3, nv, ori_kv, slot, sub, tt, ttf, tail16, sub0, dq_ori, ptb, 1,
+                                3,
+                                nv,
+                                ori_kv,
+                                slot,
+                                sub,
+                                tt,
+                                ttf,
+                                tail16,
+                                sub0,
+                                dq_ori,
+                                ptb,
+                                1,
                                 (((((clk_1 * 2) + 1) % 2) * 2) + 1),
                             )
                         else:
                             if tab_fast == 0:
-                                v_n_1 = pl.min(128, (k_cmp - mul_11))
-                                pl.set_validshape(ub_tabs, [1, v_n_1])
-                                pl.load(ub_tabs, si_v, [m_1, 0, seg128])
+                                tab_col = seg128 + (sub * 64)
+                                pl.set_validshape(ub_tabs, [1, 64])
+                                pl.load(ub_tabs, si_v, [m_1, 0, tab_col])
                                 pl.set_validshape(ub_tabs, [1, 2304])
-                                build_pair_tab_vf(
-                                    view_28, view_34, ub_pt_native[clk_1 & 1], fan_grp[clk_1 & 1], clk_slot_8, bsc_v,
-                                    strc_v, 320, sneg, win, cmx, cxlm, bs_pow2_c, bs_shift_c
+                                build_pair_tab_row_vf(
+                                    ub_tabs,
+                                    ub_pt_native[clk_1 & 1],
+                                    clk_slot_8,
+                                    bsc_v,
+                                    strc_v,
+                                    320,
+                                    bs_pow2_c,
+                                    bs_shift_c,
                                 )
                             nvc = pl.min(pl.max((actual_n - mul_15), 0), 64)
                             ptc = ub_pt_native[clk_1 & 1]
@@ -4624,48 +4921,34 @@ def mixed_quant_sparse_flash_mla_kernel(
                                     cxln = 0
                                 if cxln > 63:
                                     cxln = 63
-                                v_nn = 0
+                                tab_col = s128n + (sub * 64)
                                 if cmp_54:
-                                    v_nn = pl.min(128, (k_ori - mul_140))
-                                    pl.set_validshape(ub_tabs, [1, v_nn])
-                                    pl.load(ub_tabs, ori_sparse_indices, [m_1, 0, s128n])
+                                    pl.set_validshape(ub_tabs, [1, 64])
+                                    pl.load(ub_tabs, ori_sparse_indices, [m_1, 0, tab_col])
                                     pl.set_validshape(ub_tabs, [1, 2304])
-                                    mod_19 = (clk_1 + 2) & 7
-                                    build_pair_tab_vf(
-                                        view_28,
-                                        view_29,
+                                    mod_19 = (clk_1 + 2) & 3
+                                    build_pair_tab_row_vf(
+                                        ub_tabs,
                                         ub_pt_native[(clk_1 + 2) & 1],
-                                        fan_grp[(clk_1 + 2) & 1],
                                         mod_19,
                                         bso_v,
                                         stro_v,
                                         544,
-                                        negn,
-                                        winn,
-                                        cmxn,
-                                        cxln,
                                         bs_pow2_o,
                                         bs_shift_o,
                                     )
                                 else:
-                                    v_nn = pl.min(128, (k_cmp - mul_140))
-                                    pl.set_validshape(ub_tabs, [1, v_nn])
-                                    pl.load(ub_tabs, si_v, [m_1, 0, s128n])
+                                    pl.set_validshape(ub_tabs, [1, 64])
+                                    pl.load(ub_tabs, si_v, [m_1, 0, tab_col])
                                     pl.set_validshape(ub_tabs, [1, 2304])
-                                    mod_20 = (clk_1 + 2) & 7
-                                    build_pair_tab_vf(
-                                        view_28,
-                                        view_34,
+                                    mod_20 = (clk_1 + 2) & 3
+                                    build_pair_tab_row_vf(
+                                        ub_tabs,
                                         ub_pt_native[(clk_1 + 2) & 1],
-                                        fan_grp[(clk_1 + 2) & 1],
                                         mod_20,
                                         bsc_v,
                                         strc_v,
                                         320,
-                                        negn,
-                                        winn,
-                                        cmxn,
-                                        cxln,
                                         bs_pow2_c,
                                         bs_shift_c,
                                     )
@@ -4791,11 +5074,8 @@ FD_M_NUM_INDEX = 6
 FD_HEADS_PER_AIV = 32
 
 TILE_N = 128  # KV tokens per S2 task (matches the kernel contract).
-# FD 判据对齐 cannbot DSL 规划器：用绝对节省 tile 数，不用关键路径比率（比率会高估收益）。
+# FD 判据用绝对节省 tile 数，不用关键路径比率（比率会高估收益）。
 FD_MIN_SAVED_TILES = 4
-# 长序列（rows >= 96）放宽到省 2 tile 即开 FD：A/B 实测 +0.8~+3.9%；短序列保持 4 以避开 barrier 固定开销。
-FD_MIN_SAVED_TILES_LONG = 2
-FD_MIN_ROWS_LONG = 96
 # 每核目标 tile 数；单 tile 分片会让串行 FD 归约比它卸掉的活更贵。
 FD_TARGET_TILES_PER_CORE = 4
 # 短行保留完整 online softmax，只切足够长的行。
@@ -4885,7 +5165,7 @@ def _uniform_critical(rows, row_tiles, blocks):
     start = 0
     for c in range(ublocks):
         cnt = rows // ublocks + (1 if c < rows % ublocks else 0)
-        worst = max(worst, sum(row_tiles[start:start + cnt]))
+        worst = max(worst, sum(row_tiles[start : start + cnt]))
         start += cnt
     return worst
 
@@ -4910,7 +5190,9 @@ def plan_metadata_fd(cu_q, len_ori, len_cmp=None, has_cmp=True, blocks=None):
         return None
     row_tiles = [_row_tiles(len_ori[r], (len_cmp[r] if has_cmp and len_cmp else 0), has_cmp) for r in range(rows)]
     total = sum(row_tiles)
-    if max(row_tiles) < FD_MIN_ROW_TILES:
+    # 短行（< FD_MIN_ROW_TILES 个 tile）落在 FD 切分边界会破坏 partial/LSE 归约；
+    # 混合长度行回退 uniform，整行等长时仍启用 FD（与 C++/AICPU 规划器保持一致）。
+    if min(row_tiles) < FD_MIN_ROW_TILES:
         return None
 
     # plan_blocks 按每核目标 tile 数定，再 clamp 到 [rows, blocks] 以保留整行并行度下限。
@@ -4921,8 +5203,7 @@ def plan_metadata_fd(cu_q, len_ori, len_cmp=None, has_cmp=True, blocks=None):
     fd_floor = -(-total // n_blocks)
     saved_tiles = ub_max - fd_floor
     if saved_tiles < FD_MIN_SAVED_TILES:
-        if saved_tiles < FD_MIN_SAVED_TILES_LONG or rows < FD_MIN_ROWS_LONG:
-            return None
+        return None
     flat = [total * c // n_blocks for c in range(n_blocks + 1)]
     fl_max = max(flat[c + 1] - flat[c] for c in range(n_blocks))
     if fl_max <= 0:
@@ -5044,7 +5325,6 @@ ARG_ORDER = (
     "cmp_topk_length",
     "cu_seqlens_q",
     "metadata",
-    "tiling_device",
     "out",
     "lse",
 )
@@ -5052,15 +5332,59 @@ ARG_ORDER = (
 #: Optional tensor inputs; ``None`` means absent (gated by the tilingkey condition).
 
 
-def _tiling_key(tensors, fd_enable=None):
-    """Compile-time code-path conditions (see ``MqsmlaTilingKey``).
+def _planned_blocks(metadata):
+    """Launched core count = the metadata's highest enabled FA slot + 1."""
+    enable = metadata.reshape(-1)[: FA_METADATA_SIZE * AIC_CORE_MAX_NUM].tolist()
+    n = 1
+    for core in range(AIC_CORE_MAX_NUM):
+        if enable[FA_METADATA_SIZE * core] != 0:
+            n = core + 1
+    return max(1, min(AIC_CORE_MAX_NUM, n))
 
-    FD_ENABLE 恒为 1(超集变体): FD 归约段常驻, 运行期按 metadata FD 槽自分流,
-    wrapper 不再读 metadata[900] —— 该读取是一次同步 D2H。
-    """
+
+#: metadata 里 FD 计划字（`md[900]`）的 host 侧缓存：``id(tensor) -> (weakref, fd_enable)``。
+#: 读该字要走一次 D2H，因此按张量对象缓存一次；不能用 ``data_ptr`` 作键——
+#: 设备 allocator 会在不同 case 之间复用同一地址，命中旧值会把 FD_ENABLE 误用到新计划上，
+#: 表现为单跑正确、连跑 NaN 或 AI Core error。
+_FD_PLAN_CACHE = {}
+
+
+def _fd_enable_from_metadata(md):
+    if not isinstance(md, torch.Tensor):
+        return 0
+    key = id(md)
+    entry = _FD_PLAN_CACHE.get(key)
+    if entry is not None:
+        ref, value = entry
+        if ref() is md:
+            return value
+    value = int(md.reshape(-1)[900].item())
+    if len(_FD_PLAN_CACHE) > 64:
+        dead = [k for k, (ref, _v) in _FD_PLAN_CACHE.items() if ref() is None]
+        for k in dead:
+            del _FD_PLAN_CACHE[k]
+        if len(_FD_PLAN_CACHE) > 64:
+            _FD_PLAN_CACHE.clear()
+    _FD_PLAN_CACHE[key] = (weakref.ref(md), value)
+    return value
+
+
+def _kv_pool_far(tensor, row_bytes):
+    """池跨度超出 int32 时返回 1，供 tiling key 选择 int64 far 变体。"""
+    if not isinstance(tensor, torch.Tensor):
+        return 0
+    pages = int(tensor.shape[0])
+    span = (pages - 1) * int(tensor.stride(0)) + int(tensor.shape[1]) * row_bytes
+    return int(span > 2**31 - 1)
+
+
+def _tiling_key(tensors, fd_enable=None):
+    """Compile-time code-path conditions (see ``MqsmlaTilingKey``)."""
     has_cmp = isinstance(tensors.get("cmp_kv"), torch.Tensor)
     has_ori_len = isinstance(tensors.get("ori_topk_length"), torch.Tensor)
     has_cmp_len = has_cmp and isinstance(tensors.get("cmp_topk_length"), torch.Tensor)
+    if fd_enable is None:
+        fd_enable = _fd_enable_from_metadata(tensors.get("metadata"))
     vdep64 = 0
     for name in ("cu_seqlens_q", "ori_topk_length", "cmp_topk_length"):
         tensor = tensors.get(name)
@@ -5070,14 +5394,32 @@ def _tiling_key(tensors, fd_enable=None):
         "HAS_ORI_LEN": int(bool(has_ori_len)),
         "HAS_CMP_LEN": int(bool(has_cmp_len)),
         "HAS_CMP": int(bool(has_cmp)),
-        "FD_ENABLE": 1,
+        "FD_ENABLE": int(bool(fd_enable)),
         "VDEP64": vdep64,
     }
 
 
 @functools.lru_cache(maxsize=64)
-def _tiling_tensor(scale, t1, ori_pages, cmp_pages, b_num, k_ori, k_cmp, bs_ori,
-                   bs_cmp, bt_ori, bt_cmp, ori_kv_stride0, cmp_kv_stride0, device):
+def _tiling_tensor(
+    scale,
+    t1,
+    ori_pages,
+    cmp_pages,
+    b_num,
+    k_ori,
+    k_cmp,
+    k_ori_raw,
+    k_cmp_raw,
+    bs_ori,
+    bs_cmp,
+    bt_ori,
+    bt_cmp,
+    ori_kv_stride0,
+    cmp_kv_stride0,
+    ori_row_tab_stride,
+    cmp_row_tab_stride,
+    device,
+):
     """Pre-packed device copy of the tiling struct.
 
     PyPTO re-serializes and H2Ds a dataclass tiling argument on every launch;
@@ -5086,60 +5428,71 @@ def _tiling_tensor(scale, t1, ori_pages, cmp_pages, b_num, k_ori, k_cmp, bs_ori,
     from pypto_pro.language.typing._tiling import tiling_instance_to_bytes
 
     tiling = MqsmlaTiling(
-        scale=scale, t1=t1, ori_pages=ori_pages, cmp_pages=cmp_pages,
-        b_num=b_num, k_ori=k_ori, k_cmp=k_cmp, bs_ori=bs_ori, bs_cmp=bs_cmp,
-        bt_ori=bt_ori, bt_cmp=bt_cmp, ori_kv_stride0=ori_kv_stride0,
-        cmp_kv_stride0=cmp_kv_stride0)
+        scale=scale,
+        t1=t1,
+        ori_pages=ori_pages,
+        cmp_pages=cmp_pages,
+        b_num=b_num,
+        k_ori=k_ori,
+        k_cmp=k_cmp,
+        k_ori_raw=k_ori_raw,
+        k_cmp_raw=k_cmp_raw,
+        bs_ori=bs_ori,
+        bs_cmp=bs_cmp,
+        bt_ori=bt_ori,
+        bt_cmp=bt_cmp,
+        ori_kv_stride0=ori_kv_stride0,
+        cmp_kv_stride0=cmp_kv_stride0,
+        ori_row_tab_stride=ori_row_tab_stride,
+        cmp_row_tab_stride=cmp_row_tab_stride,
+    )
     buf = tiling_instance_to_bytes(tiling)
     return torch.frombuffer(bytearray(buf), dtype=torch.uint8).to(device)
-
-
-@dataclasses.dataclass(frozen=True)
-class _TilingArgs:
-    """Launch tiling scalars packed once (G.FNM.05: named form for 13 values)."""
-
-    scale: float
-    t1: int
-    ori_pages: int
-    cmp_pages: int
-    b_num: int
-    k_ori: int
-    k_cmp: int
-    bs_ori: int
-    bs_cmp: int
-    bt_ori: int
-    bt_cmp: int
-    ori_kv_stride0: int
-    cmp_kv_stride0: int
 
 
 def _tiling_args(tensors, scale):
     cmp_kv = tensors.get("cmp_kv")
     cmp_idx = tensors.get("cmp_sparse_indices")
     cmp_bt = tensors.get("cmp_block_table")
-    has = lambda t: isinstance(t, torch.Tensor)  # noqa: E731
-    return _TilingArgs(
-        scale=float(scale), t1=int(tensors["q"].shape[0]),
-        ori_pages=int(tensors["ori_kv"].shape[0]),
-        cmp_pages=int(cmp_kv.shape[0]) if has(cmp_kv) else 0,
-        b_num=int(tensors["cu_seqlens_q"].shape[0]),
-        k_ori=int(tensors["ori_sparse_indices"].shape[2]),
-        k_cmp=int(cmp_idx.shape[2]) if has(cmp_idx) else 129,
-        bs_ori=int(tensors["ori_kv"].shape[1]),
-        bs_cmp=int(cmp_kv.shape[1]) if has(cmp_kv) else 128,
-        bt_ori=int(tensors["ori_block_table"].shape[1]),
-        bt_cmp=int(cmp_bt.shape[1]) if has(cmp_bt) else 0,
-        ori_kv_stride0=int(tensors["ori_kv"].stride(0)),
-        cmp_kv_stride0=int(cmp_kv.stride(0)) if has(cmp_kv) else 0,
+    k_ori_raw = int(tensors["ori_sparse_indices"].shape[2])
+    k_cmp_raw = int(cmp_idx.shape[2]) if isinstance(cmp_idx, torch.Tensor) else 129
+    k_ori_tab = ((k_ori_raw + 127) // 128) * 128
+    k_cmp_tab = ((k_cmp_raw + 127) // 128) * 128
+    tab_cols = k_ori_tab + k_cmp_tab
+    return (
+        float(scale),
+        int(tensors["q"].shape[0]),
+        int(tensors["ori_kv"].shape[0]),
+        int(cmp_kv.shape[0]) if isinstance(cmp_kv, torch.Tensor) else 0,
+        int(tensors["cu_seqlens_q"].shape[0]),
+        k_ori_tab,
+        k_cmp_tab,
+        k_ori_raw,
+        k_cmp_raw,
+        int(tensors["ori_kv"].shape[1]),
+        int(cmp_kv.shape[1]) if isinstance(cmp_kv, torch.Tensor) else 128,
+        int(tensors["ori_block_table"].shape[1]),
+        int(cmp_bt.shape[1]) if isinstance(cmp_bt, torch.Tensor) else 0,
+        int(tensors["ori_kv"].stride(0)),
+        int(cmp_kv.stride(0)) if isinstance(cmp_kv, torch.Tensor) else 0,
+        tab_cols,
+        tab_cols,
     )
 
 
 def _check_kv_pool(tensor, name, row_bytes):
-    """KV 池只允许页间 padding：页内维度必须连续，页跨度覆盖整页且落在 int32 内。"""
+    """KV 池只允许页间 padding：页内维度必须连续，页跨度覆盖整页且总跨度落在 int64 内。
+
+    页跨度超过 int32 时 kernel 会自动改走 int64 标量逐行寻址（far 模式）。
+    """
     if not isinstance(tensor, torch.Tensor):
         raise ValueError(f"input {name} must be a torch.Tensor")
-    shape_ok = int(tensor.shape[2]) == 1 and int(tensor.shape[3]) == row_bytes
-    if tensor.dtype != torch.uint8 or tensor.dim() != 4 or not shape_ok:
+    if (
+        tensor.dtype != torch.uint8
+        or tensor.dim() != 4
+        or int(tensor.shape[2]) != 1
+        or int(tensor.shape[3]) != row_bytes
+    ):
         raise ValueError(f"input {name} must be uint8 [pages, bs, 1, {row_bytes}]")
     strides = tuple(int(s) for s in tensor.stride())
     if strides[3] != 1 or strides[1] != row_bytes:
@@ -5148,10 +5501,12 @@ def _check_kv_pool(tensor, name, row_bytes):
             f"page dims must be contiguous, got strides {strides}"
         )
     page_bytes = int(tensor.shape[1]) * row_bytes
-    if strides[0] < page_bytes or strides[0] > 2**31 - 1:
-        raise ValueError(
-            f"input {name} page stride must be in [{page_bytes}, {2**31 - 1}], got {strides[0]}"
-        )
+    if strides[0] < page_bytes:
+        raise ValueError(f"input {name} page stride must be at least {page_bytes} bytes, got {strides[0]}")
+    pages = int(tensor.shape[0])
+    span = (pages - 1) * strides[0] + page_bytes
+    if pages <= 0 or span > 2**63 - 1:
+        raise ValueError(f"input {name} page span must fit int64, got pages={pages}, span={span}")
 
 
 def _check_tensors(tensors):
@@ -5162,20 +5517,19 @@ def _check_tensors(tensors):
         "ori_block_table",
         "sinks",
         "metadata",
-        "tiling_device",
         "cu_seqlens_q",
         "out",
         "lse",
     ):
         if not isinstance(tensors.get(name), torch.Tensor):
             raise ValueError(f"input {name} must be a torch.Tensor")
-    if tensors["tiling_device"].dtype != torch.int32 or int(tensors["tiling_device"].numel()) != 16:
-        raise ValueError("tiling_device must be the planner's int32[16] output tensor")
-    if tensors["tiling_device"].device != tensors["q"].device:
-        raise ValueError("tiling_device must live on q.device (same-device planner output)")
     _check_kv_pool(tensors["ori_kv"], "ori_kv", 544)
+    if int(tensors["ori_block_table"].shape[1]) > 8192:
+        raise ValueError("ori_block_table width must be <= 8192 for the fused row-table prologue")
     if isinstance(tensors.get("cmp_kv"), torch.Tensor):
         _check_kv_pool(tensors["cmp_kv"], "cmp_kv", 320)
+        if int(tensors["cmp_block_table"].shape[1]) > 8192:
+            raise ValueError("cmp_block_table width must be <= 8192 for the fused row-table prologue")
         for name in ("cmp_sparse_indices", "cmp_block_table"):
             if not isinstance(tensors.get(name), torch.Tensor):
                 raise ValueError(f"cmp_kv is given but {name} is missing")
@@ -5223,7 +5577,6 @@ def mixed_quant_sparse_flash_mla(
     cu_seqlens_q,
     sinks,
     metadata,
-    tiling_device,
     quant_mode=1,
     softmax_scale=None,
     cmp_kv=None,
@@ -5248,13 +5601,8 @@ def mixed_quant_sparse_flash_mla(
     ``None``: absent ``*_topk_length`` means the whole K column range is valid,
     and an absent cmp group (``cmp_kv``/``cmp_sparse_indices``/``cmp_block_table``)
     turns the cmp arm off. ``out``/``lse`` are allocated with ``torch.empty`` when
-    not supplied.
-
-    ``metadata``/``tiling_device`` are the AICPU planner's device outputs
-    (``int32[1024]`` schedule + ``int32[16]`` tiling params); the kernel reads
-    both on device, so this wrapper performs no D2H anywhere. ``block_dim`` /
-    ``fd_enable`` are accepted for source-compat and ignored: the launch uses
-    the all-cores superset grid and the FD-capable variant.
+    not supplied. ``block_dim`` defaults to the metadata's planned core count;
+    ``fd_enable`` defaults to the metadata plan word ``[900]``.
 
     Returns ``{"out": out, "lse": lse}`` (the kernel always writes LSE).
     """
@@ -5271,12 +5619,6 @@ def mixed_quant_sparse_flash_mla(
             raise ValueError(f"{name} must be a torch.Tensor or None")
     if not isinstance(q, torch.Tensor):
         raise ValueError("q must be a torch.Tensor")
-    if not isinstance(tiling_device, torch.Tensor):
-        raise ValueError(
-            "tiling_device is required: run the AICPU planner "
-            "(mixed_quant_sparse_flash_mla_metadata) on the same device "
-            "and pass its tiling_device output here"
-        )
     head_dim = int(q.shape[-1])
     scale = float(softmax_scale) if softmax_scale is not None else 1.0 / math.sqrt(head_dim)
     if out is None:
@@ -5291,7 +5633,6 @@ def mixed_quant_sparse_flash_mla(
         ori_topk_length=ori_topk_length,
         sinks=sinks,
         metadata=metadata,
-        tiling_device=tiling_device,
         cmp_kv=cmp_kv,
         cmp_sparse_indices=cmp_sparse_indices,
         cmp_block_table=cmp_block_table,
@@ -5301,19 +5642,30 @@ def mixed_quant_sparse_flash_mla(
         lse=lse,
     )
     _check_tensors(tensors)
-    # 全核超集发射: 计划内未启用的核读全零 FA 槽空转; host 不读 metadata 计划
-    # (那是一次同步 D2H), planned 核数由 kernel 按 metadata 自行分流。
+    # 分核与 launch 一律以当前设备的实际 Cube 核数为准：metadata 规划出来的核数
+    # （host 端）不得超过本机核数，超出说明 metadata 是在别的设备上生成的。
     device_blocks = _get_cube_core_num()
-    block_dim = int(block_dim) if block_dim is not None else device_blocks
+    if block_dim is None:
+        block_dim = _planned_blocks(metadata)
+    block_dim = int(block_dim)
     if block_dim > device_blocks:
         raise ValueError(
-            f"block_dim {block_dim} exceeds this device's cube core count {device_blocks}"
+            f"block_dim {block_dim} exceeds this device's cube core count {device_blocks}; "
+            f"regenerate metadata with mixed_quant_sparse_flash_mla_metadata on this device"
         )
     key = _tiling_key(tensors, fd_enable)
-    # FlashDecode split partials workspace: 恒为 FD 超集变体分配并清零
-    # (FD_ENABLE 常驻 1, kernel 运行期按 metadata FD 槽决定是否使用)。
-    ws = torch.zeros(MQSMLA_WORKSPACE_BYTES, dtype=torch.uint8, device=q.device)
+    # The attention kernel builds the GM row table in its prologue.  FD
+    # partials stay first (when enabled); the table follows them.
+    k_ori_raw = int(tensors["ori_sparse_indices"].shape[2])
+    cmp_idx = tensors.get("cmp_sparse_indices")
+    k_cmp_raw = int(cmp_idx.shape[2]) if isinstance(cmp_idx, torch.Tensor) else 129
+    tab_cols = ((k_ori_raw + 127) // 128) * 128 + ((k_cmp_raw + 127) // 128) * 128
+    tab_bytes = int(tensors["q"].shape[0]) * tab_cols * 4
+    if key["FD_ENABLE"]:
+        ws = torch.zeros(MQSMLA_WORKSPACE_BYTES + tab_bytes, dtype=torch.uint8, device=q.device)
+    else:
+        ws = torch.empty(max(tab_bytes, 1), dtype=torch.uint8, device=q.device)
     args = [tensors[n] for n in ARG_ORDER] + [ws]
-    tiling = _tiling_tensor(*dataclasses.astuple(_tiling_args(tensors, scale)), q.device)
+    tiling = _tiling_tensor(*_tiling_args(tensors, scale), q.device)
     mixed_quant_sparse_flash_mla_kernel[None, block_dim, key](*args, tiling)
     return {"out": out, "lse": lse}

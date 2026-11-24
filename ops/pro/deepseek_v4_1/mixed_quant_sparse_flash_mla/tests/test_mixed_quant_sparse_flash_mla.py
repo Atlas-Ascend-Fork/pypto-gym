@@ -54,19 +54,15 @@ import torch_npu  # noqa: F401
 
 _THIS_DIR = os.path.dirname(os.path.abspath(__file__))
 _OP_DIR = os.path.dirname(_THIS_DIR)
-# 强制把本算子的目录放到 sys.path 最前: 根 conftest 已注入 ops/pypto_pro 下同名
-# 算子目录的同名模块, 仅做 membership 判断会解析到原型模块.
 for _path in (_THIS_DIR, os.path.join(_THIS_DIR, "assets"), os.path.join(_OP_DIR, "op_kernel")):
+    # 本算子路径必须优先于其它算子/同名 pypto_pro 样例目录（root conftest 会注入后者）。
     while _path in sys.path:
         sys.path.remove(_path)
     sys.path.insert(0, _path)
 
-import _standalone_env  # noqa: E402,F401  直跑自举: 注入 tests/common、aclnn 桥与 vendor 环境
-
 
 def _load_asset(module_name, file_path):
-    # 显式路径加载: ops/pypto_pro 下同名算子目录的 assets 会经根 conftest 注入
-    # sys.path 并遮蔽本目录同名 golden, 必须按文件路径加载
+    """按文件路径加载 assets，避免 ops/pypto_pro 下同名模块经 sys.path 遮蔽本算子 golden。"""
     import importlib.util
 
     spec = importlib.util.spec_from_file_location(module_name, file_path)
@@ -86,67 +82,11 @@ verify = _load_asset(
 )
 
 try:
-    from op_caller import get_mode, get_op_caller  # noqa: E402
+    from op_caller import get_op_caller  # noqa: E402
 
     mixed_quant_sparse_flash_mla = get_op_caller("mixed_quant_sparse_flash_mla")
 except ImportError:  # standalone run outside pytest (jit only)
     from mixed_quant_sparse_flash_mla import mixed_quant_sparse_flash_mla  # noqa: E402
-
-
-def _planner_entry():
-    # AICPU metadata 规划入口: torch/aclnn 模式走安装态绑定/桥;
-    # jit/直跑时按文件路径加载算子源码的 host 侧 AICPU launcher 并统一入参
-    try:
-        if get_mode() != "jit":
-            return get_op_caller("mixed_quant_sparse_flash_mla_metadata")
-    except ImportError:
-        pass
-    kernel = _load_asset(
-        "mixed_quant_sparse_flash_mla_metadata_kernel",
-        os.path.join(os.path.dirname(_OP_DIR), "mixed_quant_sparse_flash_mla_metadata",
-                     "op_kernel_aicpu", "mixed_quant_sparse_flash_mla_metadata.py"),
-    )
-    launcher = kernel.mixed_quant_sparse_flash_mla_metadata_aicpu
-
-    def _planner(cu_seqlens_q, ori_topk_length, cmp_topk_length, *, blocks, has_cmp,
-                 k_ori, k_cmp, bs_ori, bs_cmp, bt_ori, bt_cmp,
-                 ori_pages, cmp_pages, ori_kv_stride0, cmp_kv_stride0):
-        return launcher(
-            ori_topk_length, cmp_topk_length, cu_seqlens_q=cu_seqlens_q,
-            has_cmp_kv=bool(has_cmp), block_num=int(blocks),
-            k_ori=int(k_ori), k_cmp=int(k_cmp),
-            bs_ori=int(bs_ori), bs_cmp=int(bs_cmp),
-            bt_ori=int(bt_ori), bt_cmp=int(bt_cmp),
-            ori_pages=int(ori_pages), cmp_pages=int(cmp_pages),
-            ori_kv_stride0=int(ori_kv_stride0), cmp_kv_stride0=int(cmp_kv_stride0),
-        )
-
-    return _planner
-
-
-_planner = _planner_entry()
-
-
-def _plan_on_device(dev, case, device):
-    # AICPU 板上规划: 返回 (metadata, tiling_device), tiling_device 直喂主算子
-    has_cmp = bool(case["has_cmp"])
-    cmp_len = dev["cmp_topk_length"] if has_cmp else None
-    blocks = int(torch.npu.get_device_properties(device).cube_core_num)
-    plan, tiling_device = _planner(
-        dev["cu_seqlens_q"], dev["ori_topk_length"], cmp_len,
-        blocks=blocks, has_cmp=1 if has_cmp else 0,
-        k_ori=int(case["k_ori"]), k_cmp=int(case["k_cmp"]),
-        bs_ori=int(dev["ori_kv"].shape[1]),
-        bs_cmp=int(dev["cmp_kv"].shape[1]) if has_cmp else 0,
-        bt_ori=int(dev["ori_block_table"].shape[1]),
-        bt_cmp=int(dev["cmp_block_table"].shape[1]) if has_cmp else 0,
-        ori_pages=int(dev["ori_kv"].shape[0]),
-        cmp_pages=int(dev["cmp_kv"].shape[0]) if has_cmp else 0,
-        ori_kv_stride0=int(dev["ori_kv"].stride(0)),
-        cmp_kv_stride0=int(dev["cmp_kv"].stride(0)) if has_cmp else 0,
-    )
-    torch.npu.synchronize()
-    return plan, tiling_device
 
 #: P0 case 名（合约定义的 16 条，按合同顺序）。
 P0_CASES = list(golden.load_case_params().keys())
@@ -197,8 +137,14 @@ def _kv_to_device(tensor, device):
     return view
 
 
-def _run_case(name, device):
+def _run_case(name, device, wide_bt=None):
     inputs, block_dim, case = golden.build_inputs(name, torch.device("cpu"))
+    if wide_bt is not None:
+        for key in ("ori_block_table", "cmp_block_table"):
+            table = inputs[key]
+            padded = torch.zeros((table.shape[0], int(wide_bt)), dtype=table.dtype)
+            padded[:, : table.shape[1]] = table
+            inputs[key] = padded
     reference = golden.reference(name, inputs)
     dev = {k: inputs[k].to(device) for k in _INPUT_KEYS if k not in ("ori_kv", "cmp_kv")}
     for key in ("ori_kv", "cmp_kv"):
@@ -207,7 +153,6 @@ def _run_case(name, device):
         for key in ("ori_kv", "cmp_kv"):
             assert not dev[key].is_contiguous(), f"{name}: {key} must stay page-padded on device"
     rows = int(inputs["q"].shape[0])
-    plan, tiling_device = _plan_on_device(dev, case, device)
     out = torch.full(tuple(inputs["q"].shape), float("nan"), dtype=torch.bfloat16, device=device)
     lse = torch.full((1, rows, 64), float("nan"), dtype=torch.float32, device=device)
     result = mixed_quant_sparse_flash_mla(
@@ -217,8 +162,7 @@ def _run_case(name, device):
         ori_block_table=dev["ori_block_table"],
         cu_seqlens_q=dev["cu_seqlens_q"],
         sinks=dev["sinks"],
-        metadata=plan,
-        tiling_device=tiling_device,
+        metadata=dev["metadata"],
         quant_mode=1,
         softmax_scale=float(case["softmax_scale"]),
         cmp_kv=dev["cmp_kv"],

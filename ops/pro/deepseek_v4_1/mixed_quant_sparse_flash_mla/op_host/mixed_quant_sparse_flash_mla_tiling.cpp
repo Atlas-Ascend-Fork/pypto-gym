@@ -11,23 +11,26 @@
 
 /*!
  * \file mixed_quant_sparse_flash_mla_tiling.cpp
- * \brief MixedQuantSparseFlashMla host tiling (value-free, superset).
+ * \brief MixedQuantSparseFlashMla host tiling.
  *
- * 全设备端形态: tiling 只消费 shape/dtype/属性, 不读任何输入张量的值 ——
- * 值依赖调度全部在设备侧(AICPU metadata 算子板上产出 int32[1024] 计划 +
- * int32[16] tiling_device, kernel 执行期从这两个 GM 张量读取 tiling 参数
- * 并逐槽自分流):
- *   - blockDim = min(cube cores, AIC_CORE_MAX_NUM): FA/FD 槽位上限 36, 计划
- *     内启用核数恒不超过它; 未启用核读到全零 FA 槽(row_count=0)空转, FD 变体
- *     的全核 barrier 由所有已发射核共同到达, 语义安全;
- *   - workspace 恒为 FD 超集(WORKSPACE_BYTES_FD): FD 变体常驻可用, uniform
- *     计划不触碰;
- *   - tilingkey 的 FD_ENABLE 位常置 1: 选择携带 FD 归约段的变体, 运行期按
- *     metadata FD 槽(fen)是否非零自分流, uniform 计划零开销跳过。
+ * C++ port of the Python host planner (`op_kernel/mixed_quant_sparse_flash_mla.py`
+ * plan_metadata_uniform / plan_metadata_fd / plan_metadata / build_metadata,
+ * cross-checked against the independent re-implementation in
+ * tests/assets/mixed_quant_sparse_flash_mla_golden_cpu.py). The two must stay
+ * equivalent:
+ *   - the int32[1024] metadata schedule (uniform whole-row or flat FD plan)
+ *     is generated here for FD/blockDim planning; the kernel reads the
+ *     caller-provided metadata input tensor (large arrays stay out of tiling);
+ *   - FD_ENABLE tiling-key bit and blockDim follow the plan;
+ *   - uniform blocks = min(device cube cores, rows), clamped to AIC_CORE_MAX_NUM.
  *
- * tiling struct 仍按 shape 填充(保持布局校验有效), kernel 运行期仅从其中读
- * softmax_scale; 其余 tiling 参数由 kernel 从 tiling_device 张量读取。本文件
- * 不消费任何 host 值, 绑定走 Tensor 变体, 长度张量全程留在设备上(无 D2H)。
+ * Value dependency:
+ *   cu_seqlens_q / ori_topk_length / cmp_topk_length are registered
+ *   TilingInputsDataDependency (ValueDepend(OPTIONAL)). When their Host data is
+ *   available the plan is exact; without per-row lengths the FD plan is never
+ *   chosen (uniform only), and without cu_seqlens_q host data the tiling
+ *   synthesizes the single-batch default ([0, T1]) for b_num == 2 and fails
+ *   otherwise (multi-batch plans cannot be derived from shapes alone).
  */
 
 #include "mixed_quant_sparse_flash_mla_tiling.h"
@@ -54,10 +57,39 @@ namespace optiling {
 
 constexpr int64_t AIC_CORE_MAX_NUM = 36;
 constexpr int64_t MQSMLA_METADATA_TOTAL_SIZE = 1024;
-constexpr int64_t TILING_DEVICE_SIZE = 16;
-// FD split partials workspace (72 splits x 64 heads x 512 fp32 + m/l planes);
-// 恒定超集分配, uniform 计划不触碰(SetSysWorkspaceForce 路由要求非零)。
+constexpr int64_t FA_METADATA_SIZE = 9;
+constexpr int64_t FA_CORE_ENABLE_INDEX = 0;
+constexpr int64_t FA_BN2_START_INDEX = 1;
+constexpr int64_t FA_M_START_INDEX = 2;
+constexpr int64_t FA_S2_START_INDEX = 3;
+constexpr int64_t FA_BN2_END_INDEX = 4;
+constexpr int64_t FA_M_END_INDEX = 5;
+constexpr int64_t FA_S2_END_INDEX = 6;
+constexpr int64_t FA_FIRST_FD_DATA_WORKSPACE_IDX_INDEX = 7;
+constexpr int64_t FD_METADATA_BASE = AIC_CORE_MAX_NUM * FA_METADATA_SIZE;  // 324
+constexpr int64_t FD_CORE_ENABLE_INDEX = 0;
+constexpr int64_t FD_BN2_IDX_INDEX = 1;
+constexpr int64_t FD_M_IDX_INDEX = 2;
+constexpr int64_t FD_WORKSPACE_IDX_INDEX = 3;
+constexpr int64_t FD_WORKSPACE_NUM_INDEX = 4;
+constexpr int64_t FD_M_START_INDEX = 5;
+constexpr int64_t FD_M_NUM_INDEX = 6;
+constexpr int64_t FD_METADATA_SIZE = 8;
+constexpr int64_t FD_HEADS_PER_AIV = 32;
+constexpr int64_t FD_USED_VEC_NUM_WORD = 900;
+constexpr int64_t TILE_N = 128;
+// FD 判据用绝对节省 tile 数，不用关键路径比率（比率会高估收益）。
+// 所有行统一要求 saved >= 4，不再对长行放宽。
+constexpr int64_t FD_MIN_SAVED_TILES = 4;
+// 每核目标 tile 数；单 tile 分片会让串行 FD 归约比它卸掉的活更贵。
+constexpr int64_t FD_TARGET_TILES_PER_CORE = 4;
+// 短行保留完整 online softmax，只切足够长的行。
+constexpr int64_t FD_MIN_ROW_TILES = 5;
+// FD split partials workspace (72 splits x 64 heads x 512 fp32 + m/l planes).
 constexpr int64_t WORKSPACE_BYTES_FD = (72 * 64 * 512 + 2 * 72 * 64) * 4;
+// A non-zero workspace is required for PyPTO's _gen_infer_cpp to correctly
+// route SetSysWorkspaceForce + tiling data.
+constexpr int64_t MIN_WORKSPACE = 1024;
 
 constexpr int64_t D = 512;
 constexpr int64_t N1 = 64;
@@ -77,13 +109,245 @@ enum InputIndex {
     CMP_TOP_K_LEN,
     CU_SEQLENS_Q,
     METADATA,
-    TILING_DEVICE,
 };
 
 enum OutputIndex {
     OUT = 0,
     LSE,
 };
+
+inline int64_t CeilDiv(int64_t a, int64_t b)
+{
+    const int64_t divisor = (b > 0) ? b : 1;
+    return (a + divisor - 1) / divisor;
+}
+
+// Port of the Python `_row_tiles` (kernel planner).
+inline int64_t RowTiles(int64_t wOri, int64_t wCmp, bool hasCmp)
+{
+    int64_t n = wOri > 0 ? CeilDiv(wOri, TILE_N) : 0;
+    if (hasCmp && wCmp > 0) {
+        n += CeilDiv(wCmp, TILE_N);
+    }
+    return n;
+}
+
+// Port of the Python `_batch_of` (kernel planner).
+inline int64_t BatchOf(const std::vector<int64_t> &cuQ, int64_t row)
+{
+    int64_t b = 0;
+    for (size_t i = 0; i < cuQ.size(); ++i) {
+        if (cuQ[i] <= row) {
+            b = static_cast<int64_t>(i);
+        }
+    }
+    return b;
+}
+
+// Port of the Python `_uniform_critical`.
+static int64_t UniformCritical(int64_t rows, const std::vector<int64_t> &rowTiles, int64_t blocks)
+{
+    int64_t ublocks = std::min(blocks, rows);
+    if (ublocks <= 0) {
+        return 0;
+    }
+    int64_t worst = 0;
+    int64_t start = 0;
+    const int64_t divisor = (ublocks > 0) ? ublocks : 1;
+    for (int64_t c = 0; c < ublocks; ++c) {
+        int64_t cnt = rows / divisor + (c < rows % divisor ? 1 : 0);
+        int64_t sum = 0;
+        for (int64_t i = start; i < start + cnt && i < static_cast<int64_t>(rowTiles.size()); ++i) {
+            sum += rowTiles[static_cast<size_t>(i)];
+        }
+        worst = std::max(worst, sum);
+        start += cnt;
+    }
+    return worst;
+}
+
+// Port of the Python `plan_metadata_uniform`.
+static void PlanUniform(const std::vector<int64_t> &cuQ, int64_t blocks, std::vector<int64_t> &md)
+{
+    int64_t rows = cuQ.back();
+    md.assign(MQSMLA_METADATA_TOTAL_SIZE, 0);
+    const int64_t divisor = (blocks > 0) ? blocks : 1;
+    int64_t rowsPerCore = rows / divisor;
+    int64_t extra = rows % divisor;
+    int64_t start = 0;
+    for (int64_t core = 0; core < blocks; ++core) {
+        int64_t count = rowsPerCore + (core < extra ? 1 : 0);
+        int64_t end = start + count;
+        if (count > 0) {
+            int64_t bn2S = BatchOf(cuQ, start);
+            int64_t bn2E = BatchOf(cuQ, end);
+            int64_t mS = start - cuQ[static_cast<size_t>(bn2S)];
+            int64_t mE = end - cuQ[static_cast<size_t>(bn2E)];
+            int64_t fa = FA_METADATA_SIZE * core;
+            md[static_cast<size_t>(fa + FA_CORE_ENABLE_INDEX)] = 1;
+            md[static_cast<size_t>(fa + FA_BN2_START_INDEX)] = bn2S;
+            md[static_cast<size_t>(fa + FA_M_START_INDEX)] = mS;
+            md[static_cast<size_t>(fa + FA_S2_START_INDEX)] = 0;
+            md[static_cast<size_t>(fa + FA_BN2_END_INDEX)] = bn2E;
+            md[static_cast<size_t>(fa + FA_M_END_INDEX)] = mE;
+            md[static_cast<size_t>(fa + FA_S2_END_INDEX)] = 0;
+            md[static_cast<size_t>(fa + FA_FIRST_FD_DATA_WORKSPACE_IDX_INDEX)] = 0;
+        }
+        start = end;
+    }
+    md[FD_USED_VEC_NUM_WORD] = 0;
+}
+
+// Port of the Python `plan_metadata_fd`. Returns the blockDim when the FD plan
+// is adopted, 0 otherwise.
+static int64_t PlanFd(const std::vector<int64_t> &cuQ, const std::vector<int64_t> &lenOri,
+                      const std::vector<int64_t> &lenCmp, bool hasCmp, int64_t blocks,
+                      std::vector<int64_t> &md)
+{
+    int64_t rows = cuQ.back();
+    if (rows <= 0 || blocks <= 0) {
+        return 0;
+    }
+    std::vector<int64_t> rowTiles(static_cast<size_t>(rows), 0);
+    int64_t total = 0;
+    int64_t minTiles = 0;
+    for (int64_t r = 0; r < rows; ++r) {
+        int64_t wCmp = (hasCmp && !lenCmp.empty()) ? lenCmp[static_cast<size_t>(r)] : 0;
+        int64_t tiles = RowTiles(lenOri[static_cast<size_t>(r)], wCmp, hasCmp);
+        rowTiles[static_cast<size_t>(r)] = tiles;
+        total += tiles;
+        if (r == 0 || tiles < minTiles) {
+            minTiles = tiles;
+        }
+    }
+    // A short row (< FD_MIN_ROW_TILES tiles) on a split boundary corrupts the
+    // FD partial/LSE merge; keep FD off for mixed-length rows.
+    if (minTiles < FD_MIN_ROW_TILES) {
+        return 0;
+    }
+
+    // plan_blocks 按每核目标 tile 数定，再 clamp 到 [rows, blocks] 以保留整行并行度下限。
+    int64_t nBlocks = std::min(std::max(total / FD_TARGET_TILES_PER_CORE, rows), blocks);
+    if (nBlocks <= 0) {
+        return 0;
+    }
+    int64_t ubMax = UniformCritical(rows, rowTiles, blocks);
+    const int64_t fdFloor = nBlocks > 0 ? (total + nBlocks - 1) / nBlocks : 0;
+    const int64_t savedTiles = ubMax - fdFloor;
+    if (savedTiles < FD_MIN_SAVED_TILES) {
+        return 0;
+    }
+    const int64_t blockDivisor = nBlocks;
+    if (blockDivisor <= 0) {
+        return 0;
+    }
+    std::vector<int64_t> flat(static_cast<size_t>(nBlocks) + 1, 0);
+    for (int64_t c = 0; c <= nBlocks; ++c) {
+        flat[static_cast<size_t>(c)] = total * c / blockDivisor;
+    }
+    int64_t flMax = 0;
+    for (int64_t c = 0; c < nBlocks; ++c) {
+        flMax = std::max(flMax, flat[static_cast<size_t>(c) + 1] - flat[static_cast<size_t>(c)]);
+    }
+    if (flMax <= 0) {
+        return 0;
+    }
+
+    std::vector<int64_t> rstart(static_cast<size_t>(rows), 0);
+    int64_t acc = 0;
+    for (int64_t r = 0; r < rows; ++r) {
+        rstart[static_cast<size_t>(r)] = acc;
+        acc += rowTiles[static_cast<size_t>(r)];
+    }
+    auto rowAt = [&](int64_t flatPos) -> int64_t {
+        int64_t r = 0;
+        for (int64_t i = 0; i < rows; ++i) {
+            if (rstart[static_cast<size_t>(i)] <= flatPos) {
+                r = i;
+            }
+        }
+        return r;
+    };
+
+    std::vector<std::pair<int64_t, int64_t>> splits;
+    for (int64_t c = 1; c < nBlocks; ++c) {
+        int64_t f = flat[static_cast<size_t>(c)];
+        int64_t r = rowAt(f);
+        if (rstart[static_cast<size_t>(r)] < f && f < rstart[static_cast<size_t>(r)] + rowTiles[static_cast<size_t>(r)]) {
+            splits.emplace_back(c, r);
+        }
+    }
+    if (static_cast<int64_t>(splits.size()) > nBlocks ||
+        static_cast<int64_t>(splits.size()) * 2 > 2 * AIC_CORE_MAX_NUM) {
+        return 0;
+    }
+    for (size_t i = 1; i < splits.size(); ++i) {
+        if (splits[i].second == splits[i - 1].second) {
+            return 0;
+        }
+    }
+
+    md.assign(MQSMLA_METADATA_TOTAL_SIZE, 0);
+    for (int64_t c = 0; c < nBlocks; ++c) {
+        int64_t f0 = flat[static_cast<size_t>(c)];
+        int64_t f1 = flat[static_cast<size_t>(c) + 1];
+        if (f1 == f0) {
+            continue;
+        }
+        int64_t r0 = rowAt(f0);
+        int64_t r1 = rowAt(f1 - 1);
+        int64_t e = f1 - rstart[static_cast<size_t>(r1)];
+        int64_t r1e = e < rowTiles[static_cast<size_t>(r1)] ? r1 : r1 + 1;
+        int64_t b0 = BatchOf(cuQ, r0);
+        int64_t b1 = BatchOf(cuQ, r1e);
+        int64_t fa = FA_METADATA_SIZE * c;
+        md[static_cast<size_t>(fa + FA_CORE_ENABLE_INDEX)] = 1;
+        md[static_cast<size_t>(fa + FA_BN2_START_INDEX)] = b0;
+        md[static_cast<size_t>(fa + FA_M_START_INDEX)] = r0 - cuQ[static_cast<size_t>(b0)];
+        md[static_cast<size_t>(fa + FA_S2_START_INDEX)] = f0 - rstart[static_cast<size_t>(r0)];
+        md[static_cast<size_t>(fa + FA_BN2_END_INDEX)] = b1;
+        md[static_cast<size_t>(fa + FA_M_END_INDEX)] = r1e - cuQ[static_cast<size_t>(b1)];
+        md[static_cast<size_t>(fa + FA_S2_END_INDEX)] = e >= rowTiles[static_cast<size_t>(r1)] ? 0 : e;
+    }
+
+    for (const auto &split : splits) {
+        int64_t c = split.first;
+        int64_t r = split.second;
+        int64_t headWs = 2 * (c - 1);
+        int64_t tailWs = 2 * (c - 1) + 1;
+        md[static_cast<size_t>(FA_METADATA_SIZE * c + FA_FIRST_FD_DATA_WORKSPACE_IDX_INDEX)] = headWs + 1;
+        md[static_cast<size_t>(FA_METADATA_SIZE * (c - 1) + 8)] = tailWs + 1;
+        int64_t b = BatchOf(cuQ, r);
+        for (int64_t half = 0; half < 2; ++half) {
+            int64_t base = FD_METADATA_BASE + (2 * (c - 1) + half) * FD_METADATA_SIZE;
+            md[static_cast<size_t>(base + FD_CORE_ENABLE_INDEX)] = 1;
+            md[static_cast<size_t>(base + FD_BN2_IDX_INDEX)] = b;
+            md[static_cast<size_t>(base + FD_M_IDX_INDEX)] = r - cuQ[static_cast<size_t>(b)];
+            md[static_cast<size_t>(base + FD_WORKSPACE_IDX_INDEX)] = headWs;
+            md[static_cast<size_t>(base + FD_WORKSPACE_NUM_INDEX)] = 2;
+            md[static_cast<size_t>(base + FD_M_START_INDEX)] = FD_HEADS_PER_AIV * half;
+            md[static_cast<size_t>(base + FD_M_NUM_INDEX)] = FD_HEADS_PER_AIV;
+        }
+    }
+    md[FD_USED_VEC_NUM_WORD] = static_cast<int64_t>(splits.size());
+    return nBlocks;
+}
+
+// Port of the Python `plan_metadata` dispatch. Returns the blockDim.
+static int64_t PlanMetadata(const std::vector<int64_t> &cuQ, const std::vector<int64_t> &lenOri,
+                            const std::vector<int64_t> &lenCmp, bool hasCmp, int64_t blocks,
+                            std::vector<int64_t> &md)
+{
+    if (!lenOri.empty()) {
+        int64_t fdBlocks = PlanFd(cuQ, lenOri, lenCmp, hasCmp, blocks, md);
+        if (fdBlocks > 0) {
+            return fdBlocks;
+        }
+    }
+    int64_t ublocks = std::min(blocks, std::max(cuQ.back(), static_cast<int64_t>(1)));
+    PlanUniform(cuQ, ublocks, md);
+    return ublocks;
+}
 
 class TilingMixedQuantSparseFlashMlaFunc {
 public:
@@ -96,10 +360,14 @@ private:
     ge::graphStatus ValidateTensors();
     ge::graphStatus ComputeTiling();
 
+    static bool IsHostPlacement(const gert::Tensor *tensor)
+    {
+        return tensor != nullptr && gert::TensorPlacementUtils::IsOnHost(tensor->GetPlacement());
+    }
     static bool CheckShape(const gert::StorageShape *shape, std::initializer_list<int64_t> dims);
     static ge::DataType GetInputDtype(gert::TilingContext *context, size_t index);
     static ge::DataType GetOutputDtype(gert::TilingContext *context, size_t index);
-    ge::graphStatus ResolveKvPageStride(size_t index, const char *name, int64_t bs, int64_t rowBytes,
+    ge::graphStatus ResolveKvPageStride(size_t index, const char *name, int64_t pages, int64_t bs, int64_t rowBytes,
                                        int64_t *stride0);
 
     gert::TilingContext *tilingContext_ = nullptr;
@@ -117,12 +385,16 @@ private:
     int64_t oriKvStride0_ = 0;
     int64_t cmpKvStride0_ = 0;
     int64_t blockDim_ = 1;
+    int64_t fdEnable_ = 0;
     int64_t vdep64_ = 0;
     float scale_ = 0.0F;
     bool hasCmp_ = false;
     bool hasOriLen_ = false;
     bool hasCmpLen_ = false;
     uint32_t cubeCoreNum_ = 0;
+    std::vector<int64_t> cuQ_;
+    std::vector<int64_t> lenOri_;
+    std::vector<int64_t> lenCmp_;
 };
 
 ge::DataType TilingMixedQuantSparseFlashMlaFunc::GetInputDtype(gert::TilingContext *context, size_t index)
@@ -158,43 +430,45 @@ bool TilingMixedQuantSparseFlashMlaFunc::CheckShape(const gert::StorageShape *sh
 }
 
 ge::graphStatus TilingMixedQuantSparseFlashMlaFunc::ResolveKvPageStride(size_t index, const char *name,
-                                                                              int64_t bs, int64_t rowBytes,
-                                                                              int64_t *stride0)
+                                                                              int64_t pages, int64_t bs,
+                                                                              int64_t rowBytes, int64_t *stride0)
 {
     // 非连续输入只允许页间 padding；连续输入（无 view 信息）按紧凑页长取 stride。
     *stride0 = bs * rowBytes;
-    if (!tilingContext_->InputIsView(index)) {
-        return ge::GRAPH_SUCCESS;
+    if (tilingContext_->InputIsView(index)) {
+        const gert::Stride *stride = tilingContext_->GetInputStride(index);
+        if (stride == nullptr || stride->GetDimNum() != static_cast<size_t>(4)) {
+            OP_LOGE(tilingContext_->GetNodeName(),
+                    "mixed_quant_sparse_flash_mla: %s view must carry 4-D stride information.", name);
+            return ge::GRAPH_FAILED;
+        }
+        const int64_t slotStride = stride->GetStride(1);
+        const int64_t lastStride = stride->GetStride(3);
+        if (slotStride != rowBytes || lastStride != 1) {
+            OP_LOGE(tilingContext_->GetNodeName(),
+                    "mixed_quant_sparse_flash_mla: %s only supports page-axis (axis-0) non-contiguity, got "
+                    "strides [%ld, %ld, %ld, %ld] for row bytes %ld.",
+                    name, stride->GetStride(0), slotStride, stride->GetStride(2), lastStride, rowBytes);
+            return ge::GRAPH_FAILED;
+        }
+        const int64_t pageStride = stride->GetStride(0);
+        if (pageStride < bs * rowBytes) {
+            OP_LOGE(tilingContext_->GetNodeName(),
+                    "mixed_quant_sparse_flash_mla: %s page stride(%ld) must cover one page(%ld).", name,
+                    pageStride, bs * rowBytes);
+            return ge::GRAPH_FAILED;
+        }
+        *stride0 = pageStride;
     }
-    const gert::Stride *stride = tilingContext_->GetInputStride(index);
-    if (stride == nullptr || stride->GetDimNum() != static_cast<size_t>(4)) {
+    // 页跨度可超过 int32（kernel 自动切 int64 标量逐行寻址），只要求整池跨度不要溢出 int64。
+    const int64_t pageBytes = bs * rowBytes;
+    if (pageBytes < 0 || (pages > 1 && *stride0 > (INT64_MAX - pageBytes) / (pages - 1))) {
         OP_LOGE(tilingContext_->GetNodeName(),
-                "mixed_quant_sparse_flash_mla: %s view must carry 4-D stride information.", name);
+                "mixed_quant_sparse_flash_mla: %s page span exceeds int64 "
+                "(pages=%ld, stride=%ld, page bytes=%ld).",
+                name, pages, *stride0, pageBytes);
         return ge::GRAPH_FAILED;
     }
-    const int64_t slotStride = stride->GetStride(1);
-    const int64_t lastStride = stride->GetStride(3);
-    if (slotStride != rowBytes || lastStride != 1) {
-        OP_LOGE(tilingContext_->GetNodeName(),
-                "mixed_quant_sparse_flash_mla: %s only supports page-axis (axis-0) non-contiguity, got "
-                "strides [%ld, %ld, %ld, %ld] for row bytes %ld.",
-                name, stride->GetStride(0), slotStride, stride->GetStride(2), lastStride, rowBytes);
-        return ge::GRAPH_FAILED;
-    }
-    const int64_t pageStride = stride->GetStride(0);
-    if (pageStride < bs * rowBytes) {
-        OP_LOGE(tilingContext_->GetNodeName(),
-                "mixed_quant_sparse_flash_mla: %s page stride(%ld) must cover one page(%ld).", name,
-                pageStride, bs * rowBytes);
-        return ge::GRAPH_FAILED;
-    }
-    // kernel 页地址按 int32 计算，页跨度不能超出 int32 表达范围。
-    if (pageStride > static_cast<int64_t>(INT32_MAX)) {
-        OP_LOGE(tilingContext_->GetNodeName(),
-                "mixed_quant_sparse_flash_mla: %s page stride(%ld) exceeds int32 range.", name, pageStride);
-        return ge::GRAPH_FAILED;
-    }
-    *stride0 = pageStride;
     return ge::GRAPH_SUCCESS;
 }
 
@@ -272,7 +546,7 @@ ge::graphStatus TilingMixedQuantSparseFlashMlaFunc::ParseShapesAndAttrs()
     }
     oriPages_ = oks.GetDim(0);
     bsOri_ = oks.GetDim(1);
-    if (ResolveKvPageStride(ORI_KV, "ori_kv", bsOri_, ROW_BYTES_ORI, &oriKvStride0_) != ge::GRAPH_SUCCESS) {
+    if (ResolveKvPageStride(ORI_KV, "ori_kv", oriPages_, bsOri_, ROW_BYTES_ORI, &oriKvStride0_) != ge::GRAPH_SUCCESS) {
         return ge::GRAPH_FAILED;
     }
 
@@ -302,6 +576,11 @@ ge::graphStatus TilingMixedQuantSparseFlashMlaFunc::ParseShapesAndAttrs()
         return ge::GRAPH_FAILED;
     }
     btOri_ = bts.GetDim(1);
+    if (btOri_ > 8192) {
+        OP_LOGE(tilingContext_->GetNodeName(),
+                "mixed_quant_sparse_flash_mla: ori_block_table width must be <= 8192.");
+        return ge::GRAPH_FAILED;
+    }
 
     // sinks [64]
     if (!CheckShape(sinksShape, {N1})) {
@@ -336,7 +615,7 @@ ge::graphStatus TilingMixedQuantSparseFlashMlaFunc::ParseShapesAndAttrs()
         }
         cmpPages_ = cks.GetDim(0);
         bsCmp_ = cks.GetDim(1);
-        if (ResolveKvPageStride(CMP_KV, "cmp_kv", bsCmp_, ROW_BYTES_CMP, &cmpKvStride0_) != ge::GRAPH_SUCCESS) {
+        if (ResolveKvPageStride(CMP_KV, "cmp_kv", cmpPages_, bsCmp_, ROW_BYTES_CMP, &cmpKvStride0_) != ge::GRAPH_SUCCESS) {
             return ge::GRAPH_FAILED;
         }
         const auto &cis = cmpIdxShape->GetStorageShape();
@@ -353,6 +632,11 @@ ge::graphStatus TilingMixedQuantSparseFlashMlaFunc::ParseShapesAndAttrs()
             return ge::GRAPH_FAILED;
         }
         btCmp_ = cbts.GetDim(1);
+        if (btCmp_ > 8192) {
+            OP_LOGE(tilingContext_->GetNodeName(),
+                    "mixed_quant_sparse_flash_mla: cmp_block_table width must be <= 8192.");
+            return ge::GRAPH_FAILED;
+        }
         hasCmpLen_ = tilingContext_->GetOptionalInputShape(CMP_TOP_K_LEN) != nullptr;
     } else {
         cmpPages_ = 0;
@@ -426,18 +710,110 @@ ge::graphStatus TilingMixedQuantSparseFlashMlaFunc::ValidateTensors()
         return ge::GRAPH_FAILED;
     }
 
-    // ---- device-side tiling params (AICPU planner output, input tensor) ----
-    const auto *tdShape = tilingContext_->GetInputShape(TILING_DEVICE);
-    if (!CheckShape(tdShape, {TILING_DEVICE_SIZE})) {
+    // ---- host data for the planner ----
+    // cu_seqlens_q: prefix sum [B + 1] (int32 Tensor variant or int64
+    // aclIntArray variant). ValueDepend host data is preferred; a single-batch
+    // graph (b_num == 2) can be synthesized from shapes.
+    const auto *cuTensor = tilingContext_->GetInputTensor(CU_SEQLENS_Q);
+    if (IsHostPlacement(cuTensor)) {
+        if (GetInputDtype(tilingContext_, CU_SEQLENS_Q) == ge::DT_INT64) {
+            const int64_t *cu = cuTensor->GetData<int64_t>();
+            if (cu == nullptr) {
+                OP_LOGE(tilingContext_->GetNodeName(),
+                        "mixed_quant_sparse_flash_mla: cu_seqlens_q data is null.");
+                return ge::GRAPH_FAILED;
+            }
+            cuQ_.assign(cu, cu + bNum_);
+        } else {
+            const int32_t *cu = cuTensor->GetData<int32_t>();
+            if (cu == nullptr) {
+                OP_LOGE(tilingContext_->GetNodeName(),
+                        "mixed_quant_sparse_flash_mla: cu_seqlens_q data is null.");
+                return ge::GRAPH_FAILED;
+            }
+            cuQ_.assign(cu, cu + bNum_);
+        }
+        if (cuQ_.empty() || cuQ_[0] != 0) {
+            OP_LOGE(tilingContext_->GetNodeName(),
+                    "mixed_quant_sparse_flash_mla: cu_seqlens_q must start with 0.");
+            return ge::GRAPH_FAILED;
+        }
+        for (int64_t i = 1; i < bNum_; ++i) {
+            if (cuQ_[static_cast<size_t>(i)] < cuQ_[static_cast<size_t>(i) - 1]) {
+                OP_LOGE(tilingContext_->GetNodeName(),
+                        "mixed_quant_sparse_flash_mla: cu_seqlens_q must be non-decreasing.");
+                return ge::GRAPH_FAILED;
+            }
+        }
+        if (cuQ_.back() != t1_) {
+            OP_LOGE(tilingContext_->GetNodeName(),
+                    "mixed_quant_sparse_flash_mla: cu_seqlens_q[-1](%ld) != T1(%ld).",
+                    cuQ_.back(), t1_);
+            return ge::GRAPH_FAILED;
+        }
+    } else if (bNum_ == 2) {
+        cuQ_ = {0, t1_};
+    } else {
         OP_LOGE(tilingContext_->GetNodeName(),
-                "mixed_quant_sparse_flash_mla: tiling_device must be int32[%ld].",
-                TILING_DEVICE_SIZE);
+                "mixed_quant_sparse_flash_mla: cu_seqlens_q host data unavailable for "
+                "multi-batch graph (B=%ld); pass it as a ValueDepend host array.",
+                bNum_ - 1);
         return ge::GRAPH_FAILED;
     }
-    if (GetInputDtype(tilingContext_, TILING_DEVICE) != ge::DT_INT32) {
+
+    // per-row TopK lengths (clamped to K like the Python build_metadata).
+    // The aclIntArray variant arrives as a flat 1D buffer (numel only);
+    // the Tensor variant keeps the declared [T1, 1] rank. Accept both.
+    auto readLengths = [&](size_t index, int64_t kLimit, std::vector<int64_t> &out) -> bool {
+        const auto *tensor = tilingContext_->GetOptionalInputTensor(index);
+        if (!IsHostPlacement(tensor)) {
+            return false;
+        }
+        const auto *shape = tilingContext_->GetOptionalInputShape(index);
+        if (shape == nullptr) {
+            return false;
+        }
+        const auto &storage = shape->GetStorageShape();
+        int64_t numel = 1;
+        for (size_t i = 0; i < storage.GetDimNum(); ++i) {
+            numel *= storage.GetDim(i);
+        }
+        if (numel != t1_) {
+            return false;
+        }
+        out.resize(static_cast<size_t>(t1_));
+        if (GetInputDtype(tilingContext_, index) == ge::DT_INT64) {
+            const int64_t *data = tensor->GetData<int64_t>();
+            if (data == nullptr) {
+                return false;
+            }
+            for (int64_t i = 0; i < t1_; ++i) {
+                out[static_cast<size_t>(i)] = std::min(kLimit, std::max(data[i], static_cast<int64_t>(0)));
+            }
+        } else {
+            const int32_t *data = tensor->GetData<int32_t>();
+            if (data == nullptr) {
+                return false;
+            }
+            for (int64_t i = 0; i < t1_; ++i) {
+                out[static_cast<size_t>(i)] = std::min(kLimit, std::max(static_cast<int64_t>(data[i]), static_cast<int64_t>(0)));
+            }
+        }
+        return true;
+    };
+    if (hasOriLen_ && !readLengths(ORI_TOP_K_LEN, kOri_, lenOri_)) {
+        // Host data unavailable: the FD cost model is skipped (uniform plan),
+        // which stays correct -- the kernel still reads the device tensor.
         OP_LOGE(tilingContext_->GetNodeName(),
-                "mixed_quant_sparse_flash_mla: tiling_device must be int32.");
-        return ge::GRAPH_FAILED;
+                "mixed_quant_sparse_flash_mla: ori_topk_length host data unavailable, "
+                "falling back to the uniform schedule.");
+        lenOri_.clear();
+    }
+    if (hasCmp_ && hasCmpLen_ && !readLengths(CMP_TOP_K_LEN, kCmp_, lenCmp_)) {
+        OP_LOGE(tilingContext_->GetNodeName(),
+                "mixed_quant_sparse_flash_mla: cmp_topk_length host data unavailable, "
+                "falling back to the uniform schedule.");
+        lenCmp_.clear();
     }
     return ge::GRAPH_SUCCESS;
 }
@@ -455,17 +831,34 @@ ge::graphStatus TilingMixedQuantSparseFlashMlaFunc::ComputeTiling()
                 cubeCoreNum_, AIC_CORE_MAX_NUM);
         return ge::GRAPH_FAILED;
     }
+    int64_t blocks = static_cast<int64_t>(cubeCoreNum_);
 
-    // 值无关超集: 恒发射全部 Cube 核, 计划内未启用的核空转(全零 FA 槽)。
-    blockDim_ = static_cast<int64_t>(cubeCoreNum_);
+    std::vector<int64_t> md;
+    blockDim_ = PlanMetadata(cuQ_, lenOri_, lenCmp_, hasCmp_, blocks, md);
+    fdEnable_ = md[FD_USED_VEC_NUM_WORD] > 0 ? 1 : 0;
+    if (blockDim_ <= 0) {
+        blockDim_ = 1;
+    }
+    if (blockDim_ > blocks) {
+        OP_LOGE(tilingContext_->GetNodeName(),
+                "mixed_quant_sparse_flash_mla: planned blockDim(%ld) exceeds device cores(%ld).",
+                blockDim_, blocks);
+        return ge::GRAPH_FAILED;
+    }
 
     tilingData_.set_scale(scale_);
     tilingData_.set_t1(t1_);
     tilingData_.set_ori_pages(oriPages_);
     tilingData_.set_cmp_pages(cmpPages_);
     tilingData_.set_b_num(bNum_);
-    tilingData_.set_k_ori(kOri_);
-    tilingData_.set_k_cmp(hasCmp_ ? kCmp_ : 129);
+    // k_* is the padded GM row-table width; k_*_raw is the original TopK width.
+    const int64_t kOriTab = ((kOri_ + 127) / 128) * 128;
+    const int64_t kCmpRaw = hasCmp_ ? kCmp_ : 129;
+    const int64_t kCmpTab = ((kCmpRaw + 127) / 128) * 128;
+    tilingData_.set_k_ori(kOriTab);
+    tilingData_.set_k_cmp(kCmpTab);
+    tilingData_.set_k_ori_raw(kOri_);
+    tilingData_.set_k_cmp_raw(kCmpRaw);
     tilingData_.set_bs_ori(bsOri_);
     tilingData_.set_bs_cmp(hasCmp_ ? bsCmp_ : 128);
     tilingData_.set_bt_ori(btOri_);
@@ -473,19 +866,26 @@ ge::graphStatus TilingMixedQuantSparseFlashMlaFunc::ComputeTiling()
     // 页跨度取输入真实 stride（页间 padding 支持），连续输入由 ResolveKvPageStride 回落紧凑页长。
     tilingData_.set_ori_kv_stride0(oriKvStride0_);
     tilingData_.set_cmp_kv_stride0(hasCmp_ ? cmpKvStride0_ : 0);
+    // The attention kernel consumes pre-resolved GM physical-row tables.  The
+    // aclnn/torch callers pass contiguous per-side tables, so their row strides
+    // are the table widths.
+    const int64_t tabCols = kOriTab + kCmpTab;
+    tilingData_.set_ori_row_tab_stride(tabCols);
+    tilingData_.set_cmp_row_tab_stride(tabCols);
 
     // Tiling key encodes (HAS_ORI_LEN, HAS_CMP_LEN, HAS_CMP, FD_ENABLE, VDEP64)
-    // at bits 0..4 in the MqsmlaTilingKey declaration order. FD_ENABLE 常置
-    // 1: 变体内常驻 FD 归约段, 运行期按 metadata FD 槽自分流(uniform 计划零跳过);
-    // 其余 tiling 参数由 kernel 从 tiling_device 张量读取。
+    // at bits 0..4 in the MqsmlaTilingKey declaration order.
     const int64_t tilingKey = (hasOriLen_ ? 1 : 0) | (hasCmpLen_ ? 1 : 0) << 1 |
-                              (hasCmp_ ? 1 : 0) << 2 | (1LL << 3) |
+                              (hasCmp_ ? 1 : 0) << 2 | (fdEnable_ << 3) |
                               (vdep64_ << 4);
     tilingContext_->SetTilingKey(tilingKey);
 
-    // workspace 恒为 FD 超集: FD 变体始终可用, uniform 计划不触碰。
+    // FD partials workspace; keep a non-zero minimum for the non-FD variants
+    // (SetSysWorkspaceForce routing requirement).
+    const size_t tabBytes = static_cast<size_t>(t1_ * (kOriTab + kCmpTab) * 4);
     size_t *workspace = tilingContext_->GetWorkspaceSizes(1);
-    workspace[0] = static_cast<size_t>(WORKSPACE_BYTES_FD);
+    workspace[0] = fdEnable_ ? static_cast<size_t>(WORKSPACE_BYTES_FD) + tabBytes
+                             : std::max(static_cast<size_t>(MIN_WORKSPACE), tabBytes);
 
     tilingContext_->SetBlockDim(static_cast<uint32_t>(blockDim_));
 
