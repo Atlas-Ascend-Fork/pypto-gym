@@ -62,8 +62,7 @@ public:
             .ParamType(OPTIONAL)
             .DataType({ge::DT_INT32, ge::DT_INT64})
             .Format({ge::FORMAT_ND, ge::FORMAT_ND})
-            .AutoContiguous()
-            .ValueDepend(OPTIONAL);
+            .AutoContiguous();
         this->Input("sinks")
             .ParamType(REQUIRED)
             .DataType({ge::DT_FLOAT, ge::DT_FLOAT})
@@ -88,15 +87,18 @@ public:
             .ParamType(OPTIONAL)
             .DataType({ge::DT_INT32, ge::DT_INT64})
             .Format({ge::FORMAT_ND, ge::FORMAT_ND})
-            .AutoContiguous()
-            .ValueDepend(OPTIONAL);
+            .AutoContiguous();
         this->Input("cu_seqlens_q")
             .ParamType(REQUIRED)
             .DataType({ge::DT_INT32, ge::DT_INT64})
             .Format({ge::FORMAT_ND, ge::FORMAT_ND})
-            .AutoContiguous()
-            .ValueDepend(OPTIONAL);
+            .AutoContiguous();
         this->Input("metadata")
+            .ParamType(REQUIRED)
+            .DataType({ge::DT_INT32, ge::DT_INT32})
+            .Format({ge::FORMAT_ND, ge::FORMAT_ND})
+            .AutoContiguous();
+        this->Input("tiling_device")
             .ParamType(REQUIRED)
             .DataType({ge::DT_INT32, ge::DT_INT32})
             .Format({ge::FORMAT_ND, ge::FORMAT_ND})

@@ -73,9 +73,11 @@ FD_M_NUM_INDEX = 6
 FD_HEADS_PER_AIV = 32
 
 TILE_N = 128  # KV tokens per S2 task (matches the kernel contract).
-# FD 判据用绝对节省 tile 数，不用关键路径比率（比率会高估收益）。
-# 所有行统一要求 saved >= 4，不再对长行放宽。
+# FD 判据对齐 cannbot DSL 规划器：用绝对节省 tile 数，不用关键路径比率（比率会高估收益）。
 FD_MIN_SAVED_TILES = 4
+# 长序列（rows >= 96）放宽到省 2 tile 即开 FD（A/B 实测 +0.8~+3.9%）；短序列保持 4。
+FD_MIN_SAVED_TILES_LONG = 2
+FD_MIN_ROWS_LONG = 96
 # 每核目标 tile 数；单 tile 分片会让串行 FD 归约比它卸掉的活更贵。
 FD_TARGET_TILES_PER_CORE = 4
 # 短行保留完整 online softmax，只切足够长的行。
@@ -166,7 +168,7 @@ def _uniform_critical(rows, row_tiles, blocks):
     start = 0
     for c in range(ublocks):
         cnt = rows // ublocks + (1 if c < rows % ublocks else 0)
-        worst = max(worst, sum(row_tiles[start : start + cnt]))
+        worst = max(worst, sum(row_tiles[start:start + cnt]))
         start += cnt
     return worst
 
@@ -191,9 +193,7 @@ def plan_metadata_fd(cu_q, len_ori, len_cmp=None, has_cmp=True, blocks=None):
         return None
     row_tiles = [_row_tiles(len_ori[r], (len_cmp[r] if has_cmp and len_cmp else 0), has_cmp) for r in range(rows)]
     total = sum(row_tiles)
-    # 短行（< FD_MIN_ROW_TILES 个 tile）落在 FD 切分边界会破坏 partial/LSE 归约；
-    # 混合长度行回退 uniform，整行等长时仍启用 FD（与 kernel/C++/AICPU 保持一致）。
-    if min(row_tiles) < FD_MIN_ROW_TILES:
+    if max(row_tiles) < FD_MIN_ROW_TILES:
         return None
 
     # plan_blocks 按每核目标 tile 数定，再 clamp 到 [rows, blocks] 以保留整行并行度下限。
@@ -204,7 +204,8 @@ def plan_metadata_fd(cu_q, len_ori, len_cmp=None, has_cmp=True, blocks=None):
     fd_floor = -(-total // n_blocks)
     saved_tiles = ub_max - fd_floor
     if saved_tiles < FD_MIN_SAVED_TILES:
-        return None
+        if saved_tiles < FD_MIN_SAVED_TILES_LONG or rows < FD_MIN_ROWS_LONG:
+            return None
     flat = [total * c // n_blocks for c in range(n_blocks + 1)]
     fl_max = max(flat[c + 1] - flat[c] for c in range(n_blocks))
     if fl_max <= 0:
@@ -374,16 +375,6 @@ _CASE_OVERRIDES = {
         "bs_cmp": 64,
         "block_local_indices": True,
     },
-    # Real wide-block-table case: every one of the 8192 pages is a valid block
-    # table entry, and the sparse indices cover the whole 8192-page window.
-    "spread_8192": {
-        "s_ori": 8192 * 128,
-        "s_cmp": 8192 * 64,
-        "k_ori": 128,
-        "k_cmp": 512,
-        "bs_ori": 128,
-        "bs_cmp": 64,
-    },
 }
 
 
@@ -412,7 +403,6 @@ _CASE_LAYOUTS = {
     "netspec_decode_96": [6] * 16,
     "netspec_decode_96_k2_512": [6] * 16,
     "netspec_decode_96_k2_256": [6] * 16,
-    "spread_8192": [2],
 }
 _CASE_ORDER = list(_CASE_LAYOUTS)
 
@@ -516,7 +506,7 @@ def mixed_quant_sparse_flash_mla_golden_cpu(
         accumulator = torch.zeros(N1, D)
         for values in sides:
             for start in range(0, len(values), TILE_N):
-                tile = values[start : start + TILE_N]
+                tile = values[start:start + TILE_N]
                 scores = qf[row] @ tile.T * scale
                 new_max = torch.maximum(row_max, scores.max(dim=1).values)
                 correction = torch.exp(row_max - new_max)

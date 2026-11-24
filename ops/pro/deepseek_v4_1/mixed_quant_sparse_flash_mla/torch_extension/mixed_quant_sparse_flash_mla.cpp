@@ -31,39 +31,7 @@ constexpr int64_t kHeadDim = 512;
 constexpr int64_t kOriKvBytes = 544;
 constexpr int64_t kCmpKvBytes = 320;
 constexpr int64_t kMetadataElements = 1024;
-
-using CreateIntArray = aclIntArray *(*)(const int64_t *, uint64_t);
-using DestroyIntArray = aclnnStatus (*)(const aclIntArray *);
-
-static CreateIntArray CreateIntArrayFn() {
-  static const auto function = [] {
-    void *library = dlopen("libnnopbase.so", RTLD_LAZY | RTLD_GLOBAL);
-    TORCH_CHECK(library != nullptr, "dlopen libnnopbase.so failed: ", dlerror());
-    void *symbol = dlsym(library, "aclCreateIntArray");
-    TORCH_CHECK(symbol != nullptr, "dlsym aclCreateIntArray failed");
-    return reinterpret_cast<CreateIntArray>(symbol);
-  }();
-  return function;
-}
-
-static DestroyIntArray DestroyIntArrayFn() {
-  static const auto function = [] {
-    void *library = dlopen("libnnopbase.so", RTLD_LAZY | RTLD_GLOBAL);
-    TORCH_CHECK(library != nullptr, "dlopen libnnopbase.so failed: ", dlerror());
-    void *symbol = dlsym(library, "aclDestroyIntArray");
-    TORCH_CHECK(symbol != nullptr, "dlsym aclDestroyIntArray failed");
-    return reinterpret_cast<DestroyIntArray>(symbol);
-  }();
-  return function;
-}
-
-static std::vector<int64_t> HostValues(const c10::optional<at::Tensor> &value) {
-  if (!value.has_value() || !value->defined())
-    return {};
-  const auto host = value->to(at::kCPU, at::kLong).contiguous();
-  const auto *data = host.data_ptr<int64_t>();
-  return std::vector<int64_t>(data, data + host.numel());
-}
+constexpr int64_t kTilingDeviceElements = 16;
 
 static bool HasValue(const c10::optional<at::Tensor> &value) {
   return value.has_value() && value->defined();
@@ -72,6 +40,9 @@ static bool HasValue(const c10::optional<at::Tensor> &value) {
 static bool IsLengthDtype(at::ScalarType type) {
   return type == at::kInt || type == at::kLong;
 }
+
+// 长度张量(cu_seqlens_q / ori_topk_length / cmp_topk_length)走 Tensor 变体进
+// aclnn 的 tensor 槽位, kernel 直接读 GM —— 绑定全程不做 D2H, 天然 capture-safe。
 
 static void CheckOptionalLength(const c10::optional<at::Tensor> &value,
                                 const at::Tensor &q, const char *name,
@@ -97,7 +68,7 @@ static void ValidateInputs(
     const at::Tensor &q, const at::Tensor &ori_kv,
     const at::Tensor &ori_sparse_indices, const at::Tensor &ori_block_table,
     const at::Tensor &cu_seqlens_q, const at::Tensor &sinks,
-    const at::Tensor &metadata,
+    const at::Tensor &metadata, const at::Tensor &tiling_device,
     const c10::optional<at::Tensor> &ori_topk_length,
     const c10::optional<at::Tensor> &cmp_kv,
     const c10::optional<at::Tensor> &cmp_sparse_indices,
@@ -138,7 +109,7 @@ static void ValidateInputs(
                   IsLengthDtype(cu_seqlens_q.scalar_type()) &&
                   cu_seqlens_q.device() == q.device() &&
                   cu_seqlens_q.is_contiguous(),
-              "cu_seqlens_q must be a contiguous int32/int64 [B+1] tensor");
+              "cu_seqlens_q must be a contiguous int32/int64 [B+1] tensor on q.device");
   gym_torch::CheckPlainStorage(cu_seqlens_q, "cu_seqlens_q");
 
   TORCH_CHECK(sinks.dim() == 1 && sinks.numel() == q.size(1) &&
@@ -152,6 +123,14 @@ static void ValidateInputs(
                   metadata.device() == q.device() && metadata.is_contiguous(),
               "metadata must be a contiguous int32[1024] tensor");
   gym_torch::CheckPlainStorage(metadata, "metadata");
+
+  TORCH_CHECK(tiling_device.scalar_type() == at::kInt &&
+                  tiling_device.numel() == kTilingDeviceElements &&
+                  tiling_device.device() == q.device() &&
+                  tiling_device.is_contiguous(),
+              "tiling_device must be the AICPU planner's contiguous int32[16] "
+              "output tensor on q.device");
+  gym_torch::CheckPlainStorage(tiling_device, "tiling_device");
 
   CheckOptionalLength(ori_topk_length, q, "ori_topk_length", t);
   CheckOptionalLength(cmp_topk_length, q, "cmp_topk_length", t);
@@ -204,7 +183,7 @@ static Result Run(
     const at::Tensor &q, const at::Tensor &ori_kv,
     const at::Tensor &ori_sparse_indices, const at::Tensor &ori_block_table,
     const at::Tensor &cu_seqlens_q, const at::Tensor &sinks,
-    const at::Tensor &metadata,
+    const at::Tensor &metadata, const at::Tensor &tiling_device,
     const c10::optional<at::Tensor> &ori_topk_length,
     const c10::optional<at::Tensor> &cmp_kv,
     const c10::optional<at::Tensor> &cmp_sparse_indices,
@@ -230,8 +209,8 @@ static Result Run(
               "only layout_q='TND', layout_kv='PA_BBND' are supported");
   const c10::OptionalDeviceGuard guard(q.device());
   ValidateInputs(q, ori_kv, ori_sparse_indices, ori_block_table, cu_seqlens_q,
-                 sinks, metadata, ori_topk_length, cmp_kv, cmp_sparse_indices,
-                 cmp_block_table, cmp_topk_length);
+                 sinks, metadata, tiling_device, ori_topk_length, cmp_kv,
+                 cmp_sparse_indices, cmp_block_table, cmp_topk_length);
 
   at::Tensor out;
   at::Tensor lse;
@@ -255,7 +234,7 @@ static Result Run(
 
   std::vector<at::Tensor> inputs = {
       q, ori_kv, ori_sparse_indices, ori_block_table, cu_seqlens_q, sinks,
-      metadata};
+      metadata, tiling_device};
   if (HasValue(ori_topk_length))
     inputs.push_back(*ori_topk_length);
   if (HasValue(cmp_kv))
@@ -268,24 +247,14 @@ static Result Run(
     inputs.push_back(*cmp_topk_length);
   CheckNoGrad(inputs);
 
-  // The default ACLNN signature carries ValueDepend inputs as host aclIntArray
-  // values; the Tensor variant does not feed nnopbase's host placement and the
-  // tiling rejects it.
-  const auto ori_len_host = HostValues(ori_topk_length);
-  const auto cmp_len_host = HostValues(cmp_topk_length);
-  const auto cu_seqlens_host =
-      HostValues(c10::optional<at::Tensor>(cu_seqlens_q));
-  const bool has_ori_len = !ori_len_host.empty();
-  const bool has_cmp_len = !cmp_len_host.empty();
-  TORCH_CHECK(!cu_seqlens_host.empty(),
-              "cu_seqlens_q must contain host values for tiling");
-
+  // 全设备端形态: 走 Tensor 变体(aclnnMixedQuantSparseFlashMlaTensor*),
+  // 13 个输入张量按 def 顺序全部进 tensor 槽位(含三个长度张量与 tiling_device),
+  // 无 aclIntArray、无 host 值提取、无同步 D2H。
   // Tensor slots in ACLNN order: q, ori_kv, ori_sparse_indices,
-  // ori_block_table, sinks, cmp_kv, cmp_sparse_indices, cmp_block_table,
-  // metadata, out, lse. The three int-array slots are filled separately.
-  static constexpr std::array<size_t, 11> kTensorSlots{0, 1, 2, 3, 5, 6,
-                                                        7, 8, 11, 12, 13};
-  std::array<bool, 11> present{};
+  // ori_block_table, ori_topk_length, sinks, cmp_kv, cmp_sparse_indices,
+  // cmp_block_table, cmp_topk_length, cu_seqlens_q, metadata, tiling_device,
+  // out, lse.
+  std::array<bool, 15> present{};
   std::vector<at::Tensor> defined;
   size_t slot = 0;
   const auto add_required = [&](const at::Tensor &value) {
@@ -302,67 +271,66 @@ static Result Run(
   add_required(ori_kv);
   add_required(ori_sparse_indices);
   add_required(ori_block_table);
+  add_optional(ori_topk_length);
   add_required(sinks);
   add_optional(cmp_kv);
   add_optional(cmp_sparse_indices);
   add_optional(cmp_block_table);
+  add_optional(cmp_topk_length);
+  add_required(cu_seqlens_q);
   add_required(metadata);
+  add_required(tiling_device);
   add_required(out);
   add_required(lse);
 
   using GetWorkspace = aclnnStatus (*)(
       const aclTensor *, const aclTensor *, const aclTensor *, const aclTensor *,
-      const aclIntArray *, const aclTensor *, const aclTensor *,
-      const aclTensor *, const aclTensor *, const aclIntArray *,
-      const aclIntArray *, const aclTensor *, char *, char *, double,
-      const aclTensor *, const aclTensor *, uint64_t *, aclOpExecutor **);
-  static const auto get_workspace = gym_torch::Symbol<GetWorkspace>(
-      "aclnnMixedQuantSparseFlashMlaGetWorkspaceSize");
+      const aclTensor *, const aclTensor *, const aclTensor *,
+      const aclTensor *, const aclTensor *, const aclTensor *,
+      const aclTensor *, const aclTensor *, const aclTensor *, char *, char *,
+      double, const aclTensor *, const aclTensor *, uint64_t *,
+      aclOpExecutor **);
+  // 新 vendor(长度输入为普通 Tensor, 无 ValueDepend)只生成无后缀变体;
+  // 旧 vendor(ValueDepend 双通道)只有 Tensor 后缀变体 —— 两者签名同形, 按序回退。
+  static const auto get_workspace = [] {
+    try {
+      return gym_torch::Symbol<GetWorkspace>(
+          "aclnnMixedQuantSparseFlashMlaGetWorkspaceSize");
+    } catch (const std::exception &) {
+      return gym_torch::Symbol<GetWorkspace>(
+          "aclnnMixedQuantSparseFlashMlaTensorGetWorkspaceSize");
+    }
+  }();
   static const auto execute = gym_torch::Symbol<gym_torch::Execute>(
       "aclnnMixedQuantSparseFlashMla");
   gym_torch::Enqueue(
       "aclnnMixedQuantSparseFlashMla", defined,
-      [present, softmax_scale, layout_q, layout_kv, ori_len_host,
-       cmp_len_host, cu_seqlens_host, has_ori_len,
-       has_cmp_len](const std::vector<gym_torch::TensorInfo> &infos, auto stream) {
+      [present, softmax_scale, layout_q,
+       layout_kv](const std::vector<gym_torch::TensorInfo> &infos, auto stream) {
         std::vector<gym_torch::TensorHandle> handles;
         handles.reserve(infos.size());
         for (const auto &info : infos)
           handles.push_back(gym_torch::Tensor(info));
-        std::array<const aclTensor *, 14> slots{};
+        std::array<const aclTensor *, 15> slots{};
         size_t cursor = 0;
-        for (size_t i = 0; i < kTensorSlots.size(); ++i)
+        for (size_t i = 0; i < slots.size(); ++i)
           if (present[i])
-            slots[kTensorSlots[i]] = handles[cursor++].get();
+            slots[i] = handles[cursor++].get();
         TORCH_CHECK(cursor == handles.size(),
                     "MixedQuantSparseFlashMla argument mapping mismatch");
-        aclIntArray *ori_len =
-            has_ori_len ? CreateIntArrayFn()(ori_len_host.data(),
-                                             ori_len_host.size())
-                        : nullptr;
-        aclIntArray *cmp_len =
-            has_cmp_len ? CreateIntArrayFn()(cmp_len_host.data(),
-                                             cmp_len_host.size())
-                        : nullptr;
-        aclIntArray *cu_len = CreateIntArrayFn()(cu_seqlens_host.data(),
-                                                 cu_seqlens_host.size());
         uint64_t bytes = 0;
         aclOpExecutor *executor = nullptr;
         const auto status = get_workspace(
-            slots[0], slots[1], slots[2], slots[3], ori_len, slots[5],
-            slots[6], slots[7], slots[8], cmp_len, cu_len, slots[11],
+            slots[0], slots[1], slots[2], slots[3], slots[4], slots[5],
+            slots[6], slots[7], slots[8], slots[9], slots[10], slots[11],
+            slots[12],
             const_cast<char *>(layout_q.c_str()),
-            const_cast<char *>(layout_kv.c_str()), softmax_scale, slots[12],
-            slots[13], &bytes, &executor);
+            const_cast<char *>(layout_kv.c_str()), softmax_scale, slots[13],
+            slots[14], &bytes, &executor);
         if (status == 0)
           gym_torch::ExecuteOp(execute, bytes, executor, stream);
-        if (ori_len != nullptr)
-          DestroyIntArrayFn()(ori_len);
-        if (cmp_len != nullptr)
-          DestroyIntArrayFn()(cmp_len);
-        DestroyIntArrayFn()(cu_len);
         TORCH_CHECK(status == 0,
-                    "aclnnMixedQuantSparseFlashMlaGetWorkspaceSize "
+                    "aclnnMixedQuantSparseFlashMlaTensorGetWorkspaceSize "
                     "failed, status=",
                     status, ": ", aclGetRecentErrMsg());
         return 0;
@@ -374,7 +342,7 @@ static Result Meta(
     const at::Tensor &q, const at::Tensor &ori_kv,
     const at::Tensor &ori_sparse_indices, const at::Tensor &ori_block_table,
     const at::Tensor &cu_seqlens_q, const at::Tensor &sinks,
-    const at::Tensor &metadata,
+    const at::Tensor &metadata, const at::Tensor &tiling_device,
     const c10::optional<at::Tensor> &ori_topk_length,
     const c10::optional<at::Tensor> &cmp_kv,
     const c10::optional<at::Tensor> &cmp_sparse_indices,
@@ -412,6 +380,9 @@ static Result Meta(
   TORCH_CHECK(q.dim() == 3 && q.size(1) == kHeads && q.size(2) == kHeadDim &&
                   q.scalar_type() == at::kBFloat16,
               "q must be a BF16 [T,64,512] tensor");
+  TORCH_CHECK(tiling_device.scalar_type() == at::kInt &&
+                  tiling_device.numel() == kTilingDeviceElements,
+              "tiling_device must be the planner's int32[16] output tensor");
   at::Tensor out = provided_out.has_value() && provided_out->defined()
                        ? *provided_out
                        : at::empty_symint(q.sym_sizes(),
@@ -431,10 +402,15 @@ static Result Meta(
 }
 } // namespace
 
+// 输出不带别名注解(参考 ops-transformer quant_flash_attn 的纯函数式 schema):
+// torch.compile/aot functionalization 拒绝输出带 (a!) 注解的自定义算子;
+// 编译路径(不传 out/lse)由算子内部新分配输出, 无实际别名; eager 路径
+// 传入 out/lse 时仍原地写回, 语义不变。
 TORCH_LIBRARY_FRAGMENT(pypto_gym, m) {
   m.def("mixed_quant_sparse_flash_mla(Tensor q, Tensor ori_kv, "
         "Tensor ori_sparse_indices, Tensor ori_block_table, "
         "Tensor cu_seqlens_q, Tensor sinks, Tensor metadata, "
+        "Tensor tiling_device, "
         "Tensor? ori_topk_length=None, Tensor? cmp_kv=None, "
         "Tensor? cmp_sparse_indices=None, Tensor? cmp_block_table=None, "
         "Tensor? cmp_topk_length=None, Tensor? seqused_q=None, "
@@ -442,7 +418,7 @@ TORCH_LIBRARY_FRAGMENT(pypto_gym, m) {
         "int quant_mode=1, float softmax_scale=0.0, str layout_q=\"TND\", "
         "str layout_kv=\"PA_BBND\", bool return_softmax_lse=False, "
         "Tensor(a!)? out=None, Tensor(b!)? lse=None, int? block_dim=None, "
-        "int? fd_enable=None) -> (Tensor(a!), Tensor(b!))");
+        "int? fd_enable=None) -> (Tensor, Tensor)");
 }
 TORCH_LIBRARY_IMPL(pypto_gym, PrivateUse1, m) {
   m.impl("mixed_quant_sparse_flash_mla", TORCH_FN(Run));

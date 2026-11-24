@@ -33,7 +33,10 @@ import torch
 def mixed_quant_sparse_flash_mla_metadata(
     cu_seqlens_q, ori_topk_length, cmp_topk_length=None, *,
     blocks=None, has_cmp=1, k_ori=0, k_cmp=0,
-) -> torch.Tensor: ...  # int32[1024]
+    bs_ori=0, bs_cmp=0, bt_ori=0, bt_cmp=0,
+    ori_pages=0, cmp_pages=0, ori_kv_stride0=0, cmp_kv_stride0=0,
+) -> tuple[torch.Tensor, torch.Tensor]: ...
+# -> (metadata: int32[1024], tiling_device: int32[16])
 ```
 
 对应 C 接口（`op_api/include/aclnnop/aclnn_mixed_quant_sparse_flash_mla_metadata.h`）：
@@ -42,7 +45,9 @@ def mixed_quant_sparse_flash_mla_metadata(
 aclnnStatus aclnnMixedQuantSparseFlashMlaMetadataGetWorkspaceSize(
     const aclTensor *cuSeqlensQ, const aclTensor *oriTopkLength,
     const aclTensor *cmpTopkLengthOptional, int64_t blocks, int64_t hasCmp,
-    int64_t kOri, int64_t kCmp, const aclTensor *out,
+    int64_t kOri, int64_t kCmp, int64_t bsOri, int64_t bsCmp, int64_t btOri,
+    int64_t btCmp, int64_t oriPages, int64_t cmpPages, int64_t oriKvStride0,
+    int64_t cmpKvStride0, const aclTensor *out, const aclTensor *tilingDevice,
     uint64_t *workspaceSize, aclOpExecutor **executor);
 aclnnStatus aclnnMixedQuantSparseFlashMlaMetadata(
     void *workspace, uint64_t workspaceSize, aclOpExecutor *executor, aclrtStream stream);
@@ -58,7 +63,10 @@ aclnnStatus aclnnMixedQuantSparseFlashMlaMetadata(
 | `blocks` | int | 标量 | 规划核数，`1..36`；缺省取设备 `cube_core_num` |
 | `has_cmp` | int | 标量 | 1 = 启用压缩侧，0 = 仅原始侧 |
 | `k_ori` / `k_cmp` | int | 标量 | 长度 clamp 上限，0 = 不 clamp |
+| `bs_ori`/`bs_cmp`/`bt_ori`/`bt_cmp` | int | 标量 | 调用方 KV 页/页表形状（host 已知，透传） |
+| `ori_pages`/`cmp_pages`/`*_stride0` | int | 标量 | 调用方 KV 页数与页跨度（host 已知，透传） |
 | `metadata` | int32 | `[1024]` | 输出：per-core / per-split 调度表 |
+| `tiling_device` | int32 | `[16]` | 输出：设备端 tiling 参数（形状标量 + planned_block_dim/fd_enable），直喂主算子 |
 
 ## 约束说明
 

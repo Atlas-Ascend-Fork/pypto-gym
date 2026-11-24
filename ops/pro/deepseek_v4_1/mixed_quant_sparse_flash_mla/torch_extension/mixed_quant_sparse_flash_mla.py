@@ -25,6 +25,7 @@ def mixed_quant_sparse_flash_mla(
     cu_seqlens_q,
     sinks,
     metadata,
+    tiling_device,
     quant_mode=1,
     softmax_scale=None,
     cmp_kv=None,
@@ -47,12 +48,15 @@ def mixed_quant_sparse_flash_mla(
 
     Runs the installed ACLNN binary on the current NPU stream. ``out``/``lse``
     are allocated internally when omitted; ``lse`` is always written.
-    ``metadata`` is the caller-generated int32[1024] schedule. Optional inputs
+    ``metadata``/``tiling_device`` are the AICPU planner's device outputs
+    (``int32[1024]`` schedule + ``int32[16]`` tiling params): the kernel reads
+    both on device, so this call performs no D2H anywhere. Optional inputs
     pass as ``None``: absent ``*_topk_length`` means the whole K range is valid,
     and an absent cmp group (``cmp_kv`` / ``cmp_sparse_indices`` /
     ``cmp_block_table``) turns the compressed arm off. ``block_dim`` /
-    ``fd_enable`` are accepted for source-wrapper compatibility; the ACLNN host
-    tiling plans them. The operator provides forward computation only.
+    ``fd_enable`` are accepted for source-wrapper compatibility and ignored
+    (the launch uses the all-cores superset grid and the FD-capable variant).
+    The operator provides forward computation only.
 
     Returns ``{"out": out, "lse": lse}``.
     """
@@ -76,6 +80,11 @@ def mixed_quant_sparse_flash_mla(
             raise ValueError(f"{name} must be a torch.Tensor or None")
     if not isinstance(q, torch.Tensor):
         raise ValueError("q must be a torch.Tensor")
+    if not isinstance(tiling_device, torch.Tensor):
+        raise ValueError(
+            "tiling_device is required: run the AICPU planner "
+            "(mixed_quant_sparse_flash_mla_metadata) on the same device "
+            "and pass its tiling_device output here")
     if cmp_kv is not None and (cmp_sparse_indices is None or cmp_block_table is None):
         raise ValueError("cmp_kv is given but cmp_sparse_indices/cmp_block_table is missing")
     scale = 0.0
@@ -85,7 +94,7 @@ def mixed_quant_sparse_flash_mla(
             raise ValueError("softmax_scale must be finite")
     out_t, lse_t = torch.ops.pypto_gym.mixed_quant_sparse_flash_mla(
         q, ori_kv, ori_sparse_indices, ori_block_table, cu_seqlens_q, sinks,
-        metadata, ori_topk_length=ori_topk_length, cmp_kv=cmp_kv,
+        metadata, tiling_device, ori_topk_length=ori_topk_length, cmp_kv=cmp_kv,
         cmp_sparse_indices=cmp_sparse_indices, cmp_block_table=cmp_block_table,
         cmp_topk_length=cmp_topk_length, seqused_q=seqused_q,
         seqused_ori_kv=seqused_ori_kv, seqused_cmp_kv=seqused_cmp_kv,
@@ -93,3 +102,12 @@ def mixed_quant_sparse_flash_mla(
         layout_kv=layout_kv, return_softmax_lse=bool(return_softmax_lse),
         out=out, lse=lse, block_dim=block_dim, fd_enable=fd_enable)
     return {"out": out_t, "lse": lse_t}
+
+
+# torchair GE/aclgraph 转换器注册(参考 ops-transformer graph_convert_* 模式);
+# 需在 torch.ops.pypto_gym 命名空间由 loader 加载原生库之后导入, 故置于模块尾部。
+# torchair 缺失或命名空间未就绪时为纯 no-op, 不影响 eager/NPUGraph 路径。
+try:
+    from . import graph_convert_mixed_quant_sparse_flash_mla  # noqa: F401,E402
+except Exception:  # pragma: no cover - 环境相关(torchair 缺失/无包上下文)的静默降级
+    pass

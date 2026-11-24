@@ -42,18 +42,17 @@ TILING_DATA_FIELD_DEF(int64_t, cmp_pages)
 TILING_DATA_FIELD_DEF(int64_t, b_num)
 TILING_DATA_FIELD_DEF(int64_t, k_ori)
 TILING_DATA_FIELD_DEF(int64_t, k_cmp)
-TILING_DATA_FIELD_DEF(int64_t, k_ori_raw)
-TILING_DATA_FIELD_DEF(int64_t, k_cmp_raw)
 TILING_DATA_FIELD_DEF(int64_t, bs_ori)
 TILING_DATA_FIELD_DEF(int64_t, bs_cmp)
 TILING_DATA_FIELD_DEF(int64_t, bt_ori)
 TILING_DATA_FIELD_DEF(int64_t, bt_cmp)
 TILING_DATA_FIELD_DEF(int64_t, ori_kv_stride0)
 TILING_DATA_FIELD_DEF(int64_t, cmp_kv_stride0)
-TILING_DATA_FIELD_DEF(int64_t, ori_row_tab_stride)
-TILING_DATA_FIELD_DEF(int64_t, cmp_row_tab_stride)
 END_TILING_DATA_DEF
 REGISTER_TILING_DATA_CLASS(MixedQuantSparseFlashMla, MixedQuantSparseFlashMlaTilingData)
+
+// Empty by design: TilingFunc reads platform from TilingContext and consumes no compile-time info.
+struct MixedQuantSparseFlashMlaCompileInfo {};
 
 } // namespace optiling
 

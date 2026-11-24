@@ -55,31 +55,13 @@ import torch_npu  # noqa: F401
 _THIS_DIR = os.path.dirname(os.path.abspath(__file__))
 _OP_DIR = os.path.dirname(_THIS_DIR)
 for _path in (_THIS_DIR, os.path.join(_THIS_DIR, "assets"), os.path.join(_OP_DIR, "op_kernel")):
-    # 本算子路径必须优先于其它算子/同名 pypto_pro 样例目录（root conftest 会注入后者）。
-    while _path in sys.path:
-        sys.path.remove(_path)
-    sys.path.insert(0, _path)
+    if _path not in sys.path:
+        sys.path.insert(0, _path)
 
+import _standalone_env  # noqa: E402,F401  直跑自举: 注入 tests/common、aclnn 桥与 vendor 环境
 
-def _load_asset(module_name, file_path):
-    """按文件路径加载 assets，避免 ops/pypto_pro 下同名模块经 sys.path 遮蔽本算子 golden。"""
-    import importlib.util
-
-    spec = importlib.util.spec_from_file_location(module_name, file_path)
-    module = importlib.util.module_from_spec(spec)
-    sys.modules[module_name] = module
-    spec.loader.exec_module(module)
-    return module
-
-
-golden = _load_asset(
-    "mixed_quant_sparse_flash_mla_golden_cpu",
-    os.path.join(_THIS_DIR, "assets", "mixed_quant_sparse_flash_mla_golden_cpu.py"),
-)
-verify = _load_asset(
-    "mixed_quant_sparse_flash_mla_precision",
-    os.path.join(_THIS_DIR, "assets", "mixed_quant_sparse_flash_mla_precision.py"),
-)
+import mixed_quant_sparse_flash_mla_golden_cpu as golden  # noqa: E402
+import mixed_quant_sparse_flash_mla_precision as verify  # noqa: E402
 
 try:
     from op_caller import get_op_caller  # noqa: E402
@@ -137,14 +119,8 @@ def _kv_to_device(tensor, device):
     return view
 
 
-def _run_case(name, device, wide_bt=None):
+def _run_case(name, device):
     inputs, block_dim, case = golden.build_inputs(name, torch.device("cpu"))
-    if wide_bt is not None:
-        for key in ("ori_block_table", "cmp_block_table"):
-            table = inputs[key]
-            padded = torch.zeros((table.shape[0], int(wide_bt)), dtype=table.dtype)
-            padded[:, : table.shape[1]] = table
-            inputs[key] = padded
     reference = golden.reference(name, inputs)
     dev = {k: inputs[k].to(device) for k in _INPUT_KEYS if k not in ("ori_kv", "cmp_kv")}
     for key in ("ori_kv", "cmp_kv"):
