@@ -31,7 +31,7 @@
 **1. dg 和 dfc（中间梯度）**
 
 $$
-dg = dy \cdot FC \cdot \sigma'(Gate)
+dg = dy \cdot FC \cdot \text{SiLU}'(Gate)
 $$
 
 $$
@@ -203,11 +203,11 @@ Golden reference 严格模拟 kernel 内部的 dtype 转换流程，确保对比
 | 阶段 | 操作 | Dtype |
 |------|------|-------|
 | 输入 | dy, g, fc, x, w_g, w_fc | BF16 |
-| sigmoid | exp(g) / (1 + exp(g)) | BF16 |
-| element-wise | dg, dfc 计算 | BF16 |
-| sum | db_g, db_fc | BF16 |
-| matmul (w_kernel) | x^T @ dg, x^T @ dfc | BF16 → BF16 |
-| matmul (x_kernel) | dg @ w_g^T, dfc @ w_fc^T | BF16 → BF16 |
+| sigmoid | exp(g) / (1 + exp(g)) | 输入先由 BF16 转为 FP32，计算使用 FP32 |
+| element-wise | dg, dfc 计算 | FP32，写出时转为 BF16 |
+| sum | db_g, db_fc | FP32 归约，结果转为 BF16 后累加 |
+| matmul (w_kernel) | x^T @ dg, x^T @ dfc | 输入由 BF16 转为 FP32，FP32 结果转为 BF16 后累加 |
+| matmul (x_kernel) | dg @ w_g^T, dfc @ w_fc^T | 输入由 BF16 转为 FP32，两个 FP32 结果相加后转为 BF16 |
 | 输出 | dg, dfc, dx, dw_g, dw_fc, db_g, db_fc | BF16 |
 
 ## 实现细节
