@@ -64,7 +64,7 @@ batch_loop (parallel)          — 遍历 batch，从 kv_act_seqs 动态获取�
 ## Kernel 签名
 
 ```python
-ifa_func_kernel(
+pfa_func_kernel_v2_bound(
     q,              # [B*S1, NQ, D]      FP8E4M3  — Query 输入
     q_scale,        # [B, NQ, 1]         FP32     — Query scale (per-token)
     k,              # [num_blocks, block_size, NKV, D]  FP8E4M3  — Key cache (paged)
@@ -74,6 +74,8 @@ ifa_func_kernel(
     block_table,    # [B, max_blocks_per_query]  INT32  — Block mapping table
     kv_act_seqs,    # [B]                INT32    — 每个 batch 的实际 KV 序列长度
     atten_out,      # [B*S1, NQ, D]      BF16     — Attention 输出
+    softmax_scale,  # float              — 注意力分数缩放系数，通常为 D**-0.5
+    tile_config,    # PfaTileShapeConfig — 分块配置
 )
 ```
 

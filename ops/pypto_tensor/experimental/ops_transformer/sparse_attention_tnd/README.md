@@ -55,7 +55,7 @@ def sfa_forward_tnd(
     core_attn_out, softmax_max_out, softmax_sum_out, 
     nq, n_kv, scale, sparse_size, tile_config, max_total_kv=1024 * 1024
 ):
-    """工厂函数：创建JIT编译的SFA前向TND kernel。
+    """直接调用JIT编译的SFA前向TND kernel，结果写入输出张量。"""
 
 ```
 
@@ -116,7 +116,7 @@ def sfa_forward_tnd(
 
 ```python
 import torch
-from sfa_sparse_attention_impl import sfa_forward_tnd, SaTileShapeConfig
+from sfa_forward_tnd_impl import sfa_forward_tnd, SaTileShapeConfig
 
 # ========== 参数配置 ==========
 B = 2
@@ -146,7 +146,7 @@ core_attn_out = torch.empty(T1, nq, kv_lora_rank, dtype=torch.bfloat16).npu()
 softmax_max_out = torch.empty(n_kv, T1, group, dtype=torch.float32).npu()
 softmax_sum_out = torch.empty(n_kv, T1, group, dtype=torch.float32).npu()
 
-# ========== 创建并调用kernel ==========
+# ========== 配置并调用kernel ==========
 tile_config = SaTileShapeConfig(
     s_kv_tile=2048,
     c1_tile_shape=[128, 128, 128, 256, 256, 256],
@@ -155,11 +155,13 @@ tile_config = SaTileShapeConfig(
     v2_tile_shape=[64, 128]
 )
 
-kernel = sfa_forward_tnd(kv_lora_rank, qk_rope_dim, nq, n_kv,
-                          scale, sparse_size, tile_config)
-kernel(q_nope, compressed_kv_norm, topk_indices, q_pe, k_pe,
-       npu_actual_q_len, npu_actual_kv_len,
-       core_attn_out, softmax_max_out, softmax_sum_out)
+sfa_forward_tnd(
+    q_nope, compressed_kv_norm, topk_indices, q_pe, k_pe,
+    npu_actual_q_len, npu_actual_kv_len,
+    core_attn_out, softmax_max_out, softmax_sum_out,
+    nq=nq, n_kv=n_kv, scale=scale, sparse_size=sparse_size,
+    tile_config=tile_config,
+)
 
 torch.npu.synchronize()
 print(f"Attention output shape: {core_attn_out.shape}")
