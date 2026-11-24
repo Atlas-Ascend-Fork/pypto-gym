@@ -220,9 +220,11 @@ $$\frac{\partial L}{\partial \hat{K}} = \frac{\partial L}{\partial s} \cdot \fra
 
 ### Step 4: RMSNorm 反传
 
-$$\frac{\partial L}{\partial K} = \frac{1}{rms_k}\left(\frac{\partial L}{\partial \hat{K}}\gamma_k - \hat{K}\cdot\text{mean}\big(\frac{\partial L}{\partial \hat{K}}\gamma_k \odot \hat{K}\big)\right)$$
+令 $U_K = K/rms_k$，表示不含缩放系数 $\gamma_k$ 的归一化结果：
 
-$$\frac{\partial L}{\partial \gamma_k} = \sum_{B,L} \frac{\partial L}{\partial \hat{K}} \odot \hat{K}$$
+$$\frac{\partial L}{\partial K} = \frac{1}{rms_k}\left(\frac{\partial L}{\partial \hat{K}}\gamma_k - U_K\cdot\text{mean}\big(\frac{\partial L}{\partial \hat{K}}\gamma_k \odot U_K\big)\right)$$
+
+$$\frac{\partial L}{\partial \gamma_k} = \sum_{B,L} \frac{\partial L}{\partial \hat{K}} \odot U_K$$
 
 对 Query 路径同理，得到 $\frac{\partial L}{\partial Q}$（即 `d_hidden`）与 $\frac{\partial L}{\partial \gamma_q}$（即 `d_gamma_query`）。
 
