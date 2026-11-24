@@ -396,6 +396,9 @@ def _port(in_path: Path, out_path: Path, options: PortOptions) -> dict:
     if in_fmt not in VALID_FORMATS or out_fmt not in VALID_FORMATS:
         raise ValueError(f"formats must be one of {VALID_FORMATS}")
 
+    if in_path.resolve() == out_path.resolve() or (out_path.exists() and in_path.samefile(out_path)):
+        raise ValueError("input and output paths refer to the same file")
+
     timings: dict[str, float] = {}
 
     # 1. Load source model
