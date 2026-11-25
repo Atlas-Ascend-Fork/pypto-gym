@@ -139,8 +139,14 @@ def _host_tiling_device(inputs, dev, case, block_dim, device):
     return td
 
 
-def _run_case(name, device):
+def _run_case(name, device, wide_bt=None):
     inputs, block_dim, case = golden.build_inputs(name, torch.device("cpu"))
+    if wide_bt is not None:
+        for key in ("ori_block_table", "cmp_block_table"):
+            table = inputs[key]
+            padded = torch.zeros((table.shape[0], int(wide_bt)), dtype=table.dtype)
+            padded[:, : table.shape[1]] = table
+            inputs[key] = padded
     reference = golden.reference(name, inputs)
     dev = {k: inputs[k].to(device) for k in _INPUT_KEYS if k not in ("ori_kv", "cmp_kv")}
     for key in ("ori_kv", "cmp_kv"):
@@ -201,6 +207,13 @@ def _run_case(name, device):
 @pytest.mark.parametrize("case", P0_CASES)
 def test_precision_p0(case):
     detail = _run_case(case, _device())
+    assert detail["status"] == "PASS", detail
+
+
+@pytest.mark.parametrize("case", ["mixed_decode"])
+def test_wide_block_table(case):
+    """bt=8193 (one entry past the former 8192 limit) must stay correct."""
+    detail = _run_case(case, _device(), wide_bt=8193)
     assert detail["status"] == "PASS", detail
 
 

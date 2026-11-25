@@ -72,12 +72,12 @@ stride 一次搬两行（VF 写、标量读，避免 MTE2→S 依赖）。主循
 | `q` | BF16 | `[T1, 64, 512]` | Query（TND） |
 | `ori_kv` | uint8 | `[pages, bs, 1, 544]` | FP8 E4M3FN group32 原始 KV 编码字节 |
 | `ori_sparse_indices` | int32 | `[T1, 1, K1]` | 原始稀疏索引（prologue 输入）；合法前缀之外的列被忽略，可为 -1 |
-| `ori_block_table` | int32 | `[B, bt]` | 逻辑页 → 物理页；`bt ≤ 8192` |
+| `ori_block_table` | int32 | `[B, bt]` | 逻辑页 → 物理页；`bt` 无上限（8193 已验证） |
 | `ori_topk_length` | int32 / None | `[T1, 1]` | 每行有效 TopK；省略 = 全 K 有效 |
 | `sinks` | FP32 | `[64]` | 每 head 的 sink |
 | `cmp_kv` | uint8 / None | `[pages, bs, 1, 320]` | FP4 E2M1 group16 压缩 KV；省略 = 关闭压缩侧 |
 | `cmp_sparse_indices` | int32 / None | `[T1, 1, K2]` | 压缩侧原始稀疏索引（prologue 输入） |
-| `cmp_block_table` | int32 / None | `[B, bt]` | 压缩侧逻辑页 → 物理页；`bt ≤ 8192` |
+| `cmp_block_table` | int32 / None | `[B, bt]` | 压缩侧逻辑页 → 物理页；`bt` 无上限（同上） |
 | `cmp_topk_length` | int32 / None | `[T1, 1]` | 压缩侧每行有效 TopK |
 | `cu_seqlens_q` | int32 | `[B+1]` | Query 前缀和，`cu[0]=0`、末值 `T1` |
 | `softmax_scale` | float | 标量 | 缺省 `1/sqrt(512)`；aclnn 侧为 float 属性 |
@@ -153,7 +153,9 @@ pytest ops/pro/deepseek_v4_1/mixed_quant_sparse_flash_mla/tests -q --mode aclnn
    attention 的 per-tile pair 表存 int64 地址（VF `mull/addc`），KV 池字节跨度和 pair gap
    不再受 int32 限制；2 GiB gap 用例已验证。block table 宽度不再有 1024 限制：fused
    prologue 生成完整 `[T1, k1_tab + k2_tab]` 表，有效页可分散在整张 8192 列表上。
-   block table 宽度上限 8192（fused prologue 的 UB 块表 tile）；行号表 workspace 追加在
+   block table 宽度无上限（按行逐 tile 解析，8193 已验证）；尾块 padding 列按池内后续行
+   顺序续用（重复最后一列会让反量化 gather 变成零步长，实测慢约 6 倍；页间 padding 的
+   cmp 池保留原行为）；行号表 workspace 追加在
    FD partials 之后，FD 关闭时直接使用 workspace 起始地址。
    算子注册为 `FORMAT_ND` + `IgnoreContiguous`，aclnn 路径原样传递视图，不做压实拷贝。
 3. sink 只进分母；两侧有效长度均为 0 的行输出严格为 0、`lse` 严格等于该 head 的 `sinks`。

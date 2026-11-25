@@ -98,13 +98,14 @@ def zero_outc_vf(outc):
 
 
 @pl.vector_function
-def build_pair_tab_vf(idx_t, bt_t, tab, fan, tbase, bs_v, st_v, rb_v, segneg, win, cmax, cxl, pow2, shift):
+def build_pair_tab_vf(idx_t, bt_t, tab, fan, tbase, bs_v, st_v, rb_v, segneg, win, cmax, cxl, pow2, shift,
+                     pool_last, extend):
     _pall_i32 = vf.create_mask(pattern=pl.MaskPattern.ALL, dtype=pl.DT_INT32)
     _pall_u32 = vf.create_mask(pattern=pl.MaskPattern.ALL, dtype=pl.DT_UINT32)
     m_even = vf.create_mask(pattern=pl.MaskPattern.ALL, dtype=pl.DT_FP32)
     lane = vf.arange(0, dtype=pl.DT_INT32)
-    c = vf.adds(lane, win, _pall_i32)
-    c = vf.mins(c, cmax, _pall_i32)
+    c_raw = vf.adds(lane, win, _pall_i32)
+    c = vf.mins(c_raw, cmax, _pall_i32)
     rel = vf.adds(c, segneg, _pall_i32)
     view = vf.bit_cast(rel, dtype=pl.DT_UINT32)
     relu = vf.move(view, _pall_u32)
@@ -126,6 +127,12 @@ def build_pair_tab_vf(idx_t, bt_t, tab, fan, tbase, bs_v, st_v, rb_v, segneg, wi
     addr = vf.mul(phys, st_r, _pall_i32)
     off = vf.mul(off, rb_r, _pall_i32)
     addr = vf.add(addr, off, _pall_i32)
+    if extend != 0:
+        # Columns past the last valid one keep walking the following pool rows
+        # instead of repeating the last row (zero-stride dequant gathers are
+        # ~10x slower); clamped to the pool's last valid row.
+        addr = vf.add(addr, vf.mul(vf.sub(c_raw, c, _pall_i32), rb_r, _pall_i32), _pall_i32)
+        addr = vf.min(addr, vf.full(pool_last, dtype=pl.DT_INT32), _pall_i32)
     one = vf.full(1, dtype=pl.DT_INT32)
     zero_r = vf.full(0, dtype=pl.DT_INT32)
     ix = vf.xor(lane, one, _pall_i32)
@@ -2283,6 +2290,17 @@ def mixed_quant_sparse_flash_mla_kernel(
     scale_arg = tiling.scale
     ori_kv_stride0 = pl.getval(tiling_device, 10)
     cmp_kv_stride0 = pl.getval(tiling_device, 11)
+    ori_pages = pl.getval(tiling_device, 8)
+    cmp_pages = pl.getval(tiling_device, 9)
+    # Last valid byte offset of the ori pool; the ori tail resolver clamps here.
+    pool_last_o = (ori_pages - 1) * ori_kv_stride0 + (bs_ori - 1) * 544
+    pool_last_c = (cmp_pages - 1) * cmp_kv_stride0 + (bs_cmp - 1) * 320
+    # Page-padded cmp pools (axis-0 holes) keep the duplicated last row: the
+    # contiguous continuation can walk into the page hole.  Contiguous pools
+    # (the production shape) take the fast contiguous tail.
+    extend_c = 0
+    if cmp_kv_stride0 == bs_cmp * 320:
+        extend_c = 1
     q = pl.make_tensor(q_ptr, [t1, 64, 512], [64 * 512, 512, 1], dtype=pl.DT_BF16)
     ori_sparse_indices = pl.make_tensor(
         ori_sparse_indices_ptr, [t1, 1, k_ori], [k_ori, k_ori, 1], dtype=pl.DT_INT32)
@@ -4385,8 +4403,7 @@ def mixed_quant_sparse_flash_mla_kernel(
                         pl.set_validshape(ub_tabs, [1, 2304])
                         build_pair_tab_vf(
                             view_28, view_29, ub_pt_native[clk_1 & 1], fan_grp[clk_1 & 1], t8b, bso_v, stro_v, 544,
-                            negb, winb, cmb, cxlb, bs_pow2_o, bs_shift_o
-                        )
+                            negb, winb, cmb, cxlb, bs_pow2_o, bs_shift_o, pool_last_o, 1)
                     else:
                         v_nb = pl.min(128, (k_cmp - mul_6))
                         pl.set_validshape(ub_tabs, [1, v_nb])
@@ -4394,8 +4411,7 @@ def mixed_quant_sparse_flash_mla_kernel(
                         pl.set_validshape(ub_tabs, [1, 2304])
                         build_pair_tab_vf(
                             view_28, view_34, ub_pt_native[clk_1 & 1], fan_grp[clk_1 & 1], t8b, bsc_v, strc_v, 320,
-                            negb, winb, cmb, cxlb, bs_pow2_c, bs_shift_c
-                        )
+                            negb, winb, cmb, cxlb, bs_pow2_c, bs_shift_c, pool_last_c, extend_c)
                 # Second priming on its own index staging buffer (ub_tabs_b), so the two
                 # load->VF pairs do not share one single-buffered region.
                 if (tl_1 + 1) < th_1:
@@ -4429,8 +4445,7 @@ def mixed_quant_sparse_flash_mla_kernel(
                             pl.set_validshape(ub_tabs_b, [1, 128])
                             build_pair_tab_vf(
                                 ub_tabs_b, view_29, ub_pt_native[(clk_1 + 1) & 1], fan_grp[(clk_1 + 1) & 1], t8b,
-                                bso_v, stro_v, 544, negb, winb, cmb, cxlb2, bs_pow2_o, bs_shift_o
-                            )
+                                bso_v, stro_v, 544, negb, winb, cmb, cxlb2, bs_pow2_o, bs_shift_o, pool_last_o, 1)
                         else:
                             v_nb = pl.min(128, (k_cmp - mul_6))
                             pl.set_validshape(ub_tabs_b, [1, v_nb])
@@ -4438,8 +4453,7 @@ def mixed_quant_sparse_flash_mla_kernel(
                             pl.set_validshape(ub_tabs_b, [1, 128])
                             build_pair_tab_vf(
                                 ub_tabs_b, view_34, ub_pt_native[(clk_1 + 1) & 1], fan_grp[(clk_1 + 1) & 1], t8b,
-                                bsc_v, strc_v, 320, negb, winb, cmb, cxlb2, bs_pow2_c, bs_shift_c
-                            )
+                                bsc_v, strc_v, 320, negb, winb, cmb, cxlb2, bs_pow2_c, bs_shift_c, pool_last_c, extend_c)
                 if fit_row != 0:
                     for tp in pl.range(tl_1, th_1, 1):
                         segg = 0
@@ -4469,8 +4483,7 @@ def mixed_quant_sparse_flash_mla_kernel(
                             pl.set_validshape(ub_tabs, [1, 2304])
                             build_pair_tab_vf(
                                 view_28, view_29, ub_pt_native[0], fan_grp[0], tbg, bso_v, stro_v, 544, negg, wing,
-                                cmg, cxlg, bs_pow2_o, bs_shift_o
-                            )
+                                cmg, cxlg, bs_pow2_o, bs_shift_o, pool_last_o, 1)
                         else:
                             v_ng = pl.min(128, (k_cmp - mulg))
                             pl.set_validshape(ub_tabs, [1, v_ng])
@@ -4478,8 +4491,7 @@ def mixed_quant_sparse_flash_mla_kernel(
                             pl.set_validshape(ub_tabs, [1, 2304])
                             build_pair_tab_vf(
                                 view_28, view_34, ub_pt_native[0], fan_grp[0], tbg, bsc_v, strc_v, 320, negg, wing,
-                                cmg, cxlg, bs_pow2_c, bs_shift_c
-                            )
+                                cmg, cxlg, bs_pow2_c, bs_shift_c, pool_last_c, extend_c)
                 if tl_1 == 0:
                     if rpar == 0:
                         seed_vf(view_19, view_37, view_38)
@@ -4535,8 +4547,7 @@ def mixed_quant_sparse_flash_mla_kernel(
                                 pl.set_validshape(ub_tabs, [1, 2304])
                                 build_pair_tab_vf(
                                     view_28, view_29, ub_pt_native[clk_1 & 1], fan_grp[clk_1 & 1], clk_slot_8, bso_v,
-                                    stro_v, 544, sneg, win, cmx, cxlm, bs_pow2_o, bs_shift_o
-                                )
+                                    stro_v, 544, sneg, win, cmx, cxlm, bs_pow2_o, bs_shift_o, pool_last_o, 1)
                             nv = pl.min(pl.max((actual_n - mul_15), 0), 64)
                             ptb = ub_pt_native[clk_1 & 1]
                             if fit_row != 0:
@@ -4584,8 +4595,7 @@ def mixed_quant_sparse_flash_mla_kernel(
                                 pl.set_validshape(ub_tabs, [1, 2304])
                                 build_pair_tab_vf(
                                     view_28, view_34, ub_pt_native[clk_1 & 1], fan_grp[clk_1 & 1], clk_slot_8, bsc_v,
-                                    strc_v, 320, sneg, win, cmx, cxlm, bs_pow2_c, bs_shift_c
-                                )
+                                    strc_v, 320, sneg, win, cmx, cxlm, bs_pow2_c, bs_shift_c, pool_last_c, extend_c)
                             nvc = pl.min(pl.max((actual_n - mul_15), 0), 64)
                             ptc = ub_pt_native[clk_1 & 1]
                             if fit_row != 0:
@@ -4645,8 +4655,7 @@ def mixed_quant_sparse_flash_mla_kernel(
                                         cmxn,
                                         cxln,
                                         bs_pow2_o,
-                                        bs_shift_o,
-                                    )
+                                        bs_shift_o, pool_last_o, 1)
                                 else:
                                     v_nn = pl.min(128, (k_cmp - mul_140))
                                     pl.set_validshape(ub_tabs, [1, v_nn])
@@ -4667,8 +4676,7 @@ def mixed_quant_sparse_flash_mla_kernel(
                                         cmxn,
                                         cxln,
                                         bs_pow2_c,
-                                        bs_shift_c,
-                                    )
+                                        bs_shift_c, pool_last_c, extend_c)
                         pl.system.set_cross_core(pipe=P.MTE3, event_id=0, sync_mode=pl.CrossCoreSyncMode.INTRA_BLOCK)
                     run_t_1 = 0
                     if t_13 < tpc_1:
@@ -5310,9 +5318,11 @@ def mixed_quant_sparse_flash_mla(
             f"block_dim {block_dim} exceeds this device's cube core count {device_blocks}"
         )
     key = _tiling_key(tensors, fd_enable)
-    # FlashDecode split partials workspace: 恒为 FD 超集变体分配并清零
-    # (FD_ENABLE 常驻 1, kernel 运行期按 metadata FD 槽决定是否使用)。
-    ws = torch.zeros(MQSMLA_WORKSPACE_BYTES, dtype=torch.uint8, device=q.device)
+    # FlashDecode split partials workspace: 恒为 FD 超集变体分配, 不预先清零。
+    # (FD_ENABLE 常驻 1, kernel 运行期按 metadata FD 槽决定是否使用; 计划内的每个
+    #  split 槽由它的生产核按 tile 写满 fd_o/fd_m/fd_l, 归约只读计划内槽, 因此
+    #  未规划槽的旧数据不会被读到。)
+    ws = torch.empty(MQSMLA_WORKSPACE_BYTES, dtype=torch.uint8, device=q.device)
     args = [tensors[n] for n in ARG_ORDER] + [ws]
     tiling = _tiling_tensor(*dataclasses.astuple(_tiling_args(tensors, scale)), q.device)
     mixed_quant_sparse_flash_mla_kernel[None, block_dim, key](*args, tiling)

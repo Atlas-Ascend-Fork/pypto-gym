@@ -15,7 +15,7 @@
 - deepseek_v4_1/engram_gate
 # engram_gate_bwd: grad_weight 精度阈值边缘超限(atol 1.538e-05 vs 1.526e-05, jit 同现), 修复后恢复
 # - deepseek_v4_1/engram_gate_bwd
-- deepseek_v4_1/kv_compress_epilog_v2
+# - deepseek_v4_1/kv_compress_epilog_v2
 - deepseek_v4_1/mega_mhc
 - deepseek_v4_1/mhc_post_fwd
 - deepseek_v4_1/mhc_pre_fuse
