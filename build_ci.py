@@ -340,6 +340,7 @@ class TestParam(CMakeParam):
         """
         self.stest = args.stest  # False (not requested) / True (no filter) / str (filter)
         self.stest_mode: str = args.stest_mode  # auto / jit / torch / aclnn
+        self.stest_pkg: str = args.stest_pkg  # prebuilt .run path (skip the cmake build)
 
     @property
     def enabled(self) -> bool:
@@ -360,6 +361,8 @@ class TestParam(CMakeParam):
         desc = "\nTests"
         desc += f"\n    STest                   : {'ON' if not self.filter_expr else self.filter_expr}"
         desc += f"\n    STestMode               : {self.stest_mode}"
+        if self.stest_pkg:
+            desc += f"\n    STestPkg                : {self.stest_pkg}"
         return desc
 
     @staticmethod
@@ -382,6 +385,13 @@ class TestParam(CMakeParam):
                  "jit = source-tree op_kernel tests, no artifact install (requires pypto_pro "
                  "in the environment); torch = force torch custom-op mode against the installed "
                  "artifact; aclnn = force C++ bridge mode (run only).",
+        )
+        parser.add_argument(
+            "--stest-pkg",
+            default="",
+            help="run stest against a prebuilt .run package (e.g. the compile-stage "
+                 "artifact) instead of building one: skips the kernel build and only "
+                 "compiles the lightweight aclnn test bridges locally. Requires --stest.",
         )
 
     def get_cfg_cmd(self, pkg_type_run: bool) -> str:
@@ -591,23 +601,35 @@ class BuildCtrl(CMakeParam):
         if ctrl.tests.enabled and len(ctrl.feature.soc_list) != 1:
             raise ValueError("--stest supports exactly one soc; pass a single --soc")
         if ctrl.feature.pkg_type_run:
-            soc_list = ctrl.feature.soc_list
-            logging.info("PackageType(run), start process with CMake, %s soc(s): %s", len(soc_list), soc_list)
-            ctrl.cmake_clean()
-            # Build environment precheck is enforced on the CMake configure side
-            # (cmake/config.cmake), covering every entry point (build_ci.py / manual cmake / CLion).
+            if ctrl.tests.stest_pkg:
+                # stest from a prebuilt run package (e.g. the compile-stage
+                # artifact): skip the kernel build, compile only the test bridges
+                if not ctrl.tests.enabled:
+                    raise ValueError("--stest-pkg requires --stest")
+                if ctrl.tests.stest_mode == "jit":
+                    raise ValueError("--stest-pkg is meaningless with --stest-mode jit "
+                                     "(jit tests run from the source tree, no artifact)")
+                logging.info("PackageType(run), stest from prebuilt package: %s", ctrl.tests.stest_pkg)
+                ctrl.prepare_stest_pkg(soc=ctrl.feature.soc_list[0])
+                ctrl.run_stest()
+            else:
+                soc_list = ctrl.feature.soc_list
+                logging.info("PackageType(run), start process with CMake, %s soc(s): %s", len(soc_list), soc_list)
+                ctrl.cmake_clean()
+                # Build environment precheck is enforced on the CMake configure side
+                # (cmake/config.cmake), covering every entry point (build_ci.py / manual cmake / CLion).
 
-            # Multi-soc = multiple full build rounds: each soc gets its own binary dir and
-            # produces an independent .run (chip in package name); the output dir is shared.
-            for i, soc in enumerate(soc_list, start=1):
-                logging.info("===== Soc round (%s/%s): %s =====", i, len(soc_list), soc)
-                ctrl.cmake_configure(soc=soc)
-                ctrl.cmake_build(soc=soc)
-                # Shell wheel must exist before `package`: the install(CODE) rule
-                # globs build/<soc>/shell_whl/*.whl into the run payload (决策 29).
-                ctrl.build_shell_wheel(soc=soc)
-                ctrl.cmake_package(soc=soc)
-            ctrl.run_stest()
+                # Multi-soc = multiple full build rounds: each soc gets its own binary dir and
+                # produces an independent .run (chip in package name); the output dir is shared.
+                for i, soc in enumerate(soc_list, start=1):
+                    logging.info("===== Soc round (%s/%s): %s =====", i, len(soc_list), soc)
+                    ctrl.cmake_configure(soc=soc)
+                    ctrl.cmake_build(soc=soc)
+                    # Shell wheel must exist before `package`: the install(CODE) rule
+                    # globs build/<soc>/shell_whl/*.whl into the run payload (决策 29).
+                    ctrl.build_shell_wheel(soc=soc)
+                    ctrl.cmake_package(soc=soc)
+                ctrl.run_stest()
         else:
             logging.info("PackageType(whl/aot), start process with CMake")
             ctrl.cmake_clean()
@@ -821,18 +843,6 @@ class BuildCtrl(CMakeParam):
         _, duration = self._run_build_cmd(cmd=cmd)
         logging.info("CMake Configure[%s] success, %s", soc, duration)
 
-    def cmake_build(self, soc: str):
-        """Execute CMake Build stage for one soc build round
-
-        :param soc: Soc name of current build round
-        """
-        jobs = self.jobs or (os.cpu_count() or 8)
-        cmd = f"{self.cmake} --build {self._build_dir(soc)} -j {jobs}"
-        cmd += " --verbose" if self.verbose else ""
-        logging.info("CMake Build[%s], Cmd: %s, Timeout: %s secs", soc, cmd, self.remain_timeout)
-        _, duration = self._run_build_cmd(cmd=cmd)
-        logging.info("CMake Build[%s] success, %s", soc, duration)
-
     def cmake_package(self, soc: str):
         """Execute CMake Package stage for one soc build round (set_cann_cpack_config -> .run)
 
@@ -887,6 +897,21 @@ class BuildCtrl(CMakeParam):
         if not files:
             raise RuntimeError(f"no artifact matching {pattern!r} under {directory}")
         return files[0]
+
+    def cmake_build(self, soc: str, targets: Optional[List[str]] = None):
+        """Execute CMake Build stage for one soc build round
+
+        :param soc: Soc name of current build round
+        :param targets: Optional CMake target names; when omitted all targets build.
+        """
+        jobs = self.jobs or (os.cpu_count() or 8)
+        cmd = f"{self.cmake} --build {self._build_dir(soc)} -j {jobs}"
+        for target in (targets or []):
+            cmd += f" --target {target}"
+        cmd += " --verbose" if self.verbose else ""
+        logging.info("CMake Build[%s], Cmd: %s, Timeout: %s secs", soc, cmd, self.remain_timeout)
+        _, duration = self._run_build_cmd(cmd=cmd)
+        logging.info("CMake Build[%s] success, %s", soc, duration)
 
     def _discover_op_dirs(self) -> Dict[str, Path]:
         """Discover operator dirs that have a tests/ directory (ops/{pro,tensor} only)."""
@@ -994,6 +1019,32 @@ class BuildCtrl(CMakeParam):
             "PYTHONPATH": self._prepend_env("PYTHONPATH", str(site_dir)),
         }
         self._run_pytest(op_dirs, mode="torch", soc=soc, update_env=update_env)
+
+    def prepare_stest_pkg(self, soc: str):
+        """Stage a prebuilt .run for stest; build only the aclnn test bridges.
+
+        --stest-pkg mode: the run package comes from the compile stage (same
+        merge commit), so the kernel/op_host build storm is skipped. cmake runs
+        only to produce the lightweight EXCLUDE_FROM_ALL aclnn test bridges
+        (build/<soc>/tests) that aclnn-mode pytest loads via --aclnn-lib-dir.
+        The build tree is always cleaned first: a stale compile_stop.flag or
+        compile_pids.txt from an interrupted round must not leak into this one.
+        """
+        pkg = Path(self.tests.stest_pkg).resolve()
+        if not pkg.is_file():
+            raise RuntimeError(f"--stest-pkg not found: {pkg}")
+        if self.install_root in pkg.parents or self._build_root in pkg.parents:
+            raise RuntimeError(f"--stest-pkg must live outside {self.install_root}: {pkg}")
+        self.clean = True  # force clean: build tree and build_out are rebuilt here
+        self.cmake_clean()
+        self.cmake_configure(soc=soc)
+        if self.tests.stest_mode in ("auto", "aclnn"):
+            self.cmake_build(soc=soc, targets=["gym_test_bridges"])
+        run_dir = self._run_dir(soc)
+        run_dir.mkdir(parents=True, exist_ok=True)
+        staged = run_dir / pkg.name
+        shutil.copy2(pkg, staged)
+        logging.info("Staged prebuilt run package for stest: %s", staged)
 
     def _install_run_for_test(self, soc: str):
         """Install the built .run into build_out/run/<soc> and return the pytest env."""

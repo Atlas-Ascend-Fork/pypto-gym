@@ -301,6 +301,7 @@ LOG_INFO "PYPTO_3RD_LIB_PATH=$PYPTO_3RD_LIB_PATH"
 SRC_DIR=""
 SRC_TARGET_BRANCH="master"  # 不传入本参数时默认是 master
 PTO_ISA_URL=""
+PYPTO_RUN_URL=""            # compile.sh 已编好的 pypto run 包下载地址, 非空时跳过 pypto 源码构建
 CI_MODE=false
 CHANGED_FILE_FROM_ARG=""
 while [[ $# -gt 0 ]]; do
@@ -315,6 +316,10 @@ while [[ $# -gt 0 ]]; do
             ;;
         --pto_isa_url)
             PTO_ISA_URL="$2"
+            shift 2
+            ;;
+        --pypto_run_url)
+            PYPTO_RUN_URL="$2"
             shift 2
             ;;
         --ci)
@@ -345,6 +350,7 @@ SRC_DIR=$(cd "$SRC_DIR" && pwd)
 LOG_INFO "SRC_DIR=$SRC_DIR"
 LOG_INFO "SRC_TARGET_BRANCH=$SRC_TARGET_BRANCH"
 LOG_INFO "PTO_ISA_URL=$PTO_ISA_URL"
+LOG_INFO "PYPTO_RUN_URL=$PYPTO_RUN_URL"
 
 # ======================================================================================================================
 # 4: 设置 CANN 环境变量
@@ -397,12 +403,34 @@ if [ ! -f "$SETENV_SH" ]; then
 fi
 LOG_DO source "$SETENV_SH"
 
-# 下载pypto代码
+# 获取 pypto run 包:
+#   PYPTO_RUN_URL 非空 -> 下载 compile.sh(stage2) 已编好的 pypto run 包, 跳过 pypto 源码构建,
+#                        按 install_pypto_run 期望的 <repo>/build_out 目录摆放
+#   为空               -> 回退原流程: clone pypto 源码(与 gym 同级)
 work_dir="$SRC_DIR"
 # 定位上级目录
 work_parent_dir="${work_dir}/.."
 target_repo="${work_parent_dir}/pypto"
 
+if [ -n "${PYPTO_RUN_URL}" ]; then
+    LOG_INFO "PYPTO_RUN_URL=${PYPTO_RUN_URL}, fetch prebuilt PyPTO run package"
+    rm -rf "${target_repo}"
+    mkdir -p "${target_repo}/build_out"
+    pushd "${target_repo}" > /dev/null || exit 1
+    if ! wget -q -O pypto_run.tar.gz "${PYPTO_RUN_URL}"; then
+        LOG_ERROR "Download prebuilt PyPTO run package failed: ${PYPTO_RUN_URL}"
+        exit 1
+    fi
+    if ! tar -zxf pypto_run.tar.gz -C build_out; then
+        LOG_ERROR "Extract prebuilt PyPTO run package failed"
+        exit 1
+    fi
+    rm -f pypto_run.tar.gz
+    echo "========== prebuilt PyPTO run package =========="
+    ls build_out
+    echo "================================================"
+    popd > /dev/null
+else
 # 判断上级目录是否存在pypto文件夹，存在则彻底删除
 if [ -d "${target_repo}" ]; then
     echo "检测到上级目录已存在pypto仓库，开始删除..."
@@ -431,6 +459,7 @@ echo "======================================"
 
 # 进入上级目录执行克隆操作
 cd "${work_dir}" || exit 1
+fi
 
 
 # ======================================================================================================================
@@ -470,20 +499,23 @@ LOG_DO "$PYTHON3_EXE" --version
 LOG_DO "$PYTHON3_EXE" -m pip list
 LOG_DO "npu-smi" "info"
 
-# 使用 PyPTO 仓库自身的构建入口生成 run 包。不要传 --just_build_whl，
+# 编 pypto run 包(仅源码构建分支; PYPTO_RUN_URL 非空时已由 compile 产物替代)。
+# 不要传 --just_build_whl，
 # 也不要传 --models/-u/-s，避免在 PyPTO 仓库内提前执行其自身测试。
 # $target_repo 是本脚本前面克隆的 pypto 仓(与 gym 同级), gym 的 build_ci.py 职责已修正为
 # 构建 gym 自身产物(whl/custom run), 不再代理 pypto 构建.
-if run_pypto_build "$PYTHON3_EXE" "$target_repo" \
-    --clean \
-    --verbose \
-    "--cann_3rd_lib_path=$PYPTO_3RD_LIB_PATH" \
-    "--timeout=$PYTHON_TOTAL_TIMEOUT"; then
-    :
-else
-    ret=$?
-    cleanup_npu_processes "$PYTHON3_EXE" "$SRC_DIR"
-    exit "$ret"
+if [ -z "${PYPTO_RUN_URL}" ]; then
+    if run_pypto_build "$PYTHON3_EXE" "$target_repo" \
+        --clean \
+        --verbose \
+        "--cann_3rd_lib_path=$PYPTO_3RD_LIB_PATH" \
+        "--timeout=$PYTHON_TOTAL_TIMEOUT"; then
+        :
+    else
+        ret=$?
+        cleanup_npu_processes "$PYTHON3_EXE" "$SRC_DIR"
+        exit "$ret"
+    fi
 fi
 
 # gym 验证对象是 run 安装结果，不直接 pip install build_out 中的 whl。
@@ -504,6 +536,15 @@ else
     exit "$ret"
 fi
 LOG_DO source "$SETENV_SH"
+
+# pypto whl 为 abi3 + 绑定在线编译设计(首次 import pypto 现场编译 pybind11 桥),
+# pybind11 属隐含运行时依赖(pyproject dependencies 为空, run 包安装器 --no-deps 不携带);
+# 源码构建分支由构建环节顺带备好, 下载 compile 产物分支需在此显式补装
+if ! "$PYTHON3_EXE" -m pip install --disable-pip-version-check "pybind11>=2.13.6"; then
+    LOG_ERROR "install pybind11 for pypto online binding build failed"
+    cleanup_npu_processes "$PYTHON3_EXE" "$SRC_DIR"
+    exit 1
+fi
 
 elapsed_before_tests=$(($(date +%s) - total_start))
 GYM_TEST_TIMEOUT=$((PYTHON_TOTAL_TIMEOUT - elapsed_before_tests))

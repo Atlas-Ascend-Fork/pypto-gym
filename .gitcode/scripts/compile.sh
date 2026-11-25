@@ -96,6 +96,68 @@ case "${ARCH}" in
         ;;
 esac
 
+# ---------------------------------------------------------------------------
+# Build & install pypto (master) before gym build (gym build depends on pypto).
+# Skip the build when this PR's cached archive pypto_run_<arch>.tar.gz
+# (.run + master sha, at ci/package/<MR>) matches current master HEAD
+# (compile pods are ephemeral, so the cache rides on OBS).
+# ---------------------------------------------------------------------------
+PYPTO_REPO_DIR="${WORKSPACE}/pypto"
+PYPTO_CACHE_TMP="${WORKSPACE}/pypto_cache_tmp"
+
+rm -rf "${PYPTO_REPO_DIR}"
+git clone --depth 1 --branch master --single-branch https://gitcode.com/cann/pypto.git "${PYPTO_REPO_DIR}"
+DP_ASSERT_EQUAL "$?" 0 "clone pypto master"
+PYPTO_SHA=$(git -C "${PYPTO_REPO_DIR}" rev-parse HEAD)
+
+# reuse this PR's previous round archive when its sha matches master HEAD
+PYPTO_RUN_PKG=""
+if [ -n "${PYPTO_CACHE_URL}" ]; then
+    rm -rf "${PYPTO_CACHE_TMP}" && mkdir -p "${PYPTO_CACHE_TMP}"
+    if wget -q -O "${PYPTO_CACHE_TMP}/pypto_run.tar.gz" "${PYPTO_CACHE_URL}/pypto_run_${ARCH_TAG}.tar.gz"; then
+        tar -zxf "${PYPTO_CACHE_TMP}/pypto_run.tar.gz" -C "${PYPTO_CACHE_TMP}"
+        _cached_sha=$(cat "${PYPTO_CACHE_TMP}/pypto_master_sha_${ARCH_TAG}.txt" 2>/dev/null)
+        if [ "${_cached_sha}" = "${PYPTO_SHA}" ]; then
+            PYPTO_RUN_PKG=$(find "${PYPTO_CACHE_TMP}" -maxdepth 1 -name "cann-pypto_*.run" -print -quit)
+            [ -n "${PYPTO_RUN_PKG}" ] && echo "pypto master unchanged (${PYPTO_SHA}), reuse cached run package from ${PYPTO_CACHE_URL}"
+        else
+            echo "pypto run cache outdated (cache sha: ${_cached_sha:-none}, master: ${PYPTO_SHA})"
+        fi
+    else
+        echo "no cached pypto run package at ${PYPTO_CACHE_URL}/pypto_run_${ARCH_TAG}.tar.gz"
+    fi
+fi
+if [ -z "${PYPTO_RUN_PKG}" ]; then
+    echo "no reusable pypto run cache, build pypto"
+fi
+
+if [ -z "${PYPTO_RUN_PKG}" ]; then
+    cd "${PYPTO_REPO_DIR}"
+    python3 -m pip install build "packaging==24.2"
+    python3 build_ci.py --clean --build_type=Release --timeout=900 --no_isolation --job_num=16 --pkg-type run
+    DP_ASSERT_EQUAL "$?" 0 "build pypto ${task_name}"
+    PYPTO_RUN_PKG=$(find "${PYPTO_REPO_DIR}/build_out" -maxdepth 1 -name "cann-pypto_*.run" -print -quit)
+    [ -n "${PYPTO_RUN_PKG}" ] || { LOG_ERROR "No pypto run package found in ${PYPTO_REPO_DIR}/build_out"; exit 1; }
+fi
+
+# install as jenkins user: a root install aborts because install-path parents
+# (/home/jenkins/Ascend/cann) belong to jenkins; --install-path is the Ascend
+# root, pypto install.sh appends the "cann" version dir itself
+echo "y" | su - jenkins -c "cd '${PYPTO_RUN_PKG%/*}' && bash './${PYPTO_RUN_PKG##*/}' --full --quiet --pylocal --install-path=/home/jenkins/Ascend"
+DP_ASSERT_EQUAL "$?" 0 "install pypto run package"
+
+# archive .run + master sha: consumed by the smoke stage and the next round's
+# cache read of this PR
+echo "${PYPTO_SHA}" > "${WORKSPACE}/pypto_master_sha_${ARCH_TAG}.txt"
+PYPTO_PKG_NAME="pypto_run_${ARCH_TAG}.tar.gz"
+tar -zcf "${WORKSPACE}/${PYPTO_PKG_NAME}" -C "${PYPTO_RUN_PKG%/*}" "${PYPTO_RUN_PKG##*/}" -C "${WORKSPACE}" "pypto_master_sha_${ARCH_TAG}.txt"
+
+# pylocal-installed python packages for gym build-time pypto/pypto_pro codegen
+export PYTHONPATH="/home/jenkins/Ascend/cann/python/site-packages:${PYTHONPATH}"
+python3 -c "import pypto, pypto_pro" || { LOG_ERROR "import pypto/pypto_pro failed after pypto install"; exit 1; }
+
+cd "${WORKSPACE}"
+
 python3 build_ci.py --clean --pkg-type run
 build_ret=$?
 DP_ASSERT_EQUAL "${build_ret}" 0 "build ${task_name}"
@@ -111,3 +173,4 @@ PKG_NAME="build_whl_run_${ARCH_TAG}.tar.gz"
 tar -zcf "${WORKSPACE}/${PKG_NAME}" -C "${WORKSPACE}" build_whl_run
 find "${WORKSPACE}/build_out" -mindepth 1 -delete
 cp -f "${WORKSPACE}/${PKG_NAME}" "${WORKSPACE}/build_out/"
+cp -f "${WORKSPACE}/${PYPTO_PKG_NAME}" "${WORKSPACE}/build_out/"

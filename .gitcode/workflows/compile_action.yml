@@ -63,6 +63,9 @@ jobs:
             export REPOSITORY_NAME=ge
             export GIT_PR_NUMBER=${{ env.MERGE_ID }}
             export ASCEND_3RD_LIB_PATH=/home/jenkins/opensource
+            # pypto run 包缓存源(本 PR 的 OBS 归档目录): compile.sh 下载上一轮归档里的 sha
+            # 与 master HEAD 比对, 一致则跳过 pypto 编包(编译 pod 不持久, 缓存走 OBS)
+            export PYPTO_CACHE_URL="https://ascend-ci.obs.cn-north-4.myhuaweicloud.com/${{ env.obs_path }}"
             BuildAccelerate bash compile.sh
           AC_SERVER_IP: ${{ vars.AC_SERVER_IP }}
       - name: upload

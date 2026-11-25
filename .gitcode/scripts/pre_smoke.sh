@@ -51,7 +51,11 @@ echo "[INFO] pto-isa package url: ${pto_url}"
 
 log "start run test case, please wait ..."
 echo "==============start smoke testing================="
-bash pypto_gym_smoke.sh --src ${WORKSPACE} --pto_isa_url "${pto_url}" --src_target_branch master --f ${WORKSPACE}/pr_filelist.txt --ci 2>&1 | tee -a ./run_test.log
+# PYPTO_RUN_URL: compile.sh(stage2) 已编好的 pypto run 包下载地址, 由 workflow run:| 导出
+#   (x86 -> pypto_run_x86.tar.gz / aarch64 -> pypto_run_arm.tar.gz);
+#   非空时 smoke 下载安装该包并跳过 pypto 源码构建, 为空时回退原 clone+build 流程
+bash pypto_gym_smoke.sh --src ${WORKSPACE} --pto_isa_url "${pto_url}" --src_target_branch master \
+    --f ${WORKSPACE}/pr_filelist.txt --ci --pypto_run_url "${PYPTO_RUN_URL:-}" 2>&1 | tee -a ./run_test.log
 smoke_rc=${PIPESTATUS[0]}
 
 # ==============================
@@ -109,8 +113,27 @@ STEST_ARG="--stest"
 [ -n "${GYM_STEST_FILTER}" ] && STEST_ARG="--stest=${GYM_STEST_FILTER}"
 
 cd "${WORKSPACE}" || exit 1
+# gym run 包复用 compile 产物: 下载 build_whl_run_<arch>.tar.gz 解出 .run 传给
+# --stest-pkg, stest 只做轻量 aclnn bridges 构建 + 装包(跳过 gym 内核编译风暴);
+# GYM_PKG_URL 为空时回退原全量构建流程
+STEST_PKG=""
+if [ -n "${GYM_PKG_URL}" ]; then
+    rm -rf "${WORKSPACE}/gym_pkg" && mkdir -p "${WORKSPACE}/gym_pkg"
+    if wget -q -O "${WORKSPACE}/gym_pkg/gym_bundle.tar.gz" "${GYM_PKG_URL}"; then
+        tar -zxf "${WORKSPACE}/gym_pkg/gym_bundle.tar.gz" -C "${WORKSPACE}/gym_pkg"
+        STEST_PKG=$(find "${WORKSPACE}/gym_pkg" -type f -name "cann-*pypto_gym*.run" -print -quit)
+    fi
+    if [ -z "${STEST_PKG}" ]; then
+        echo "$(date +%Y%m%d.%H%M%S) : gym package download/extract failed from ${GYM_PKG_URL}"
+        exit 1
+    fi
+    echo "$(date +%Y%m%d.%H%M%S) : gym stest reuses prebuilt package: ${STEST_PKG}"
+fi
+STEST_PKG_ARG=""
+[ -n "${STEST_PKG}" ] && STEST_PKG_ARG="--stest-pkg ${STEST_PKG}"
+
 # 三方库不传 cann_3rd_lib_path, 与 compile.sh(stage2) 一致, 由 prepare_3rd.cmake 回退 FetchContent
-"${GYM_PYTHON3}" build_ci.py --pkg-type run "${STEST_ARG}" --timeout "${GYM_STEST_TIMEOUT:-2700}" 2>&1 | tee -a ./run_stest.log
+"${GYM_PYTHON3}" build_ci.py --pkg-type run "${STEST_ARG}" ${STEST_PKG_ARG} --timeout "${GYM_STEST_TIMEOUT:-2700}" 2>&1 | tee -a ./run_stest.log
 stest_rc=${PIPESTATUS[0]}
 check_result "${stest_rc}" "./run_stest.log" "run gym stest"
 echo "$(date +%Y%m%d.%H%M%S) : run gym stest success"
