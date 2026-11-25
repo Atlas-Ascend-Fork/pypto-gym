@@ -39,8 +39,6 @@ for _path in (_THIS_DIR, _MAIN_TESTS, os.path.join(_MAIN_TESTS, "assets")):
     if os.path.isdir(_path) and _path not in sys.path:
         sys.path.insert(0, _path)
 
-import _standalone_env  # noqa: E402,F401  直跑自举: 注入 tests/common、aclnn 桥与 vendor 环境
-
 try:
     import mixed_quant_sparse_flash_mla_golden_cpu as golden  # noqa: E402
     import mixed_quant_sparse_flash_mla_precision as verify  # noqa: E402

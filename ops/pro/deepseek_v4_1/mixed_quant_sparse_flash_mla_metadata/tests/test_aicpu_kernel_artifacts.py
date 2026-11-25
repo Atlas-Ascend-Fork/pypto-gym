@@ -29,12 +29,6 @@ import sys
 
 import pytest
 
-# 直跑自举: 借主算子 tests/_standalone_env.py 注入 vendor 环境(ASCEND_CUSTOM_OPP_PATH)
-_PEER_TESTS = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(
-    os.path.abspath(__file__)))), "mixed_quant_sparse_flash_mla", "tests")
-sys.path.insert(0, _PEER_TESTS)
-import _standalone_env  # noqa: E402,F401
-
 pytestmark = pytest.mark.soc("950")
 
 SO_REL = os.path.join("op_impl", "cpu", "aicpu_kernel", "impl", "libpypto_gym_aicpu_kernels.so")

@@ -54,11 +54,10 @@ import torch_npu  # noqa: F401
 
 _THIS_DIR = os.path.dirname(os.path.abspath(__file__))
 _OP_DIR = os.path.dirname(_THIS_DIR)
-for _path in (_THIS_DIR, os.path.join(_THIS_DIR, "assets"), os.path.join(_OP_DIR, "op_kernel")):
-    if _path not in sys.path:
-        sys.path.insert(0, _path)
-
-import _standalone_env  # noqa: E402,F401  直跑自举: 注入 tests/common、aclnn 桥与 vendor 环境
+for _path in (os.path.join(_OP_DIR, "op_kernel"), os.path.join(_THIS_DIR, "assets"), _THIS_DIR):
+    if _path in sys.path:
+        sys.path.remove(_path)
+    sys.path.insert(0, _path)
 
 import mixed_quant_sparse_flash_mla_golden_cpu as golden  # noqa: E402
 import mixed_quant_sparse_flash_mla_precision as verify  # noqa: E402
@@ -119,6 +118,27 @@ def _kv_to_device(tensor, device):
     return view
 
 
+def _host_tiling_device(inputs, dev, case, block_dim, device):
+    """Build the int32[16] tiling payload that the AICPU planner would emit."""
+    has_cmp = bool(case["has_cmp"])
+    td = torch.zeros(16, dtype=torch.int32, device=device)
+    td[0] = int(inputs["q"].shape[0])
+    td[1] = int(inputs["cu_seqlens_q"].numel())
+    td[2] = int(case["k_ori"])
+    td[3] = int(case["k_cmp"])
+    td[4] = int(inputs["ori_kv"].shape[1])
+    td[5] = int(inputs["cmp_kv"].shape[1]) if has_cmp else 0
+    td[6] = int(inputs["ori_block_table"].shape[1])
+    td[7] = int(inputs["cmp_block_table"].shape[1]) if has_cmp else 0
+    td[8] = int(inputs["ori_kv"].shape[0])
+    td[9] = int(inputs["cmp_kv"].shape[0]) if has_cmp else 0
+    td[10] = int(dev["ori_kv"].stride(0))
+    td[11] = int(dev["cmp_kv"].stride(0)) if has_cmp else 0
+    td[12] = int(block_dim)
+    td[13] = 1 if int(inputs["metadata"][900]) > 0 else 0
+    return td
+
+
 def _run_case(name, device):
     inputs, block_dim, case = golden.build_inputs(name, torch.device("cpu"))
     reference = golden.reference(name, inputs)
@@ -128,6 +148,7 @@ def _run_case(name, device):
     if case.get("kv_axis0_noncontiguous", False):
         for key in ("ori_kv", "cmp_kv"):
             assert not dev[key].is_contiguous(), f"{name}: {key} must stay page-padded on device"
+    tiling_device = _host_tiling_device(inputs, dev, case, block_dim, device)
     rows = int(inputs["q"].shape[0])
     out = torch.full(tuple(inputs["q"].shape), float("nan"), dtype=torch.bfloat16, device=device)
     lse = torch.full((1, rows, 64), float("nan"), dtype=torch.float32, device=device)
@@ -139,6 +160,7 @@ def _run_case(name, device):
         cu_seqlens_q=dev["cu_seqlens_q"],
         sinks=dev["sinks"],
         metadata=dev["metadata"],
+        tiling_device=tiling_device,
         quant_mode=1,
         softmax_scale=float(case["softmax_scale"]),
         cmp_kv=dev["cmp_kv"],

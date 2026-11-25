@@ -50,8 +50,6 @@ for _path in (_THIS_DIR, _MAIN_TESTS):
     if os.path.isdir(_path) and _path not in sys.path:
         sys.path.insert(0, _path)
 
-import _standalone_env  # noqa: E402,F401  直跑自举: 注入 tests/common、aclnn 桥与 vendor 环境
-
 try:
     from pypto_gym import mixed_quant_sparse_flash_mla_metadata as planner
 except Exception as error:  # 绑定源/vendor 缺失时整文件跳过
