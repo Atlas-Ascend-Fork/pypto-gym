@@ -1171,8 +1171,7 @@ def compressor(
         history = torch.empty((batches, cmp_ratio, 2 * dim), device=x.device, dtype=torch.float32)
     shape = _make_shape(inputs, batches, hidden, dim, out)
     tensors = _device_tensors(inputs, projected, history, out)
-    with pypto.options(pass_options={"enable_slice": False}):
-        counts = _launch_workers(routes, shape, int(props.cube_core_num), int(props.vector_core_num))
-        for route, workers in zip(routes, counts):
-            _launch_stage(route, workers, shape, tensors)
+    counts = _launch_workers(routes, shape, int(props.cube_core_num), int(props.vector_core_num))
+    for route, workers in zip(routes, counts):
+        _launch_stage(route, workers, shape, tensors)
     return out

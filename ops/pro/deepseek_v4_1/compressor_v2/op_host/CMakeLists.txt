@@ -18,17 +18,14 @@ if(DEFINED CMAKE_SCRIPT_MODE_FILE)
 import sysconfig
 sys.path.insert(0, sysconfig.get_path("purelib"))
 import functools
-import pypto
 from pypto_pro.runtime.opc.pypto_compile import pypto_compile_op as _compressor_compile
 
 @functools.wraps(_compressor_compile)
 def pypto_compile_op(*args, **kwargs):
-    with pypto.options(pass_options={"enable_slice": False}):
-        return _compressor_compile(*args, **kwargs)
+    return _compressor_compile(*args, **kwargs)
 
 def _compressor_load_module(spec, module):
-    with pypto.options(pass_options={"enable_slice": False}):
-        spec.loader.exec_module(module)
+    spec.loader.exec_module(module)
 
 ]=])
         string(FIND "${_wrapper}" "${_frontend}" _ready)
