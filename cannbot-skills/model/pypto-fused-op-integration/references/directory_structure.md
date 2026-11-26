@@ -44,7 +44,7 @@ pto_kernels/                        # 算子库顶层
 
 **算子 README 模板（`{op}/README.md`）：**
 
-```markdown
+````markdown
 # {算子} 算子集成 ({model_name})
 
 ## 概述
@@ -68,7 +68,7 @@ python3 test/test_{op}.py
 
 ## 状态
 ✅ 单算子精度 | ✅ 整网集成 | {ACLGraph 状态} | ⏳ 性能调优
-```
+````
 
 > 必填项：概述、测试命令、场景判断、状态。其余按实际内容裁剪。
 
@@ -145,7 +145,7 @@ modeling/transformers/{model_name}/
 
 README 中必须包含模型下载命令，方便其他用户从零重建：
 
-```markdown
+````markdown
 ## 下载模型
 
 ```bash
@@ -153,7 +153,7 @@ python3 ../download_hf_model.py \
     --model-id {repo_id} \
     --output-dir {model_weight_dir}
 ```
-```
+````
 
 > 使用 skill 内置脚本 `download_hf_model.py` 或直接引用 `snapshot_download` 调用。
 
@@ -161,13 +161,14 @@ python3 ../download_hf_model.py \
 
 README 中必须包含 PYPTO 入网适配命令，说明如何将 HF 原始模型替换为华为修改版：
 
-```markdown
+````markdown
 ## PYPTO入网适配
 
 ```bash
 bash ../scripts/restore_model_patch.sh \
     {model_weight_dir} {model_name}
 ```
+````
 
 脚本自动完成：备份 HF 原始代码 → 替换为华为修改版 → 写入 `pto_kernels/` → 确保 `auto_map` → 清除 HF 缓存。
 
