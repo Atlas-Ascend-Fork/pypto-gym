@@ -194,13 +194,14 @@ def candidate_scores(expected, allowed):
 # ===== 输入构造与参考输出 =====
 
 
-def make_inputs(case, device=None):
+def make_inputs(case, device=None, *, cmp_ratio=None):
     """Build one case's positional args, keyword attributes and CPU reference.
 
     Deterministic: every case draws from a fresh generator seeded with ``SEED``
     in a fixed order, so the tensors are reproducible run to run.
 
     Args:
+        cmp_ratio: optional compression ratio for causal boundary tests.
         case: spec dict; every key is optional (see ``_SPEC_DEFAULTS``).
         device: target device of the returned tensors (CPU when omitted).
 
@@ -210,7 +211,7 @@ def make_inputs(case, device=None):
         reference score row per query and one [Lk] bool visibility mask per
         query. ``refs``/``allowed`` always stay on CPU.
     """
-    args, kwargs, refs, allowed, _ = _build(_resolve(case), device)
+    args, kwargs, refs, allowed, _ = _build(_resolve(case), device, cmp_ratio=cmp_ratio)
     return args, kwargs, refs, allowed
 
 
@@ -224,7 +225,7 @@ def _resolve(case):
     return spec
 
 
-def _build(spec, device):
+def _build(spec, device, *, cmp_ratio=None):
     """Deterministic inputs, wrapper keywords and reference rows for one spec.
 
     Returns (args, kwargs, refs, allowed, logical): the five positional tensors,
@@ -235,6 +236,12 @@ def _build(spec, device):
     reference rows, which are also built pre-paging).
     """
     lengths, ratio, residual = _sequence(spec)
+    if cmp_ratio is not None:
+        if spec["mask"] != 3 or not 1 <= cmp_ratio <= 128:
+            raise ValueError("a compression ratio override requires causal masking and a ratio in [1,128]")
+        ratio = cmp_ratio
+        if ratio == 1:
+            residual = [0] * len(lengths.query)
     generator = torch.Generator().manual_seed(SEED)
     logical = _logical_tensors(spec, lengths, generator)
     q, weights, qs, logical_keys, logical_scales = logical
@@ -328,7 +335,7 @@ def _wrapper_kwargs(spec, lengths, ratio, device):
     )
     if spec["layout"] == "TND":
         kwargs["cu_seqlens_k"] = meta(_prefix(lengths.key))
-    if spec["mask"] == 3:
+    if spec["mask"] == 3 and ratio != 1:
         kwargs["cmp_residual_k"] = meta(_residual_of(spec, lengths))
     return kwargs
 

@@ -1,0 +1,10 @@
+require_pypto_pro(quant_lightning_indexer)
+add_op_to_compiled_list()
+target_sources(op_host_aclnn PRIVATE quant_lightning_indexer_def.cpp)
+add_modules_sources(OPTYPE gym_quant_lightning_indexer ACLNNTYPE aclnn)
+enable_pypto_kernel(quant_lightning_indexer)
+add_ops_compile_options(OP_NAME GymQuantLightningIndexer
+    OPTIONS -DENABLE_CV_COMM_VIA_SSBUF=true --cce-auto-sync=off -Wno-deprecated-declarations)
+if(NOT BUILD_OPS_RTY_KERNEL)
+    add_tiling_modules()
+endif()
