@@ -44,3 +44,15 @@ _log.propagate = False
 def emit(obj, indent=None):
     """Write one JSON document to the protocol channel."""
     _log.info(json.dumps(obj, ensure_ascii=False, indent=indent))
+
+
+def last_object(text):
+    """Read the last complete JSON object line from subprocess output."""
+    for line in reversed((text or "").strip().splitlines()):
+        line = line.strip()
+        if line.startswith("{"):
+            try:
+                return json.loads(line)
+            except ValueError:
+                continue
+    return None

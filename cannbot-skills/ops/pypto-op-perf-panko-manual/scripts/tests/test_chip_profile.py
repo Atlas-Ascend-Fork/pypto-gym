@@ -250,6 +250,12 @@ class InitResolutionTest(unittest.TestCase):
         self.assertTrue(st["chip_envelope"]["source"].endswith(f"{SOC_A}.ini"))
         self.assertEqual(st["chip_envelope"]["soc"], SOC_A)
 
+    def test_small_ub_sets_the_domain_and_action_occupancy(self):
+        self._check_search_capacity(SOC_A, 32, 0.5)
+
+    def test_large_ub_sets_the_domain_and_action_occupancy(self):
+        self._check_search_capacity(SOC_C, 64, 0.25)
+
     def test_an_explicit_envelope_is_recorded_as_explicit(self):
         """So a report cannot read as derived when the numbers were supplied."""
         res, rc = self._init(
@@ -262,6 +268,15 @@ class InitResolutionTest(unittest.TestCase):
         res, rc = self._init(extra=["--chip-envelope", '{"ub_kb": 192}'])
         self.assertEqual(rc, 3)
         self.assertIn("missing", res["reason"])
+
+    def _check_search_capacity(self, soc, kb, occupancy):
+        (self.op_dir / "demo_impl.py").write_text(KERNEL.replace("64, 128", "32, 128"))
+        result, rc = self._init({"ASCEND_TOOLKIT_HOME": str(self.root / "cann"), "PANKO_SOC_NAME": soc})
+        self.assertEqual(rc, 0, result)
+        state = read_state(self.op_dir)
+        self.assertEqual(state["domain_fingerprint"]["ub_bytes"], kb * KB)
+        self.assertEqual(state["predicates"]["ub_occupancy"], occupancy)
+        self.assertEqual("occupancy" in result["seeded_symptoms"], occupancy < 0.5)
 
     def _init(self, env=None, extra=()):
         # The real environment minus anything that would resolve a chip for us,

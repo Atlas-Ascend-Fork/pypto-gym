@@ -13,6 +13,7 @@ The ABBA pass, the front written out as source, and the human-readable
 summary. Opened by `stop`; nothing here decides what to search next.
 """
 
+from dataclasses import dataclass
 import datetime
 import hashlib
 import json
@@ -77,10 +78,8 @@ def _delivered_check(st, op_dir):
     So the last thing the harness says about a run includes the hash of what it
     actually left on disk, next to the hash it claims to have found.
 
-    `best_code_hash` is what SHOULD be on disk -- `delivery_point`, falling
-    back to `best_node`. `best_node_code_hash` is reported beside it whenever
-    the two differ, because that difference is the defect C1 exists for and it
-    should be visible in the run's own output rather than only in a hand diff.
+    `best_code_hash` is the eligible measurement chosen by `delivery_point`.
+    If the ratchet chose a different program, report its hash as `best_node_code_hash`.
     """
     want, detail = delivery_point(st, op_dir)
     node = ratchet_best_hash(st)
@@ -88,8 +87,8 @@ def _delivered_check(st, op_dir):
     on_disk = None
     if f and os.path.exists(f):
         on_disk = hashlib.sha256(_read_bytes(f)).hexdigest()
-    out_d = {"best_code_hash": want or node, "delivered_code_hash": on_disk,
-             "delivered_is_best": bool(want or node) and on_disk == (want or node),
+    out_d = {"best_code_hash": want, "delivered_code_hash": on_disk,
+             "delivered_is_best": bool(want) and on_disk == want,
              "delivery": detail}
     if want and node and want != node:
         out_d["best_node_code_hash"] = node
@@ -115,9 +114,8 @@ def _deliver_best(st, a):
             "delivered": best_hash, "best_node": node,
             "delivered_values": detail.get("values"),
             "at_eval": st["progress"]["evals_used"]}
-    best_hash = best_hash or node
     op_f = op_file_path(st, a.op_dir)
-    if restore(a.op_dir, op_f, best_hash) or file_hash(op_f) == best_hash:
+    if best_hash and (restore(a.op_dir, op_f, best_hash) or file_hash(op_f) == best_hash):
         # Frozen, because everything after the stop has to name THIS program:
         # the verification arm, the file put back between passes, the speedup
         # the pass is compared against. `ratchet_best_hash` is `best_node` and
@@ -128,8 +126,8 @@ def _deliver_best(st, a):
         return
     out({"stop": False, "refused": True, "error": "restore_failed",
          "best_code_hash": best_hash, "op_file": op_f,
-         "reason": ("the global best has no snapshot on disk"
-                    if best_hash else "no global best code_hash is recorded"),
+         "reason": ("the global best could not be restored"
+                    if best_hash else "no eligible measurement has a deliverable source"),
          "hint": "the run cannot be closed out on a file that is not the "
                  "winner. Restore optimization/nodes/<best_code_hash>.py "
                  "into the kernel, then call stop again."})
@@ -215,7 +213,7 @@ def cmd_report(a):
          "duplicate_rejected": pr.get("duplicate_rejected", 0)})
 
 
-def _delivered_hash(st):
+def delivered_hash(st):
     """The program this run ships, for every step that follows `stop`.
 
     `_deliver_best` freezes it in `progress.delivered_code_hash` as it puts it
@@ -227,7 +225,10 @@ def _delivered_hash(st):
     return st["progress"].get("delivered_code_hash") or ratchet_best_hash(st)
 
 
-def _delivered_speedup(st, code_hash):
+_delivered_hash = delivered_hash
+
+
+def delivered_speedup(st, code_hash):
     """The search's own claim ABOUT THE DELIVERED PROGRAM, on `J`'s instrument.
 
     `progress.best_speedup_vs_preopt` tracks `best_node` for the same reason,
@@ -244,9 +245,12 @@ def _delivered_speedup(st, code_hash):
     return pr.get("best_speedup_vs_preopt")
 
 
-def _open_verification(st):
-    """Create the verification record at the first real stop. Idempotent:
-    `stop` is sticky and may be called again."""
+_delivered_speedup = delivered_speedup
+
+
+def open_verification(st, *, policy=None):
+    """Create the verification record once, even when STOP is called again."""
+    policy = policy or _classic_verification_policy()
     if "verification" in st:
         return
     pre_hash = st["nodes"]["closed"][0]["code_hash"]
@@ -255,6 +259,10 @@ def _open_verification(st):
     if not cfg.get("end_verify", DEFAULT_CONFIG["end_verify"]):
         st["verification"] = {"status": "disabled"}
         return
+    queue = _front_to_verify(st, pre_hash, best_hash, policy=policy)
+    point = "delivered"
+    if best_hash == pre_hash and policy.strict_restore and queue:
+        best_hash = point = queue.pop(0)
     if best_hash == pre_hash:
         # Nothing was kept, so there is no claim to verify.
         st["verification"] = {"status": "no_change", "preopt": pre_hash,
@@ -264,26 +272,25 @@ def _open_verification(st):
     per_step = max(1, -(-runs // 2))          # each arm is measured twice
     st["verification"] = {
         "status": "pending",
-        "arms": {"preopt": {"code_hash": pre_hash, "samples": []},
-                 "delivered": {"code_hash": best_hash, "samples": []}},
+        "arms": {"preopt": _verification_arm(pre_hash, policy),
+                 "delivered": _verification_arm(best_hash, policy)},
         "schedule": list(VERIFY_ORDER), "step": 0,
-        "runs_per_step": per_step,
-        "protocol": f"warmup=1,runs={per_step},agg=median x{len(VERIFY_ORDER)} ABBA",
+        "warmup": policy.warmup, "runs_per_step": per_step,
+        "protocol": f"warmup={policy.warmup},runs={per_step},agg=median x{len(VERIFY_ORDER)} ABBA",
         "search_speedup": _delivered_speedup(st, best_hash),
-        "point": "delivered",
+        "point": point,
     }
-    st["verify_queue"] = _front_to_verify(st, pre_hash, best_hash)
+    st["verify_queue"] = queue
 
 
-def _front_to_verify(st, pre_hash, best_hash):
+_open_verification = open_verification
+
+
+def front_to_verify(st, pre_hash, best_hash, *, policy=None):
     """The front points that still need an ABBA pass, in front order.
 
-    The delivered point is the one already being verified, and the preopt is the
-    other arm of every pass, so neither is queued. A point whose source was not
-    retained cannot be verified -- `verify` stages the program from
-    `nodes/<hash>.py` -- but it is dropped when the queue is CONSUMED
-    (`_next_verification`), not here: a snapshot can arrive between the stop and
-    the pass, and a queue filtered at the stop would have already forgotten it.
+    The baseline serves as the reference arm. Queue the other points in archive
+    order; strict backends retain missing snapshots for a later retry.
     """
     if not st["config"].get("verify_front", DEFAULT_CONFIG["verify_front"]):
         return []
@@ -291,14 +298,18 @@ def _front_to_verify(st, pre_hash, best_hash):
             if e["code_hash"] not in (pre_hash, best_hash)]
 
 
-def _next_verification(st, op_dir):
+_front_to_verify = front_to_verify
+
+
+def next_verification(st, op_dir, *, policy=None):
     """Retire the finished pass and open the next front point's, if any.
 
     Returns the code hash now being verified, or None when the front is done.
     """
+    policy = policy or _classic_verification_policy()
     v = st.get("verification") or {}
     queue = [h for h in (st.get("verify_queue") or [])
-             if os.path.exists(npath(op_dir, h))]
+             if policy.strict_restore or os.path.exists(npath(op_dir, h))]
     st["verify_queue"] = queue[1:]
     if not queue:
         # The last pass stays in `verification`, where every summary reads it.
@@ -308,13 +319,13 @@ def _next_verification(st, op_dir):
     point = next((e for e in (st.get("archive") or []) if e["code_hash"] == nxt), {})
     st["verification"] = {
         "status": "pending",
-        "arms": {"preopt": {"code_hash": v["arms"]["preopt"]["code_hash"], "samples": []},
+        "arms": {"preopt": _verification_arm(v["arms"]["preopt"]["code_hash"], policy),
                  # Keyed `delivered` because that is what the ABBA schedule and
                  # `_finish_verification` name the second arm; `point` says which
                  # program it actually is.
-                 "delivered": {"code_hash": nxt, "samples": []}},
+                 "delivered": _verification_arm(nxt, policy)},
         "schedule": list(VERIFY_ORDER), "step": 0,
-        "runs_per_step": v["runs_per_step"], "protocol": v["protocol"],
+        "warmup": v.get("warmup", 1), "runs_per_step": v["runs_per_step"], "protocol": v["protocol"],
         "point": nxt,
         "objectives": point.get("values"),
         # The search's own claim about this point, on `J`'s instrument -- the
@@ -326,6 +337,9 @@ def _next_verification(st, op_dir):
                            else None),
     }
     return nxt
+
+
+_next_verification = next_verification
 
 
 def _verify_directive(st):
@@ -349,7 +363,7 @@ def _verification_summary(st):
     return {k: v[k] for k in keep if k in v}
 
 
-def _verification_line(st):
+def verification_line(st):
     v = st.get("verification") or {}
     status = v.get("status", "not_started")
     r = v.get("result")
@@ -365,27 +379,38 @@ def _verification_line(st):
     return status
 
 
-def _finish_verification(st, v):
-    pre = v["arms"]["preopt"]["samples"]
-    dele = v["arms"]["delivered"]["samples"]
-    ci = bootstrap_speedup(pre, dele)
+_verification_line = verification_line
+
+
+def _finish_verification(st, v, *, policy=None):
+    policy = policy or _classic_verification_policy()
+    pre = policy.readings(v["arms"]["preopt"])
+    dele = policy.readings(v["arms"]["delivered"])
+    ci = policy.interval(pre, dele)
     if ci is None:
         v["status"] = "insufficient"
         return
     ci.update(n_preopt=len(pre), n_delivered=len(dele),
               preopt_us=median_of(pre), delivered_us=median_of(dele))
+    if policy.acquisition_reads:
+        ci.update(n_launches_preopt=len(v["arms"]["preopt"].get("samples") or []),
+                  n_launches_delivered=len(v["arms"]["delivered"].get("samples") or []))
     v["result"] = ci
     v["status"] = ci_verdict(ci)
 
 
-def _verify_short_circuit(a, st, op_f):
+def verify_short_circuit(a, st, op_f, *, policy=None):
     """True when this `verify` call is answered without new readings."""
+    policy = policy or _classic_verification_policy()
     v = st["verification"]
+    if policy.strict_restore and (getattr(a, "skip", "") or v["status"] != "pending"):
+        restore_verification_program(a, op_f, "delivered", _delivered_hash(st), policy=policy)
     if getattr(a, "skip", ""):
         if v["status"] == "pending":
             v["status"] = "skipped"
             v["skip_reason"] = a.skip
-        restore(a.op_dir, op_f, _delivered_hash(st))
+        if not policy.strict_restore:
+            restore(a.op_dir, op_f, _delivered_hash(st))
         save(a.op_dir, st)
         out({"verified": False, **_verification_summary(st)})
         return True
@@ -396,24 +421,34 @@ def _verify_short_circuit(a, st, op_f):
     return False
 
 
-def _verify_stage_arm(a, v, op_f, arm, want):
+_verify_short_circuit = verify_short_circuit
+
+
+def _verify_stage_arm(a, v, op_f, arm, want, policy):
     """Put one arm's program in the working file and say how to measure it."""
+    warmup = v.get("warmup", 1)
+    if policy.strict_restore:
+        restore_verification_program(a, op_f, arm, want, policy=policy)
+        out({"stage": v["step"], "arm": arm, "code_hash": want, "op_file": op_f,
+             "warmup": warmup, "runs": v["runs_per_step"]})
+        return
     if not (restore(a.op_dir, op_f, want) or file_hash(op_f) == want):
         out({"verified": False, "error": "restore_failed", "arm": arm,
              "code_hash": want})
         raise Refusal(2)
     out({"stage": v["step"], "arm": arm, "code_hash": want, "op_file": op_f,
-         "runs": v["runs_per_step"],
-         "measure": f"measure_latency --op-file {op_f} --warmup 1 "
+         "warmup": warmup, "runs": v["runs_per_step"],
+         "measure": f"measure_latency --op-file {op_f} --warmup {warmup} "
          f"--runs {v['runs_per_step']} --agg median",
          "then": "HARNESS verify --op-dir <op_dir> --samples <samples>"})
 
 
-def _verify_readings(a, op_f, arm, want):
+def _verify_readings(a, op_f, arm, want, *, policy=None):
     """This step's readings, once they are known to be the staged program's."""
+    policy = policy or _classic_verification_policy()
     # The readings must belong to the program this step staged. Anything else
     # would silently verify a kernel nobody is shipping.
-    if file_hash(op_f) != want:
+    if not policy.matches(a.op_dir, op_f, want):
         out({"verified": False, "error": "wrong_program", "arm": arm,
              "expected": want, "on_disk": file_hash(op_f),
              "hint": "call `verify` without --samples first; it stages the arm"})
@@ -425,39 +460,45 @@ def _verify_readings(a, op_f, arm, want):
     return samples
 
 
-def cmd_verify(a):
-    """Re-measure the delivered kernel against the preopt, after `stop`.
-
-    Without --samples: stage the next arm into the working file and say which.
-    With --samples:    record that arm's readings, then put the delivered kernel
-                       back, so the deliverable is intact between calls.
-    """
+def cmd_verify(a, *, policy=None):
+    """Advance post-stop verification without changing the search budget."""
+    policy = policy or _classic_verification_policy()
     st = load(a.op_dir)
     v = st.get("verification")
     if not st["progress"].get("stop_reason") or not v:
         out({"verified": False, "error": "no_stop",
-             "note": "verification runs after `stop`, on the programs it hands over"})
+                     "note": "verification runs after `stop`, on the programs it hands over"})
         raise Refusal(2)
     op_f = op_file_path(st, a.op_dir)
-    if _verify_short_circuit(a, st, op_f):
+    if _verify_short_circuit(a, st, op_f, policy=policy):
         return
     arm = v["schedule"][v["step"]]
     want = v["arms"][arm]["code_hash"]
     if a.samples is None:
-        _verify_stage_arm(a, v, op_f, arm, want)
+        _verify_stage_arm(a, v, op_f, arm, want, policy)
         return
-    samples = _verify_readings(a, op_f, arm, want)
+    samples = _verify_readings(a, op_f, arm, want, policy=policy)
     v["arms"][arm]["samples"].extend(samples)
+    if policy.acquisition_reads:
+        v["arms"][arm].setdefault("reads", []).append(median_of(samples))
+        if getattr(a, "receipt", None):
+            v.setdefault("receipts", []).append(a.receipt)
     v["step"] += 1
+    if policy.strict_restore:
+        restore_verification_program(a, op_f, "delivered", _delivered_hash(st), policy=policy)
     nxt = None
     if v["step"] >= len(v["schedule"]):
-        _finish_verification(st, v)
+        _finish_verification(st, v, policy=policy)
         line = _verification_line(st)
-        append_log(a.op_dir, st["op"],
-                   f"- verification[{str(v.get('point'))[:8]}]: {line}")
+        label = str(v.get("point"))
+        if policy.acquisition_reads:
+            label = ((v.get("arms") or {}).get("delivered", {}).get("code_hash")
+                     or str(v.get("point") or "?"))
+        append_log(a.op_dir, st["op"], f"- verification[{label[:8]}]: {line}")
         # The front is the deliverable, so every point on it gets its own pass.
-        nxt = _next_verification(st, a.op_dir)
-    restore(a.op_dir, op_f, _delivered_hash(st))
+        nxt = _next_verification(st, a.op_dir, policy=policy)
+    if not policy.strict_restore:
+        restore(a.op_dir, op_f, _delivered_hash(st))
     save(a.op_dir, st)
     summary = _verification_summary(st)
     if nxt:
@@ -487,7 +528,7 @@ def _frontier_dir(op_dir):
     return os.path.join(sdir(op_dir), "frontier")
 
 
-def _verdicts_by_point(st):
+def verdicts_by_point(st):
     """code_hash -> what its ABBA pass concluded, for every pass this run ran."""
     out_v = {}
     for v in list(st.get("verifications") or []) + [st.get("verification") or {}]:
@@ -499,6 +540,24 @@ def _verdicts_by_point(st):
                     "speedup": r.get("speedup"), "ci_low": r.get("ci_low"),
                     "ci_high": r.get("ci_high")}
     return out_v
+
+
+_verdicts_by_point = verdicts_by_point
+
+
+def _export_source(src, dst):
+    from .backend import current
+    if not os.path.exists(src):
+        return False
+    try:
+        backend = current()
+        if backend is None:
+            shutil.copyfile(src, dst)
+        else:
+            backend.export_source(src, dst)
+    except OSError:
+        return False
+    return True
 
 
 def export_frontier(st, op_dir):
@@ -516,7 +575,7 @@ def export_frontier(st, op_dir):
     os.makedirs(_frontier_dir(op_dir), exist_ok=True)
     # What `impl.py` holds, which is `delivery_point` -- `is_impl` has to mark
     # the row the file actually carries, not the row `best_node` names.
-    best = delivery_point(st, op_dir)[0] or ratchet_best_hash(st)
+    best = delivery_point(st, op_dir)[0]
     objs = objectives_of(st)
     verdicts = _verdicts_by_point(st)
     for i, e in enumerate(points):
@@ -527,12 +586,7 @@ def export_frontier(st, op_dir):
                   if e.get("workspace_b") is not None else "")
         name = f"{i:02d}{ws_tag}_{e['code_hash'][:8]}.py"
         dst = os.path.join(_frontier_dir(op_dir), name)
-        have = os.path.exists(src)
-        if have:
-            try:
-                shutil.copyfile(src, dst)
-            except OSError:
-                have = False
+        have = _export_source(src, dst)
         if not have:
             missing += 1
         rows.append({"rank": i, "code_hash": e["code_hash"],
@@ -813,3 +867,44 @@ def cmd_pareto(a):
     except OSError:
         out_obj["written"] = None
     out(out_obj)
+
+
+def restore_verification_program(a, op_f, arm, want, *, policy):
+    """Restore a delivery artifact; strict backends verify the complete bundle."""
+    if not policy.strict_restore:
+        restore(a.op_dir, op_f, want)
+        return
+    if not policy.matches(a.op_dir, op_f, want):
+        restore(a.op_dir, op_f, want)
+    if not policy.matches(a.op_dir, op_f, want):
+        out({"verified": False, "error": "restore_failed", "arm": arm,
+                     "code_hash": want})
+        raise Refusal(2)
+
+
+@dataclass(frozen=True)
+class VerificationPolicy:
+    """Keep each frontend's acquisition, artifact and persistence contracts."""
+    warmup: int
+    readings: object
+    interval: object
+    matches: object
+    strict_restore: bool = False
+    acquisition_reads: bool = False
+
+
+def _classic_verification_policy():
+    from .backend import current
+    if current() is not None:
+        return current().verification_policy()
+    return VerificationPolicy(
+        warmup=1, readings=lambda arm: arm["samples"], interval=bootstrap_speedup,
+        matches=lambda op_dir, op_f, want: file_hash(op_f) == want,
+    )
+
+
+def _verification_arm(code_hash, policy):
+    arm = {"code_hash": code_hash, "samples": []}
+    if policy.acquisition_reads:
+        arm["reads"] = []
+    return arm

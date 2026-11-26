@@ -53,14 +53,16 @@ import time
 import types
 from typing import Any, NamedTuple
 
-sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-import jsonio  # noqa: E402
-import workspace_probe  # noqa: E402
-
-# One home for the two runtime questions, rather than a copy here: ask for an
-# optional module, and treat a driver's refusal as the answer. `chip_profile`
-# owns them because it is where the refusals are load-bearing.
-from chip_profile import optional as _optional, quietly as _quietly  # noqa: E402
+if __package__:
+    jsonio = importlib.import_module(f"{__package__}.jsonio")
+    workspace_probe = importlib.import_module(f"{__package__}.workspace_probe")
+    chip_profile = importlib.import_module(f"{__package__}.chip_profile")
+    _optional, _quietly = chip_profile.optional, chip_profile.quietly
+else:
+    sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+    import jsonio
+    import workspace_probe
+    from chip_profile import optional as _optional, quietly as _quietly
 
 leaked_capture = []  # capture files a cleanup could not remove
 
@@ -272,10 +274,13 @@ def _sigma_log(vals):
     return round(math.sqrt(var), 6)
 
 
-def _agg(vals, how):
+def aggregate(vals, how="median"):
     if not vals:
         return None
     return round(min(vals) if how == "min" else statistics.median(vals), 4)
+
+
+_agg = aggregate
 
 
 FIRST_CALL_MARKER = "[panko-progress] first_call_done"
@@ -503,7 +508,7 @@ MSPROF_RATIO_RANGES = {
 }
 
 
-def _cell(row, column):
+def profile_cell(row, column):
     """`row[column]` as a float, tolerating the header's unit suffix and tabs."""
     want = column.split("(")[0].strip().lower()
     for k, v in row.items():
@@ -514,6 +519,9 @@ def _cell(row, column):
         except (TypeError, ValueError):
             return None
     return None
+
+
+_cell = profile_cell
 
 
 def msprof_metrics(rows, total, warmup):
@@ -575,6 +583,11 @@ def _row_start(row):
     return None
 
 
+def read_profile_rows(csv_path):
+    with open(csv_path, encoding="utf-8", errors="replace", newline="") as handle:
+        return list(csv.DictReader(handle))
+
+
 def mix_aic_rows(csv_path):
     """One op_summary's MIX_AIC rows in launch order.
 
@@ -582,8 +595,7 @@ def mix_aic_rows(csv_path):
     raw rows so the diagnostic columns are read from the same rows as `p`,
     never from a second, differently filtered pass.
     """
-    with open(csv_path, encoding="utf-8", errors="replace", newline="") as f:
-        allrows = list(csv.DictReader(f))
+    allrows = read_profile_rows(csv_path)
     task_types = sorted({str(r.get("Task Type", "")).strip() for r in allrows})
     rows = [
         r for r in allrows if str(r.get("Task Type", "")).strip() == MIX_AIC_TASK_TYPE
@@ -642,15 +654,7 @@ def mix_aic_reading(rows, total, warmup, agg="median", task_types=None):
     }
 
 
-def _last_json(text):
-    for line in reversed((text or "").strip().splitlines()):
-        line = line.strip()
-        if line.startswith("{"):
-            try:
-                return json.loads(line)
-            except ValueError:
-                continue
-    return None
+_last_json = jsonio.last_object
 
 
 class ProfOptions(NamedTuple):
@@ -659,6 +663,13 @@ class ProfOptions(NamedTuple):
     keep_prof: bool = False
     prof_root: Any = None
     msprof: str = "msprof"
+
+
+def msprof_command(executable, out_dir, argv, *, aic_metrics=None):
+    command = [executable, f"--output={out_dir}", "--ai-core=on", "--task-time=on", "--ascendcl=on"]
+    if aic_metrics:
+        command.append(f"--aic-metrics={aic_metrics}")
+    return [*command, *argv]
 
 
 def measure_under_msprof(argv, warmup, runs, agg, prof_opts=ProfOptions()):
@@ -676,8 +687,7 @@ def measure_under_msprof(argv, warmup, runs, agg, prof_opts=ProfOptions()):
     out_dir = tempfile.mkdtemp(prefix="panko_msprof_", dir=prof_opts.prof_root)
     env = dict(os.environ)
     env[MSPROF_CHILD_ENV] = "1"
-    cmd = [prof_opts.msprof, f"--output={out_dir}", "--ai-core=on", "--task-time=on",
-           "--ascendcl=on", sys.executable, os.path.abspath(__file__), *argv]
+    cmd = msprof_command(prof_opts.msprof, out_dir, [sys.executable, os.path.abspath(__file__), *argv])
     r = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=None, text=True, env=env,
                        check=False)
     if r.stdout:

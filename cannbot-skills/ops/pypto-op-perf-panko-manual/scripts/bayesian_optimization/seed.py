@@ -86,39 +86,28 @@ def _cube_features(c, hw):
 
 
 def _vec_features(v, hw, domain, site_id):
-    """UB occupancy of one vector tile, and the trip count it implies."""
-    dims = [v[f] for f in space.vec_fields(v)]
-    n = 1
-    for d in dims:
-        n *= max(1, d)
-    res = ((domain or {}).get("vec_residency") or {}).get(site_id) or 1
-    ub = (domain or {}).get("ub_bytes") or (192 * 1024)
-    cap = (domain or {}).get("capacity_elems")
-    f = {"ub": min(1.0, n * hw.dtype_bytes * res / ub)}
-    if cap:
-        trips = cap / max(1, n)
-        f["trips"] = trips
-        # Below one trip per core, some cores are handed nothing. Division, not
-        # a model: it is true whatever the kernel does with the work it gets.
-        f["waves"] = trips / getattr(hw, "vector_cores", VECTOR_CORES)
-    return f
+    return vector_features(v, hw, domain, site_id, fields=space.vec_fields(v),
+                           cores=getattr(hw, "vector_cores", VECTOR_CORES))
 
 
 def features(cfg, hw, domain=None):
     """Flat feature vector for a per-site config. Keys are stable, values finite."""
+    return site_features(cfg, hw, domain, space.vec_fields, _vec_features, _cube_features)
+
+
+def site_features(cfg, hw, domain, fields, vector, cube=None):
+    """Describe tile sites only; scalar launch and scheduling knobs have no occupancy."""
     out = {}
-    for sid, v in sorted(cfg.items()):
-        if not isinstance(v, dict) or "value" in v:
-            # A global / unroll / pass site holds a scalar under "value", not a
-            # tile. `vec_fields` will happily invent dimension names for it, and
-            # reading them raises. There is no buffer occupancy to compute for a
-            # scheduling mode or a merge granularity.
+    for sid, config in sorted(cfg.items()):
+        if not isinstance(config, dict) or "value" in config:
             continue
-        if "mL0" in v:
-            out.update({f"{sid}.{k}": x for k, x in _cube_features(v, hw).items()})
-        elif space.vec_fields(v):
-            vec = _vec_features(v, hw, domain, sid)
-            out.update({f"{sid}.{k}": x for k, x in vec.items()})
+        if cube is not None and "mL0" in config:
+            values = cube(config, hw)
+        elif fields(config):
+            values = vector(config, hw, domain, sid)
+        else:
+            continue
+        out.update({f"{sid}.{key}": value for key, value in values.items()})
     return out
 
 
@@ -238,12 +227,13 @@ def _rand_cube(a, rng):
 
 def _rand_vec(site_id, a, domain, rng):
     """A vec draw, or {} when the incumbent names no fields to draw."""
-    fields = space.vec_fields(a)
-    if not fields:
-        return {}
-    return {
-        f: rng.choice(space.vec_domain(site_id, f, fields, a, domain)) for f in fields
-    }
+    return draw_vector(site_id, a, domain, rng, space)
+
+
+def draw_vector(site_id, anchor, domain, rng, tile_space):
+    fields = tile_space.vec_fields(anchor)
+    return {f: rng.choice(tile_space.vec_domain(site_id, f, fields, anchor, domain))
+            for f in fields}
 
 
 def _sample_space(sites, anchor, domain, n, rng):
@@ -252,16 +242,20 @@ def _sample_space(sites, anchor, domain, n, rng):
     Sampling then filtering is deliberate: the domains are what the sampler will
     actually see, so a point selected here is one TPE could also have proposed.
     """
+    def draw(site, a):
+        if site.kind == "cube":
+            return _rand_cube(a, rng)
+        return _rand_vec(site.id, a, domain, rng)
+
+    return draw_pool(sites, anchor, n, draw)
+
+
+def draw_pool(sites, anchor, n, draw):
     out = []
     for _ in range(n):
         cfg = {}
         for s in sites:
-            a = (anchor or {}).get(s.id, {})
-            drawn = (
-                _rand_cube(a, rng)
-                if s.kind == "cube"
-                else _rand_vec(s.id, a, domain, rng)
-            )
+            drawn = draw(s, (anchor or {}).get(s.id, {}))
             if drawn:
                 cfg[s.id] = drawn
         if cfg:
@@ -295,26 +289,38 @@ def n_dims(sites, anchor=None):
     The arity comes from `anchor`, which is the configuration currently in the
     file. Without it, fall back to two.
     """
-    n = 0
-    for s in sites:
-        if s.kind == "cube":
-            n += 6
-        elif s.kind in ("global", "unroll"):
-            n += 1
-        else:
-            fields = space.vec_fields((anchor or {}).get(s.id, {}))
-            n += len(fields) or 2
-    return n
+    return count_dimensions(sites, anchor, {"cube": 6, "global": 1, "unroll": 1}, space.vec_fields)
+
+
+def count_dimensions(sites, anchor, scalar_widths, vector_fields):
+    total = 0
+    for site in sites:
+        width = scalar_widths.get(site.kind)
+        if width is None:
+            width = len(vector_fields((anchor or {}).get(site.id, {}))) or 2
+        total += width
+    return total
+
 
 
 @dataclass
-class CoverOptions:
-    """How `cover` draws its candidates: where from, and what to leave out."""
+class CoverSampling:
+    """Sampling controls shared by both domain frontends."""
 
-    domain: Any = None
     seed: int = 0
-    pool: int = 400  # candidates sampled before the k are picked
-    exclude: Any = ()  # configs already queued, not to repeat
+    pool: int = 400
+    exclude: Any = ()
+
+
+def feasible_rows(rows, seen, admitted):
+    kept = []
+    for cfg in rows:
+        identity = _key(cfg)
+        if identity in seen or not admitted(cfg):
+            continue
+        seen.add(identity)
+        kept.append(cfg)
+    return kept
 
 
 def cover(sites, hw, anchor, k, opts=None):
@@ -340,34 +346,16 @@ def cover(sites, hw, anchor, k, opts=None):
     costs one device trial per block.
     """
     opts = opts or CoverOptions()
-    if k <= 0 or not sites or n_dims(sites, anchor) < MIN_DIMS:
+    setup = cover_setup(sites, anchor, k, opts, n_dims, MIN_DIMS)
+    if setup is None:
         return []
-    rng = random.Random(opts.seed)
-    seen = {_key(c) for c in opts.exclude}
-    if anchor:
-        seen.add(_key(anchor))
+    rng, seen = setup
 
     def _keep(rows):
-        out = []
-        for cfg in rows:
-            key = _key(cfg)
-            if key in seen or not space.static_feasible(cfg, hw)[0]:
-                continue
-            # The derived domain too, not alignment alone. `block.run` filters
-            # the merged warm list through `domain.verify` before handing it to
-            # the driver, so a covering point that fails it is simply deleted --
-            # and farthest-point selection walks to the EXTREMES of the pool,
-            # which is exactly where verify rejects. Only a fraction of a pool
-            # that clears alignment also clears verify, and the extreme points
-            # `cover` prefers are the likeliest to fail it -- so the set that
-            # survives is the small-tile end, losing the high-occupancy corner
-            # this function exists to keep. Gating here means the k picked are
-            # k kept.
-            if opts.domain and not verify_domain(opts.domain, cfg)[0]:
-                continue
-            seen.add(key)
-            out.append(cfg)
-        return out
+        def admitted(cfg):
+            return (space.static_feasible(cfg, hw)[0]
+                    and (not opts.domain or verify_domain(opts.domain, cfg)[0]))
+        return feasible_rows(rows, seen, admitted)
 
     # ONE slot reserved for the L1-only family, because farthest-point cannot
     # reach it: those points hold the incumbent's L0, so their L0A / L0B / L0C
@@ -399,12 +387,32 @@ def cover(sites, hw, anchor, k, opts=None):
     # fires six to nine blocks.
     reserved = [random.Random(opts.seed ^ 0x5EED).choice(l1_cands)] if l1_cands else []
 
-    cands = _keep(_sample_space(sites, anchor, opts.domain, opts.pool, rng))
-    if not cands:
-        return reserved
+    candidates = _keep(_sample_space(sites, anchor, opts.domain, opts.pool, rng))
+    return reserved + select_cover(candidates, anchor, k, hw, opts.domain, features)
 
-    base = [features(anchor, hw, opts.domain)] if anchor else []
-    vecs = _normalise(base + [features(c, hw, opts.domain) for c in cands])
+
+def select_cover(candidates, anchor, k, hw, domain, describe):
+    """Choose diverse feasible candidates, measuring distance from the incumbent first."""
+    if not candidates:
+        return []
+    base = [describe(anchor, hw, domain)] if anchor else []
+    vectors = [describe(cfg, hw, domain) for cfg in candidates]
+    return farthest_points(candidates, base, vectors, k)
+
+
+def _key(cfg):
+    return tuple(
+        sorted(
+            (sid, tuple(sorted(v.items())))
+            for sid, v in cfg.items()
+            if isinstance(v, dict)
+        )
+    )
+
+
+def farthest_points(cands, base, vectors, k):
+    """Cover normalized feature space while excluding already represented regimes."""
+    vecs = _normalise(base + vectors)
     chosen_vecs = vecs[: len(base)]
     pool_vecs = vecs[slice(len(base), None)]
 
@@ -429,16 +437,51 @@ def cover(sites, hw, anchor, k, opts=None):
             for j in avail
             if min(_dist2(pool_vecs[j], c) for c in chosen_vecs) > _MIN_SEP2
         ]
-    # Reserved point first: if the block's budget is cut short, the one that no
-    # other mechanism can produce should not be the one dropped.
-    return reserved + picked
+    return picked
 
 
-def _key(cfg):
-    return tuple(
-        sorted(
-            (sid, tuple(sorted(v.items())))
-            for sid, v in cfg.items()
-            if isinstance(v, dict)
-        )
-    )
+@dataclass
+class CoverDomain:
+    domain: Any = None
+
+
+@dataclass
+class CoverOptions(CoverSampling, CoverDomain):
+    """Classic cover options, retaining their positional order."""
+
+
+def vector_features(v, hw, domain, site_id, *, fields, cores):
+    """Return tile coverage features, omitting UB occupancy if capacity is unknown."""
+    dims = [v[f] for f in fields]
+    n = 1
+    for d in dims:
+        n *= max(1, d)
+    res = ((domain or {}).get("vec_residency") or {}).get(site_id) or 1
+    ub = (domain or {}).get("ub_bytes") or 0
+    if ub <= 0:
+        ub = (getattr(hw, "ub_budget_kb", 0) or 0) * 1024
+    cap = (domain or {}).get("capacity_elems")
+    f = {"ub": min(1.0, n * hw.dtype_bytes * res / ub)} if ub > 0 else {}
+    if cap:
+        trips = cap / max(1, n)
+        f["trips"] = trips
+        # Below one trip per core, some cores are handed nothing. Division, not
+        # a model: it is true whatever the kernel does with the work it gets.
+        f["waves"] = trips / cores
+    return f
+
+
+def cover_setup(sites, anchor, k, opts, dimensions, min_dims):
+    """Initialize the seeded coverage pool without consuming random draws."""
+    if k <= 0 or not sites or dimensions(sites, anchor) < min_dims:
+        return None
+    seen = {_key(c) for c in opts.exclude}
+    if anchor:
+        seen.add(_key(anchor))
+    return random.Random(opts.seed), seen
+
+
+# Public service API used by the shared core and DSL adapters.
+dist2 = _dist2
+key = _key
+normalise = _normalise

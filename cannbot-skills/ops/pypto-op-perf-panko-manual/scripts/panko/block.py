@@ -17,10 +17,12 @@ measurement of the program it proposed.
 import datetime
 import hashlib
 import os
+from pathlib import Path
 
+from .backend import current
 from .config import FREE, REFUSAL_GLOBAL_AFTER, Refusal, SEARCH_PROTOCOL, bayesian, out
-from .state import (_structure, chip_envelope, confirm_chip, load, merge_refusals, op_file_path,
-                    refusals_for_structure, save, stored_refusals)
+from .state import (_source_wrapper_drift, _structure, chip_envelope, confirm_chip, file_hash, load, merge_refusals,
+                    op_file_path, refusals_for_structure, save, snapshot_source, stored_refusals)
 from .measurement import incumbent_latency, observe_noise
 from .front import archive_record
 from .stopping import _free_rejects, block_budget, budget_reason, fault_markers
@@ -45,7 +47,7 @@ def _block_context(a, st, cfg):
     is the evidence, so a run now pays twice and saves the remainder.
     """
     op_file = op_file_path(st, a.op_dir)
-    with open(op_file, encoding="utf-8", errors="replace") as f:
+    with open(op_file, encoding="utf-8", errors="replace", newline="" if current() else None) as f:
         base_src = f.read()
     hw, domain = bayesian.block.hw_for(op_file, a.live_tiles, chip_envelope(st))
     structure = _structure(st, a.op_dir)
@@ -100,9 +102,11 @@ def _block_search(a, st, ctx, cfg):
     asks whether `best_aicore_e2e_us` may be quoted as THIS program's incumbent, and
     that is only true of the exact bytes.
     """
+    frontend = current()
     ev = bayesian.evaluator.RealEvaluator(
         op=st["op"], op_dir=a.op_dir, op_file=ctx["op_file"], device=st.get("device_id", ""),
         test_command=a.test_command, lint_root=(a.lint_root or None),
+        write_source=frontend.write_source if frontend is not None else None,
         eval_timeout_s=cfg.get("eval_timeout_s", 300),
         evaluation_mode=getattr(a, "evaluation_mode", "subprocess"),
         # Overridable so tests can assert the schedule without waiting it out.
@@ -119,7 +123,7 @@ def _block_search(a, st, ctx, cfg):
         # by a comparison against `ratchet_best_hash` -- which gave up the
         # incumbent entirely whenever the front base was not `best_node`.
         current_latency=incumbent_latency(st, ctx["base_src"]),
-        on_trial=block_recorder(a, st, ctx), domain=ctx["domain"],
+        on_trial=block_recorder(a, st, ctx, ev if frontend is not None else None), domain=ctx["domain"],
         # `bayesian.block.run` defaults this to 4, while `hw_for` derives the real
         # element width from the kernel and defaults it to 2. Leaving it
         # unthreaded meant every block on a bf16/fp16 kernel computed its 16 KB
@@ -281,7 +285,7 @@ def _fault_record(st, a, rec):
             "detail": (rec.get("detail") or "")[:2000]}
 
 
-def block_recorder(a, st, ctx):
+def block_recorder(a, st, ctx, evaluator=None):
     """Build the per-trial callback: count what touched the device, and cache the
     bytes it measured.
 
@@ -339,10 +343,17 @@ def block_recorder(a, st, ctx):
         if rec.get("metrics"):
             t["metrics"] = rec["metrics"]
         ctx["trials"].append(t)
-        new_src, n = bayesian.block.apply_best(ctx["base_src"], rec.get("config"))
-        if not n:
-            return
-        h = hashlib.sha256(new_src.encode("utf-8")).hexdigest()
+        if evaluator is None:
+            new_src, n = bayesian.block.apply_best(ctx["base_src"], rec.get("config"), **ctx.get("apply_options", {}))
+            if not n:
+                return
+            data = new_src.encode("utf-8")
+        else:
+            data = evaluator.last_trial_bytes
+            if data is None:
+                return
+        h = hashlib.sha256(data).hexdigest()
+        t["code_hash"] = h
         ctx["winners"].setdefault(h, 0)
         ctx["winners"][h] += 1
         # `p` is what the trial was ranked on, which is `J_OBJECTIVE`'s
@@ -359,22 +370,45 @@ def block_recorder(a, st, ctx):
             entry["samples"] = list(rec["samples"])
         cache.setdefault(h, entry)
         if rec.get("objective_us"):
-            archive_record(st, h, rec["objective_us"],
-                           rec.get("metrics") or {}, a.parent)
+            if not _source_wrapper_drift(st, data.decode("utf-8", errors="replace")):
+                archive_record(st, h, rec["objective_us"], rec.get("metrics") or {}, a.parent)
+            if st["config"].get("snapshot_all_candidates", True):
+                # The working file may already be restored to the block's base.
+                try:
+                    snapshot_source(a.op_dir, h, data)
+                except OSError:
+                    progress = st["progress"]
+                    progress["snapshot_misses"] = progress.get("snapshot_misses", 0) + 1
 
     return on_trial
+
+
+def _write_text(path, src):
+    Path(path).write_text(src, encoding="utf-8")
 
 
 def block_apply_winner(st, ctx, result):
     """Write the winning tile config into the op_file, if the block found one."""
     if not result.get("best_config") or result.get("best_was_incumbent"):
         return
-    new_src, n = bayesian.block.apply_best(ctx["base_src"], result["best_config"])
+    new_src, n = bayesian.block.apply_best(ctx["base_src"], result["best_config"], **ctx.get("apply_options", {}))
     if not n:
         return
-    winner_hash = hashlib.sha256(new_src.encode("utf-8")).hexdigest()
-    with open(ctx["op_file"], "w", encoding="utf-8") as f:
-        f.write(new_src)
+    frontend = current()
+    path = ctx["op_file"]
+    write = frontend.write_source if frontend is not None else _write_text
+    write(path, new_src)
+    winner_hash = file_hash(path)
+    expected = None
+    for trial in reversed(ctx.get("trials", [])):
+        if trial.get("objective_us") and trial.get("config") == result["best_config"] and "code_hash" in trial:
+            expected = trial.get("code_hash")
+            break
+    if expected is not None and expected != winner_hash:
+        write(path, ctx["base_src"])
+        result.update(aborted="winner bytes differ from the measured trial", best_config=None,
+                      best_objective_us=None)
+        return
     # Left OUT of the cache on purpose: `record` must see it as new, so it charges
     # the one remaining evaluation and runs the ratchet.
     entry = st.setdefault("eval_cache", {}).pop(winner_hash, None)

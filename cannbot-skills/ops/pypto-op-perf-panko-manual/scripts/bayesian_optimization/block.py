@@ -69,7 +69,7 @@ from . import apply, driver, lever, space
 from . import domain as domain_mod, seed as seed_mod
 
 
-def _read_text(path, errors="replace"):
+def read_text(path, errors="replace"):
     """The file's text, with the handle closed before the caller sees it."""
     with open(path, encoding="utf-8", errors=errors) as f:
         return f.read()
@@ -104,32 +104,14 @@ def seeds_for(src, hw, ctx=SeedContext()):
             dom=ctx.dom,
         ),
     )
-    warm = [cfg for cfg, val, _ in pts if val is None]
-    measured = [(cfg, val) for cfg, val, _ in pts if val is not None]
-    # The incumbent is returned SEPARATELY, and this is not tidying.
-    #
-    # `run_bo` takes its anchor from `warm_start[0]`, and the anchor is what the
-    # categorical domains are built around and what the capacity `floor` guard
-    # measures. The incumbent is the only seed that carries a latency -- it is
-    # already running -- so in production it lands in `measured` and never in
-    # `warm`, and the anchor silently became the FLOOR seed: the smallest scaling
-    # of the current shape that clears 16 KB.
-    #
-    # Three mechanisms then guard the wrong program. `floor` is ~16 KB instead of
-    # the incumbent's footprint, so a capacity refusal at 24 KB is accepted as a
-    # ceiling and everything above it is rejected for free -- including the tile
-    # the kernel is running. `space.suggest` anchors the ladders on the floor
-    # seed, so the incumbent's own values need not even be in the domain. And the
-    # learned L1 relation is checked against the floor seed too.
-    #
-    # A recorded block shows the shape of it exactly: 42 trials, 35 rejected for
-    # free, 7 reaching the device, ONE measurement, best unchanged at the preopt
-    # -- and `ceiling=24576`, well under a [128,128] fp32 cube tile. The block was
-    # searching a corner the incumbent is not in and could not have won from
-    # there. `best_was_incumbent=true, winner_hash=null` in the earlier runs is
-    # the same failure reported as a result.
-    cur = next((cfg for cfg, _, lbl in pts if lbl == "current"), None)
-    return warm, measured, cur
+    return split_seed_points(pts)
+
+
+def split_seed_points(points):
+    warm = [cfg for cfg, value, _ in points if value is None]
+    measured = [(cfg, value) for cfg, value, _ in points if value is not None]
+    incumbent = next((cfg for cfg, _, label in points if label == "current"), None)
+    return warm, measured, incumbent
 
 
 def memory_key(action_id, domain):
@@ -206,14 +188,13 @@ def ceiling_key(domain):
 
 
 @dataclass
-class BlockOptions:
-    """How one block runs, as one value. See driver.SearchOptions -- same
-    reason, one level up: `run` takes the program, the objective and the
-    envelope, and this.
-    """
-
+class BlockBudget:
     stagnation_k: int = 7  # non-improving trials that close the block
     max_trials: Any = None  # the remaining evaluation budget
+
+
+@dataclass
+class BlockSearchOptions:
     current_latency: Any = None  # what the incumbent measured, if known
     dtype_bytes: int = 4
     on_trial: Any = None
@@ -227,31 +208,19 @@ class BlockOptions:
     repair: bool = True  # see space.repair
 
 
-def _search_options(opts, warm, incumbent, sites):
-    """The driver's options for one block, translated from BlockOptions."""
-    return driver.SearchOptions(
-        warm_start=warm,
-        anchor=incumbent,
+@dataclass
+class BlockOptions(BlockSearchOptions, BlockBudget):
+    """Budget and search settings for a PyPTO tile block."""
+
+
+def search_options(options_type, opts, warm, incumbent, ties, **extra):
+    """Pass the block budget, learned limits and warm observations to the sampler."""
+    return options_type(
+        warm_start=warm, anchor=incumbent, tie=ties, seed=opts.seed,
         n_trials=opts.max_trials if opts.max_trials is not None else 10**6,
-        seed=opts.seed,
-        on_trial=opts.on_trial,
-        stagnation_limit=opts.stagnation_k,
-        domain=opts.domain,
-        dtype_bytes=opts.dtype_bytes,
-        memory=opts.memory,
-        startup_min_feasible=opts.startup_min_feasible,
-        repair=opts.repair,
-        # Run level, not structure level: what the compiler will not accept about
-        # a tile call outlives the program shape that first asked it.
-        refusals=opts.refusals,
-        # Domain level, not structure level: which tiles the compiler accepts is
-        # a property of the derived domain. See `ceiling_key`.
-        ceiling=opts.ceiling,
-        # The row extent of vec scopes inside one loop body is a hand-off, not a
-        # per-site choice. Left untied, the sampler draws mismatched extents,
-        # and those are reliably among the worst configurations of a run,
-        # against an otherwise identical coherent baseline.
-        tie=apply.tie_groups(sites, incumbent),
+        on_trial=opts.on_trial, stagnation_limit=opts.stagnation_k, domain=opts.domain,
+        dtype_bytes=opts.dtype_bytes, memory=opts.memory, startup_min_feasible=opts.startup_min_feasible,
+        repair=opts.repair, refusals=opts.refusals, ceiling=opts.ceiling, **extra,
     )
 
 
@@ -283,16 +252,22 @@ def _seeded_warm_starts(src, hw, opts, sites):
             opts.domain,
         ),
     )
+    return complete_warm_starts(warm, measured, incumbent, sites, hw, opts, seed_mod, domain_mod)
+
+
+def complete_warm_starts(warm, measured, incumbent, sites, hw, opts, sampler, domain, **cover_args):
+    """Extend startup coverage while keeping the measured incumbent."""
     if opts.startup_cover:
-        warm = warm + seed_mod.cover(
+        warm = warm + sampler.cover(
             sites,
             hw,
             incumbent,
             opts.startup_cover,
-            seed_mod.CoverOptions(
+            sampler.CoverOptions(
                 domain=opts.domain,
                 seed=opts.seed,
                 exclude=warm + ([incumbent] if incumbent else []),
+                **cover_args,
             ),
         )
     # Seeds are drawn from the current shape by scaling, so one can land outside
@@ -302,60 +277,53 @@ def _seeded_warm_starts(src, hw, opts, sites):
     if opts.domain:
         kept = []
         for c in warm:
-            if domain_mod.verify(opts.domain, c, opts.dtype_bytes)[0]:
+            if domain.verify(opts.domain, c, opts.dtype_bytes)[0]:
                 kept.append(c)
         warm = kept
     return warm, measured, incumbent
 
 
-def run(op_file, objective, hw, opts=None):
-    """Run one block against the program currently in `op_file`.
+def _tile_sites(src, hw, opts):
+    sites = [s for s in apply.tunable_sites(src) if s.kind in ("cube", "vec")]
+    return sites, "no tunable tile site; the tile call is not written with integer literals (normalise at INIT)"
 
-    objective : site_configs -> (s, p). In production this is a
-                `evaluator.RealEvaluator`, which applies each config on top of
-                a base captured at construction and restores that base
-                afterwards, so trials never contaminate each other. In tests it
-                is a plain function.
-    max_trials: the remaining evaluation budget. None means unbounded, which is
-                only correct in tests.
-    startup_cover: how many space-covering points to measure before TPE's own
-                draws. 0 restores the previous behaviour (scaling seeds only).
 
-    Returns the `run_bo` dict, plus `reason` when no trial could be run at all.
-    """
-    opts = opts or BlockOptions()
-    src = _read_text(op_file)
+def run_search(op_file, objective, hw, opts, *, discover, seeds, search, keep_ties=False, confirm=None, prepare=None):
+    """Run one budgeted block, then compare its winner with already measured seeds."""
+    src = read_text(op_file)
     try:
-        sites = [s for s in apply.tunable_sites(src) if s.kind in ("cube", "vec")]
-    except SyntaxError as e:
-        return _empty(f"kernel does not parse: {e}")
+        if prepare is not None:
+            src = prepare(src, hw)
+        sites, reason = discover(src, hw, opts)
+    except SyntaxError as exc:
+        return _empty(f"kernel does not parse: {exc}")
     if not sites:
-        # The single most consequential outcome, so it is named rather than
-        # returned as an empty result: a kernel whose tile call is written with
-        # named constants has no tunable site, and normalisation at INIT is what
-        # fixes it. Silence here is what a whole recorded run looked like.
-        return _empty(
-            "no tunable tile site; the tile call is not written with "
-            "integer literals (normalise at INIT)"
-        )
+        return _empty(reason)
     if opts.max_trials is not None and opts.max_trials <= 0:
         return _empty("no evaluation budget remaining")
 
-    warm, measured, incumbent = _seeded_warm_starts(src, hw, opts, sites)
-    result = driver.run_bo(
-        objective,
-        sites,
-        hw,
-        _search_options(opts, warm, incumbent, sites),
-    )
-    # An already-measured configuration is evidence and costs nothing, so it
-    # competes with what the block found rather than being discarded.
-    for cfg, val in measured:
-        if result["best_objective_us"] is None or val < result["best_objective_us"]:
-            result["best_config"], result["best_objective_us"] = cfg, float(val)
+    warm, measured, incumbent = seeds(src, hw, opts, sites)
+    result = search(objective, sites, hw, opts, warm, measured, incumbent)
+    for cfg, value in measured:
+        best = result["best_objective_us"]
+        # Pro enqueues the incumbent as a study observation. Keep it on a tie.
+        if best is None or (value <= best if keep_ties else value < best):
+            result["best_config"], result["best_objective_us"] = cfg, float(value)
             result["best_was_incumbent"] = True
     result.setdefault("best_was_incumbent", False)
+    if confirm is not None and result.get("best_config") and not result["best_was_incumbent"]:
+        result["confirm"] = confirm(objective, incumbent, result["best_config"], opts.seed or 0)
     return result
+
+
+def _search(objective, sites, hw, opts, warm, measured, incumbent):
+    options = search_options(driver.SearchOptions, opts, warm, incumbent, apply.tie_groups(sites, incumbent))
+    return driver.run_bo(objective, sites, hw, options)
+
+
+def run(op_file, objective, hw, opts=None):
+    return run_search(op_file, objective, hw, opts or BlockOptions(),
+                      discover=_tile_sites, seeds=_seeded_warm_starts, search=_search)
 
 
 def apply_best(src, best_config):
@@ -418,7 +386,7 @@ def _merge_bounds(op_file):
 # space.HW's field name for each chip-envelope key. The two differ because the
 # envelope is named after the chip's own datasheet and HW after what the static
 # check calls the same quantity.
-_HW_FROM_ENVELOPE = (
+HW_FROM_ENVELOPE = (
     ("ub_budget_kb", "ub_kb"),
     ("l1_budget_kb", "l1_kb"),
     ("l0a_kb", "l0a_kb"),
@@ -446,14 +414,14 @@ def hw_for(op_file, live_tiles=None, envelope=None):
     the tile search and the static feasibility gate validate against the SAME
     numbers. They did not: this function passed none, so the search used the
     dataclass defaults while `--ub-kb` / `--l1-kb` moved only the other gate.
-    None keeps the defaults, for a caller that has no envelope to hand.
+    Without a supplied UB capacity, both the hardware and domain report it as unknown.
     """
     env = envelope or {}
-    domain = domain_mod.derive(op_file, live_tiles, ub_budget_kb=env.get("ub_kb", 192))
+    domain = domain_mod.derive(op_file, live_tiles, ub_budget_kb=env.get("ub_kb"))
     bounds = _merge_bounds(op_file)
     if bounds:
         domain["subgraph_counts"] = bounds
-    kw = {field: env[key] for field, key in _HW_FROM_ENVELOPE if key in env}
+    kw = {field: env[key] for field, key in HW_FROM_ENVELOPE if key in env}
     hw = space.HW(
         calibrated=False,
         dtype_bytes=domain.get("dtype_bytes", 4),

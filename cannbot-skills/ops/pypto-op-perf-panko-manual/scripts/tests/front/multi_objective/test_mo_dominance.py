@@ -26,15 +26,20 @@ The way to settle a pair that matters is more readings of the same program --
 `record --remeasure`, which is not charged, because `eval_budget` counts
 distinct programs measured.
 """
+import hashlib
 import json
 import sys
 import tempfile
 import unittest
+from unittest.mock import patch
 from types import SimpleNamespace
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parents[2]))
-from _support import CHIP_ARGS, DEMO_KERNEL as KERNEL, file_hash, harness, new_op_dir, read_state, run_cli  # noqa: E402
+from _support import (  # noqa: E402
+    CHIP_ARGS, DEMO_KERNEL as KERNEL, file_hash, harness, init_argv, new_op_dir,
+    read_state, record_argv, run_cli,
+)
 
 LW = {"objectives": ["aicore_e2e", "workspace"]}
 OBJS = harness.parse_objectives(LW)
@@ -163,7 +168,8 @@ class BlockSamplesTest(unittest.TestCase):
         a = SimpleNamespace(parent="u1", op_dir=str(op_dir))
         ctx = {"faults": [], "trials": [], "meter": {"device_trials": 0},
                "winners": {}, "base_src": KERNEL}
-        harness.block_recorder(a, st, ctx)(
+        record = harness.block_recorder(a, st, ctx)
+        record(
             {"status": "ok",
              # What the trial was RANKED on, which is `p`.
              "objective_us": 90.0,
@@ -174,6 +180,73 @@ class BlockSamplesTest(unittest.TestCase):
         self.assertEqual(entry["samples"], [89.0, 90.0, 91.0])
         self.assertEqual(st["archive"][0]["samples"], [89.0, 90.0, 91.0],
                          "and they reach the point the front judges")
+        record({"status": "ok", "objective_us": 110.0, "config": {"vec#0": {"d0": 16, "d1": 128}},
+                "metrics": {"workspace_b": 1 << 19, "workspace_state": "measured"}})
+        self.assertEqual(len(st["archive"]), 2)
+        for point in st["archive"]:
+            h = point["code_hash"]
+            self.assertEqual(file_hash(Path(harness.npath(str(op_dir), h))), h)
+
+    def test_tile_snapshots_follow_retention_setting(self):
+        for keep_all in (False, True):
+            with self.subTest(snapshot_all_candidates=keep_all):
+                kernel = new_op_dir(self, KERNEL)
+                config = {"objectives": ["aicore_e2e"], "snapshot_all_candidates": keep_all}
+                args = init_argv(self.op_dir, kernel, *CHIP_ARGS, "--preopt-hash", self.pre,
+                                 "--config", json.dumps(config))
+                reply, status = run_cli(*args)
+                self.assertEqual(status, 0, reply)
+                st = read_state(self.op_dir)
+                ctx = {"base_src": KERNEL, "op_file": kernel, "meter": {"device_trials": 0},
+                       "trials": [], "winners": {}}
+                record = harness.block_recorder(SimpleNamespace(parent="u1", op_dir=self.op_dir), st, ctx)
+                tiles = {us: {"vec#0": {"d0": dim, "d1": 128}} for us, dim in ((90, 32), (80, 16), (95, 8))}
+                for latency, tile in tiles.items():
+                    record({"status": "ok", "objective_us": latency, "config": tile})
+                self.assertEqual(len(ctx["winners"]), len(tiles))
+                winner, = st["archive"]
+                self.assertEqual(winner["aicore_e2e_us"], 80)
+                for digest in ctx["winners"]:
+                    self.assertEqual(Path(harness.npath(self.op_dir, digest)).exists(), keep_all)
+                harness.block_apply_winner(st, ctx, {"best_config": tiles[80]})
+                digest = file_hash(kernel)
+                self.assertEqual(digest, winner["code_hash"])
+                harness.save(self.op_dir, st)
+                reply, status = run_cli(*record_argv(self.op_dir, digest, "80"))
+                self.assertEqual(status, 0, reply)
+                restored = self.op_dir / "restored.py"
+                self.assertTrue(harness.restore(self.op_dir, restored, digest))
+                self.assertEqual(file_hash(restored), digest)
+
+    def test_failed_tile_snapshot_preserves_completed_trials(self):
+        kernel = new_op_dir(self, KERNEL)
+        config = {"objectives": ["aicore_e2e"], "bayesian_optimization_tile_search": True}
+        reply, status = run_cli(*init_argv(self.op_dir, kernel, *CHIP_ARGS, "--preopt-hash",
+                                           self.pre, "--config", json.dumps(config)))
+        self.assertEqual(status, 0, reply)
+        shapes = (32, 16)
+        digests = [hashlib.sha256(KERNEL.replace("64, 128", f"{dim}, 128").encode()).hexdigest()
+                   for dim in shapes]
+        Path(harness.npath(self.op_dir, digests[0])).mkdir()
+
+        def measure_trials(filename, evaluator, hw, options):
+            for dim, latency in zip(shapes, (600, 550)):
+                options.on_trial({"status": "ok", "objective_us": latency,
+                                  "config": {"vec#0": {"d0": dim, "d1": 128}}})
+            return {"n_trials": 2, "n_feasible": 2, "best_was_incumbent": True}
+
+        args = SimpleNamespace(op_dir=str(self.op_dir), parent="u1", reason="", live_tiles=0,
+                               max_trials=2, test_command="true", lint_root=None)
+        with patch("bayesian_optimization.block.run", side_effect=measure_trials):
+            harness.cmd_block(args)
+        state = read_state(self.op_dir)
+        self.assertEqual(state["progress"]["snapshot_misses"], 1)
+        self.assertEqual(state["progress"]["evals_used"], 3)
+        saved, = state["blocks"]
+        self.assertEqual(saved["charged_now"], 2)
+        self.assertEqual([t["objective_us"] for t in saved["trials"]], [600, 550])
+        self.assertEqual([state["eval_cache"][h]["p"] for h in digests], [600, 550])
+        self.assertEqual(file_hash(Path(harness.npath(self.op_dir, digests[1]))), digests[1])
 
     def test_promoting_the_winner_does_not_destroy_its_readings(self):
         """The winner is promoted by a `record` with no `--samples`.

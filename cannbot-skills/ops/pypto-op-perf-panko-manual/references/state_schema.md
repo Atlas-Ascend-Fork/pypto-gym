@@ -92,7 +92,8 @@ Field notes:
   drift cancels within the pair. `status`: `pending` → `confirmed` (95% bootstrap interval of
   median(preopt)/median(delivered) above 1) / `unconfirmed` / `regressed`; or `no_change`,
   `skipped`, `disabled`, `insufficient`. `arms.{preopt,delivered}` hold the readings, measured
-  ABBA in `config.verify_runs / 2` per step; `result` holds the interval; `search_speedup` is
+  in ABBA order. Each step uses the frozen `warmup` count (1 for older records without this field)
+  and `runs_per_step` timed runs; `result` holds the interval; `search_speedup` is
   what the search reported. The verdicts reach `frontier.json` as `front[i].verified`.
 - `config_key` — which entry of a factory kernel's per-case config table this campaign tunes:
   `{key, action, knobs}`, or null for an ordinary kernel. `action` is `marked` or `inserted`. The

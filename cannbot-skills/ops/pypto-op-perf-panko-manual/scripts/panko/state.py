@@ -19,7 +19,9 @@ import json
 import os
 import shutil
 import subprocess
+import tempfile
 import time
+from pathlib import Path
 
 from .config import (CHIP_ENVELOPE, DEFAULT_CONFIG, OPTIONAL_ENVELOPE, REFUSAL_GLOBAL_AFTER, SCRIPTS_DIR,
                      _RENAMED_CONFIG_KEYS, _RENAMED_STATE_KEYS, bayesian, chip_profile, clamp_prior)
@@ -46,6 +48,17 @@ def chip_envelope(st=None):
         env.update({k: v for k, v in (st.get("chip_envelope") or {}).items()
                     if k in env})
     return env
+
+
+def occupancy_options(st):
+    """Bind Classic occupancy probes to this run's UB and L1 capacities."""
+    from .backend import current
+    from .config import feasibility
+
+    if current() is not None:
+        return {}  # Registered frontends provide their own occupancy probes.
+    env = chip_envelope(st)
+    return {"hw": feasibility.HW(ub_budget_kb=env["ub_kb"], l1_budget_kb=env["l1_kb"])}
 
 
 # --------------------------------------------------------------------------- I/O
@@ -137,6 +150,9 @@ def _pypto_defaults():
     handled by degrading rather than by guessing: with no defaults the semantic
     comparison still catches reformatting and comment edits and folds nothing.
     """
+    from .backend import current
+    if current() is not None:
+        return {}
     global _PYPTO_DEFAULTS
     if _PYPTO_DEFAULTS is None:
         if bayesian is None:
@@ -221,6 +237,16 @@ def snapshot(op_dir, op_file, code_hash):
     return True
 
 
+def snapshot_source(op_dir, code_hash, data):
+    """Publish the measured tile program bytes under their content hash."""
+    dest = Path(npath(op_dir, code_hash))
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    with tempfile.TemporaryDirectory(dir=dest.parent) as stage:
+        candidate = Path(stage) / dest.name
+        candidate.write_bytes(data)
+        candidate.replace(dest)
+
+
 def restore(op_dir, op_file, code_hash):
     """Restore nodes/<code_hash>.py -> op_file (deterministic roll-back to a known-good state)."""
     if not op_file or not code_hash:
@@ -229,8 +255,13 @@ def restore(op_dir, op_file, code_hash):
     if not os.path.exists(snap):
         return False
     try:
-        shutil.copyfile(snap, op_file)
-    except OSError:
+        from .backend import current
+        if current() is not None:
+            current().write_source(op_file, _read_bytes(snap).decode("utf-8"))
+            return file_hash(op_file) == code_hash
+        else:
+            shutil.copyfile(snap, op_file)
+    except (OSError, ValueError):
         return False
     return True
 
@@ -241,6 +272,9 @@ def _code_version():
     come from a build with or without symptom anchoring, greedy accumulation,
     or the frozen evaluator, and nothing in the state says which.
     """
+    from .backend import current
+    if current() is not None:
+        return current().revision()
     here = SCRIPTS_DIR
     rev = ""
     git = shutil.which("git")
@@ -285,7 +319,9 @@ def _domain_state(st, op_file, live_tiles=None):
         return None
     if not op_file or not os.path.exists(op_file):
         return None
-    return bayesian.domain.derive(op_file, live_tiles or st.get("live_tiles"))
+    from .backend import current
+    options = {"ub_budget_kb": chip_envelope(st)["ub_kb"]} if current() is None else {}
+    return bayesian.domain.derive(op_file, live_tiles or st.get("live_tiles"), **options)
 
 
 def _structure(st, op_dir):
@@ -434,6 +470,9 @@ def wrapper_signature(src):
     Returns None when the file does not parse -- callers treat that as "cannot
     tell" and say so, rather than passing a candidate the check never ran on.
     """
+    from .backend import current
+    if current() is not None:
+        return current().wrapper_signature(src)
     try:
         tree = ast.parse(src)
     except SyntaxError:
@@ -462,13 +501,24 @@ def decorated_jit(node):
 
 def _wrapper_drift(st, path):
     """"" if the wrapper still matches the baseline, else why it does not."""
+    if not st.get("wrapper_signature"):
+        return ""
+    try:
+        source = read_text(path)
+    except OSError:
+        return "the candidate source could not be read to check the frozen wrapper"
+    return _source_wrapper_drift(st, source)
+
+
+def _source_wrapper_drift(st, source):
     want = st.get("wrapper_signature")
     if not want:
         return ""                     # pre-dates the check; nothing to compare
-    try:
-        got = wrapper_signature(read_text(path))
-    except OSError:
-        return ""
+    from .backend import current
+    if current() is not None and "wrapper_owned_bindings" in st:
+        got = current().wrapper_signature(source, st.get("case_context"), st["wrapper_owned_bindings"])
+    else:
+        got = wrapper_signature(source)
     if got is None:
         return "the candidate does not parse, so the wrapper freeze could not be checked"
     if got != want:
@@ -478,7 +528,7 @@ def _wrapper_drift(st, path):
                 "wrapper leaves the measured region and scores as a win without "
                 "being one. Restore the wrapper and put the change inside the "
                 "kernel, or run this as a different experiment")
-    return _debug_options_drift(st, path)
+    return _debug_options_drift(st, source)
 
 
 def _resolve_envelope(a):
@@ -622,6 +672,9 @@ def debug_options_signature(src):
 
     Returns None when the file does not parse.
     """
+    from .backend import current
+    if current() is not None:
+        return current().debug_options_signature(src)
     try:
         tree = ast.parse(src)
     except SyntaxError:
@@ -647,15 +700,12 @@ def _jit_debug_options(node):
     return dumped
 
 
-def _debug_options_drift(st, path):
+def _debug_options_drift(st, source):
     """"" if the kernels' `debug_options` still match the baseline's."""
     want = st.get("debug_options_signature")
     if not want:
         return ""                     # pre-dates the check; nothing to compare
-    try:
-        got = debug_options_signature(read_text(path))
-    except OSError:
-        return ""
+    got = debug_options_signature(source)
     if got is None or got == want:
         return ""
     return ("the kernels' `debug_options` differ from the baseline. That is the "

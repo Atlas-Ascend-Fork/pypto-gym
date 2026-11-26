@@ -20,6 +20,7 @@ import time
 import action_posterior
 import evaluation_session
 
+from .backend import current
 from .config import (CATALOG_PRIOR_DEFAULT, CandidateRow, MeasurementVerdict, RatchetMeasurement, Refusal,
                      SEARCH_PROTOCOL, STAGE_ORDER, SelectionContext, _bound, clamp_belief, clamp_prior, clamp_stage,
                      feasibility, out)
@@ -96,10 +97,13 @@ def _restore_or_refuse(a, restore_hash, op_f):
 
 def cmd_select(a):
     st = load(a.op_dir)
-    _refuse_if_action_open(st)
+    refinement = (st["progress"].get("refine") or {}) if getattr(a, "dispatch_id", None) else {}
+    if not refinement.get("action"):
+        _refuse_if_action_open(st)
     active = st["progress"]["active_stage"]
     staged = st["config"]["staged_prior"]
-    frontier = live_frontier(st, a.op_dir)
+    frontier = ([node for node in st["nodes"]["open"] if node["id"] == refinement["action"]]
+                if refinement.get("action") else live_frontier(st, a.op_dir))
     if not frontier:
         _out_expansion_required(st, a)
         return
@@ -110,7 +114,8 @@ def cmd_select(a):
     # not left to the agent). restore_code_hash is still returned for visibility/logging.
     # Phase 1: the global best (greedy accumulation). Phase 2: the front point
     # being extended -- `_base_hash` is the only thing that differs.
-    restore_hash = _base_hash(st, a.op_dir)
+    base = refinement.get("base") or refinement.get("best") or {}
+    restore_hash = base.get("code_hash") or _base_hash(st, a.op_dir)
     op_f = op_file_path(st, a.op_dir)
     restored = _restore_or_refuse(a, restore_hash, op_f)
     # `already_measured` is the whole point: the file the coder is about to edit IS
@@ -150,6 +155,9 @@ def _record_duplicate(a, st, pr, cache):
     """
     if a.code_hash not in cache:
         return False
+    if current() is not None:
+        cached = cache[a.code_hash]
+        _tile_bayes_tell(st, a.op_dir, a.parent, cached.get("s"), cached.get("p"))
     pr["duplicate_rejected"] = pr.get("duplicate_rejected", 0) + 1
     r0 = _refine_for(pr, a.parent)
     # A run of duplicates is the only honest signal that an action has no
@@ -358,10 +366,21 @@ def _halt_on_broken_chain(a, st, payload, chain_error, op_file):
     raise Refusal(3)
 
 
+def _check_staged_measurement(a, op_file):
+    if current() is not None and (a.remeasure or not a.unevaluated):
+        staged_hash = file_hash(op_file)
+        if not staged_hash or staged_hash != a.code_hash:
+            out({"recorded": False, "refused": True, "error": "code_hash_mismatch",
+                 "code_hash": a.code_hash, "staged_hash": staged_hash, "op_file": op_file})
+            raise Refusal(3)
+
+
 def cmd_record(a):
     """One candidate evaluated inside local refinement of action `parent`."""
     st = load(a.op_dir)
     pr = st["progress"]
+    op_file = op_file_path(st, a.op_dir)
+    _check_staged_measurement(a, op_file)
     if _record_handled_elsewhere(a, st, pr):
         return
     m_rec = record_metrics(a, st)
@@ -386,7 +405,6 @@ def cmd_record(a):
     # value for a program it did not propose would poison the surrogate with a
     # point the search never actually visited.
     _tile_bayes_tell(st, a.op_dir, a.parent, a.s, a.p)
-    op_file = op_file_path(st, a.op_dir)
     accepted, acceptance = _record_acceptance(a, st, pr, op_file, m_eval)
     measured = RatchetMeasurement(j, m_eval, accepted, (acceptance or {}).get("clarity"))
     r, improved, bar, chain_error = _apply_ratchet(a, st, op_file, measured)
@@ -1125,9 +1143,17 @@ def _cmd_remeasure(a, st):
     cache = st.setdefault("eval_cache", {})
     samples = cli_samples(a)
     entry, point = _remeasure_target(a, st, cache, samples)
+    if getattr(a, "remeasurement_profile", None):
+        entry.setdefault("remeasurement_profiles", []).append(a.remeasurement_profile)
     pooled = list(entry.get("samples") or []) + samples
+    readings = pooled
+    backend = current()
+    if backend is not None:
+        # Use the backend's comparison units for both the headline and the Pareto row.
+        readings = backend.entry_reads(entry) + backend.entry_reads({"samples": samples})
+        entry["reads"] = point["reads"] = readings
     entry["samples"] = pooled
-    entry["p"] = median_of(pooled)
+    entry["p"] = median_of(readings or pooled)
     entry["remeasured"] = int(entry.get("remeasured", 0)) + 1
     observe_noise(st, samples, SEARCH_PROTOCOL)
     objs = objectives_of(st)

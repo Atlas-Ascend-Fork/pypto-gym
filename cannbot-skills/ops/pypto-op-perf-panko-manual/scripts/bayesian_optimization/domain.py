@@ -62,7 +62,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 # One home, shared with `predicates`: see pypto_ast. Not optional -- every tile
 # this module counts depends on knowing which calls are pypto's.
-from pypto_ast import pypto_roots  # noqa: E402
+from pypto_ast import keyword_value as _kwarg, pypto_roots  # noqa: E402
 
 try:
     import feasibility  # noqa: E402
@@ -1152,13 +1152,6 @@ def _covers(have, need):
         if x is None or y is None or x < y:
             return False
     return True
-
-
-def _kwarg(call, name):
-    for k in call.keywords:
-        if k.arg == name:
-            return k.value
-    return None
 
 
 def _rhs_attr(rhs):

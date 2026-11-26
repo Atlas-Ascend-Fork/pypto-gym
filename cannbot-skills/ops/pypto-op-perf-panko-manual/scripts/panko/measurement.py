@@ -22,6 +22,7 @@ import random
 
 from .config import (DEFAULT_CONFIG, NOISE_WINDOW, OBJECTIVE_ALIASES, PIPE_METRICS, VERIFY_ALPHA, VERIFY_BOOT,
                      VERIFY_SEED, _MEASUREMENT_NOT_METRICS, feasibility)
+from .state import occupancy_options
 
 
 def compute_j(s, p, p_ref):
@@ -52,7 +53,7 @@ def metrics(util, bubble, fallback=None, pipes=None):
     return m
 
 
-def _occupancies(op_file):
+def _occupancies(op_file, st):
     """(UB fraction, L1 fraction) for the kernel currently on disk; either may be
     None. Never raises: a symptom that can fail the run is worse than a symptom
     that stays quiet.
@@ -67,8 +68,9 @@ def _occupancies(op_file):
     if not op_file or not os.path.exists(op_file):
         return None, None
     try:
-        return (feasibility.ub_occupancy(op_file),
-                feasibility.l1_occupancy(op_file))
+        options = occupancy_options(st)
+        return (feasibility.ub_occupancy(op_file, **options),
+                feasibility.l1_occupancy(op_file, **options))
     except Exception:
         return None, None
 
@@ -612,7 +614,7 @@ def record_metrics(a, st):
 
 
 def incumbent_latency(st, src):
-    """The measured `p` of the program this source text IS, or None.
+    """Return the cached latency for these source bytes (or UTF-8 text), if measured.
 
     A tile study's `current` seed is recorded as a COMPLETED observation at the
     tile configuration the file holds (`lever._fill_seeds`), so the number
@@ -626,8 +628,8 @@ def incumbent_latency(st, src):
     a seed with no value to be measured, so an unmeasured base costs one device
     trial instead of poisoning the surrogate.
     """
-    entry = (st.get("eval_cache") or {}).get(
-        hashlib.sha256(src.encode("utf-8")).hexdigest()) or {}
+    data = src.encode("utf-8") if isinstance(src, str) else src
+    entry = (st.get("eval_cache") or {}).get(hashlib.sha256(data).hexdigest()) or {}
     p = entry.get("p")
     if not entry.get("s") or not isinstance(p, (int, float)) or p <= 0:
         return None
@@ -643,3 +645,100 @@ def _preopt_metrics(a):
     m.update(_cli_workspace(a, "preopt_"))
     m.update(_cli_extra_metrics(a, "preopt_"))
     return m
+
+
+def _confirmation_pair(objective, arms, out):
+    """Acquire one ordered pair and retain partial evidence on a failure."""
+    reading = {}
+    for name, cfg in arms:
+        try:
+            result = objective(cfg)
+            verdict, latency = result[:2]
+        except Exception as exc:                    # noqa: BLE001
+            out["error"] = "%s: %s" % (name, exc)
+            return False
+        out["trials"] += 1
+        reading[name] = {
+            "s": int(verdict or 0), "p": latency,
+            "samples": list(getattr(objective, "last_samples", None) or []),
+            "detail": (getattr(objective, "last_detail", "") or "")[:200]}
+        trial_metrics = getattr(objective, "last_metrics", None) or {}
+    a = (reading.get("winner") or {}).get("p")
+    b = (reading.get("incumbent") or {}).get("p")
+    if not all(item.get("s") for item in reading.values()):
+        out["error"] = "a confirmation candidate failed correctness"
+        return False
+    if not (a and b and a > 0 and b > 0):
+        out["error"] = "a confirmation reading has no latency"
+        return False
+    reading["log_ratio"] = round(math.log(a / b), 6)
+    out["pairs"].append(reading)
+    return True
+
+
+def confirm_block_winner(objective, incumbent, winner, seed=0, *, pairs):
+    """
+    Confirm the selected winner against fresh, paired incumbent readings.
+
+    Randomize adjacent measurement order to reduce drift and selection bias.
+    Confirmation evaluates no new candidate and does not charge ``max_trials``;
+    its readings remain visible in the trial record. Workspace bytes are not
+    measured again because they are determined by the candidate configuration.
+    A failed confirmation retains the selection readings and reports an error.
+    """
+    if not winner or not incumbent:
+        return {}
+    k = int(pairs)
+    if k < 1:
+        return {}
+    rng = random.Random(seed)
+    out = {"pairs": [], "orders": [], "trials": 0}
+    for _ in range(k):
+        arms = [("incumbent", incumbent), ("winner", winner)]
+        # Per PAIR, not once for the whole confirmation: a single order repeated
+        # k times is a fixed order, and a fixed order turns a drift into an
+        # effect exactly as it would with k=1.
+        if rng.random() < 0.5:
+            arms.reverse()
+        out["orders"].append("".join("I" if n == "incumbent" else "W"
+                                     for n, _ in arms))
+        if not _confirmation_pair(objective, arms, out):
+            return _confirm_summary(out)
+    return _confirm_summary(out)
+
+
+def _confirm_summary(out):
+    """
+    The mean paired difference over however many pairs completed.
+
+    A confirmation that broke part way is summarised over the pairs it did
+    finish rather than discarded: two pairs are worse than three and far better
+    than the selection reading alone. With none finished the caller keeps the
+    selection reading, which `block_apply_winner` does when `p` is absent.
+    """
+    diffs = [p["log_ratio"] for p in out.get("pairs") or ()]
+    if not diffs:
+        return out
+    mean = sum(diffs) / len(diffs)
+    out["log_ratio"] = round(mean, 6)
+    out["speedup"] = round(math.exp(-mean), 4)
+    out["agrees"] = mean < 0
+    out["n_pairs"] = len(diffs)
+    if len(diffs) > 1:
+        var = sum((d - mean) ** 2 for d in diffs) / (len(diffs) - 1)
+        out["sd_log_ratio"] = round(math.sqrt(var), 6)
+    last = out["pairs"][-1]
+    # The reading the caller carries: the winner's mean over the pairs, so the
+    # number recorded is the same estimator the verdict was taken on.
+    ps = [(p.get("winner") or {}).get("p") for p in out["pairs"]]
+    ps = [x for x in ps if x]
+    out["readings"] = {
+        "winner": dict(last.get("winner") or {},
+                       p=round(sum(ps) / len(ps), 6) if ps else None),
+        "incumbent": last.get("incumbent") or {}}
+    out["order"] = out.get("orders") or []
+    return out
+
+# Public service API used by the shared core and DSL adapters.
+confirm_summary = _confirm_summary
+confirmation_pair = _confirmation_pair

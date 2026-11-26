@@ -289,7 +289,7 @@ class TestOneClock(unittest.TestCase):
         self.assertNotIn("current_latency=st[", src)
         self.assertNotIn("current_latency=(st[", src)
         self.assertEqual(src.count('current_latency=incumbent_latency(st, ctx["base_src"])'), 1)
-        self.assertEqual(src.count("current_latency=incumbent_latency(st, src)"), 1)
+        self.assertEqual(src.count("current_latency=incumbent_latency(st, source_bytes)"), 1)
 
 
 class _GrantKnobs(NamedTuple):

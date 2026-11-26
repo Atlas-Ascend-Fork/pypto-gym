@@ -23,7 +23,8 @@ import mo_hv
 
 from .config import (DEFAULT_CONFIG, FrontContext, J_OBJECTIVE, OBJECTIVE_ALIASES, Refusal, VERIFY_ALPHA, VERIFY_BOOT,
                      VERIFY_SEED, out)
-from .state import _base_hash, live_frontier, npath, open_node, preopt_code_hash
+from .state import (_base_hash, _wrapper_drift, file_hash, live_frontier, npath, op_file_path,
+                    open_node, preopt_code_hash)
 from .measurement import (bootstrap_speedup, compute_j, is_bytes, median_of, objective_values, objectives_of,
                           preopt_values)
 
@@ -239,46 +240,34 @@ def _refresh_front_point(point, entry, objs, st):
 def delivery_point(st, op_dir):
     """(code_hash, detail): the program `stop` leaves in the working file.
 
-    The best PRIMARY objective among every correct measurement whose source is
-    on disk, ties broken by the remaining objectives in order and then by the
-    hash. `impl.py` is still "the fastest point" -- what changes is that it is
-    now read off the measurements instead of off `best_node`.
-
-    Not `best_node`: it is `J`, and it only moves at an action's `close`. A run
-    can deliver a program another point beats -- slower, at a workspace many
-    times larger -- because the deliverable was chosen by a scalar that had
-    stopped tracking the measurements.
-
-    Not the archive either: the bootstrap lets a 0.3% slower point with a better
-    secondary objective dominate the fastest one, so the fastest program can
-    leave the front (see `dominates_measured`). It never leaves `eval_cache`,
-    which is why the candidates come from there.
-
-    Nothing here needs a non-domination filter: a point that is strictly best
-    on the primary objective cannot be dominated, and when several tie on it
-    the remaining objectives order them -- which is exactly the tied case.
-
-    (None, detail) when no measurement can be delivered; the caller falls back
-    to `best_node`.
+    Rank correct measurements with complete objective vectors and a source
+    that passes the campaign's frozen-wrapper check. A valid measurement
+    can outlive its Pareto archive row after a remeasurement, so start from
+    the evaluation cache. A retained block snapshot alone is audit evidence.
     """
     objs = objectives_of(st)
+    cache = st.get("eval_cache") or {}
+    best = next((n for n in st.get("nodes", {}).get("closed", []) if n.get("id") == st.get("best_node")), {})
+    best_hash = best.get("code_hash")
+    if best_hash and best_hash not in cache and best.get("eval"):
+        cache = {**cache, best_hash: best["eval"]}
     rank = []
-    for h, e in (st.get("eval_cache") or {}).items():
+    for h, e in cache.items():
         if not e.get("s") or not e.get("p"):
             continue
-        if not os.path.exists(npath(op_dir, h)):
+        vals, missing = objective_values(objs, e["p"], e.get("m"))
+        if missing or not all(math.isfinite(v) for v in vals.values()):
             continue
-        vals, _ = objective_values(objs, e["p"], e.get("m"))
-        if vals.get(objs[0]["name"]) is None:
+        path = npath(op_dir, h)
+        if not os.path.isfile(path):
+            # STOP can keep an already-restored best if its snapshot was lost.
+            path = op_file_path(st, op_dir)
+            if h != best_hash or file_hash(path) != h:
+                continue
+        if _wrapper_drift(st, path):
             continue
-        key = []
-        for o in objs:
-            v = vals.get(o["name"])
-            # Missing secondary objectives sort last, so a tie on the primary
-            # goes to the point whose trade-off is actually known.
-            key.append(float("inf") if v is None
-                       else (-float(v) if o["direction"] == "max" else float(v)))
-        rank.append((tuple(key), h, vals))
+        key = tuple(-vals[o["name"]] if o["direction"] == "max" else vals[o["name"]] for o in objs)
+        rank.append((key, h, vals))
     if not rank:
         return None, {"why": "no_deliverable_measurement"}
     rank.sort(key=lambda t: (t[0], t[1]))
@@ -594,7 +583,10 @@ def measured_order(xs, ys, alpha=None):
     interval to compute and the answer is undetermined rather than assumed.
     """
     alpha = VERIFY_ALPHA if alpha is None else alpha
-    ci = bootstrap_speedup(xs, ys, alpha=alpha)
+    from .backend import current
+    backend = current()
+    interval = backend.reading_interval if backend is not None else bootstrap_speedup
+    ci = interval(xs, ys, alpha=alpha)
     if ci is None:
         return "undetermined", None
     if ci["ci_high"] < 1.0:
@@ -613,6 +605,9 @@ def row_samples(o, row):
     `samples_from: "samples"` (that list has always been `p`'s). An objective
     that declares no sample source has none here, and is compared as a number.
     """
+    from .backend import current
+    if current() is not None and o.get('samples_from') == 'samples':
+        return current().entry_reads(row)
     by = (row.get("samples_by_objective") or {}).get(o["name"])
     if by:
         return list(by)
@@ -787,7 +782,7 @@ def archive_point(st, code_hash, p, m, action=None):
     # wrote (or, for the preopt, the one `init` wrote).
     entry = (st.get("eval_cache") or {}).get(code_hash) or {}
     samples = entry.get("samples")
-    return {"code_hash": code_hash, "values": vals,
+    point = {"code_hash": code_hash, "values": vals,
             "samples": list(samples or []),
             # Per objective, so dominance is judged on the readings that
             # belong to the axis being compared rather than on `p`'s for all
@@ -803,6 +798,11 @@ def archive_point(st, code_hash, p, m, action=None):
             "J": compute_j(1, p, st["target"]["P_ref"]),
             "action": action, "catalog_id": (node or {}).get("catalog_id"),
             "eval_no": st["progress"]["evals_used"]}
+
+    from .backend import current
+    if current() is not None:
+        point["reads"] = current().entry_reads(entry)
+    return point
 
 
 def _hv_vectors(objs, rows, draw=None):

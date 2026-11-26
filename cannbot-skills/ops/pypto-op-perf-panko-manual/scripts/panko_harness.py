@@ -257,7 +257,16 @@ def _parser_report(sub):
     q.add_argument("--op-dir", required=True)
 
 
-def main():
+def main(argv=None, before_command=None, configure=None):
+    """Dispatch one command from argv (arguments after the program name, or sys.argv[1:]).
+
+    After installing the built-in commands, call configure(subparsers) so the
+    frontend can add commands or extend their arguments. Parse argv, then call
+    before_command(args) with the parsed argparse.Namespace. It may validate or
+    modify args, including replacing args.fn. Finally call args.fn(args) with
+    that same namespace. Both hooks are optional and their return values are ignored.
+    A Refusal from before_command or the command exits with the refusal's code.
+    """
     p = argparse.ArgumentParser(description="Deterministic PANKO control core.")
     sub = p.add_subparsers(dest="cmd", required=True)
 
@@ -275,8 +284,12 @@ def main():
     _parser_pareto(sub)
     _parser_report(sub)
 
-    a = p.parse_args()
+    if configure is not None:
+        configure(sub)
+    a = p.parse_args(argv)
     try:
+        if before_command is not None:
+            before_command(a)
         a.fn(a)
     except Refusal as refusal:
         sys.exit(refusal.code)

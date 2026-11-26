@@ -19,7 +19,11 @@ import os
 import sys
 import typing
 
+from contextvars import ContextVar
 import jsonio
+from .backend import current
+
+_FRONTEND = current()
 
 
 # The package needs `optuna`, which is a real dependency of the tile search and
@@ -65,7 +69,10 @@ def is_missing_optuna(exc):
 
 
 try:
-    import bayesian_optimization as bayesian
+    if _FRONTEND is None:
+        import bayesian_optimization as bayesian
+    else:
+        bayesian = _FRONTEND.bayesian()
     _BAYESIAN_UNAVAILABLE = None
 except ModuleNotFoundError as _e:       # pragma: no cover
     if not is_missing_optuna(_e):
@@ -601,9 +608,28 @@ def skill_path(*parts):
 DEFAULT_CATALOG = skill_path("references", "action_catalog.json")
 
 
+
+_reply = ContextVar("panko_reply", default=None)
+
+
+def call_transition(command, args):
+    """Run an existing CLI transition inside the campaign lock and retain its reply."""
+    replies = []
+    token = _reply.set(replies.append)
+    try:
+        command(args)
+    except Refusal as exc:
+        exc.reply = replies[-1] if replies else {"error": "transition_refused"}
+        raise
+    finally:
+        _reply.reset(token)
+    reply, = replies
+    return reply
+
+
 def out(obj):
     """One JSON directive on the protocol channel. See jsonio."""
-    jsonio.emit(obj)
+    (_reply.get() or jsonio.emit)(obj)
 
 
 class Refusal(Exception):
@@ -896,3 +922,11 @@ class CandidateRow(typing.NamedTuple):
     archive: typing.Any
     n: typing.Any
     note: str = ""
+
+
+if _FRONTEND is not None:
+    DEFAULT_CATALOG = _FRONTEND.catalog
+    DEFAULT_CONFIG.update(_FRONTEND.defaults)
+    predicates = _FRONTEND.predicates
+    feasibility = _FRONTEND.feasibility
+    SYMPTOM_ACTIONS = {key: set() for key in SYMPTOM_ACTIONS}

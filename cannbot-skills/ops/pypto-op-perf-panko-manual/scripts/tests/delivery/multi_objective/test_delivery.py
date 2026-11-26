@@ -72,6 +72,16 @@ class PointTest(unittest.TestCase):
         st = self._st([("a" * 64, 90.0, None), ("b" * 64, 90.0, 1000)])
         self.assertEqual(self._pick(st), "b" * 64)
 
+    def test_faster_incomplete_measurement_cannot_outrank_measured_zero_workspace(self):
+        fast, complete = "a" * 64, "b" * 64
+        st = self._st([(fast, 70, 0), (complete, 80, 0)])
+        st["eval_cache"][complete]["m"]["workspace_state"] = "zero"
+        for metrics in ({"workspace_state": "unknown", "workspace_b": 0},
+                        {"workspace_state": "measured", "workspace_b": float("nan")}):
+            with self.subTest(metrics=metrics):
+                st["eval_cache"][fast]["m"] = metrics
+                self.assertEqual(self._pick(st), complete)
+
     def test_nothing_deliverable_is_no_point(self):
         st = self._st([], on_disk=set())
         h, detail = harness.delivery_point(st, str(self.op_dir))

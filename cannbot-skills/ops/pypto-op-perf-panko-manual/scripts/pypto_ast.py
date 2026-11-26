@@ -21,26 +21,39 @@ taking on each other's dependencies.
 import ast
 
 
-def _pypto_aliases(node):
-    """The names one `import pypto ...` statement binds to the pypto module."""
-    out = set()
-    for alias in node.names:
-        if alias.name == "pypto" or alias.name.startswith("pypto."):
-            out.add((alias.asname or alias.name).split(".")[0])
-    return out
-
-
-def pypto_roots(tree):
-    """Names bound to the pypto module in this file, `pypto` always among them.
-
-    `import pypto as pp` is legal Python and kernels are written that way, so a
-    boundary test hard-coded to the literal `pypto` would answer "not pypto" for
-    an aliased kernel. That is the opposite error from counting the wrapper and
-    just as wrong: it would hold every cube and broadcast action on a kernel that
-    has them.
-    """
-    roots = {"pypto"}
+def pypto_roots(tree, *, packages=("pypto",), seeds=("pypto",), include_from=False):
+    """Names bound by DSL imports, including any aliases conventional for this dialect."""
+    roots = set(seeds)
     for node in ast.walk(tree):
         if isinstance(node, ast.Import):
-            roots |= _pypto_aliases(node)
+            names = (alias for alias in node.names if alias.name.split(".")[0] in packages)
+        elif include_from and isinstance(node, ast.ImportFrom) and (node.module or "").split(".")[0] in packages:
+            names = node.names
+        else:
+            continue
+        roots.update((alias.asname or alias.name).split(".")[0] for alias in names)
     return frozenset(roots)
+
+
+def parent_map(tree):
+    """Index an AST by child node, including nodes inside nested definitions."""
+    return {child: node for node in ast.walk(tree) for child in ast.iter_child_nodes(node)}
+
+
+def function_name(node):
+    if isinstance(node, ast.Attribute):
+        return node.attr
+    if isinstance(node, ast.Name):
+        return node.id
+    return None
+
+
+def jit_decorators(fn):
+    for decorator in getattr(fn, "decorator_list", ()):
+        target = decorator.func if isinstance(decorator, ast.Call) else decorator
+        if function_name(target) == "jit":
+            yield decorator
+
+
+def keyword_value(call, name):
+    return next((kw.value for kw in call.keywords if kw.arg == name), None)

@@ -35,7 +35,6 @@ own cycle, not here.
 import ast
 import hashlib
 import math
-import re
 
 from dataclasses import dataclass
 from typing import Any, NamedTuple
@@ -58,6 +57,20 @@ PENALTY = 1e12  # same sentinel as driver: any real latency is far below
 # claim about the action that the search did not honour.
 SCOPE_OF = {"F-9": "cube", "S-11": "cube", "F-10": "vec", "S-12": "vec"}
 TILE_ACTIONS = set(SCOPE_OF)
+
+
+def draw_tile_bytes(cfg, dtype_bytes, widths=None, *, include_cube=True):
+    """Largest tile footprint, using the site's buffer cost per element."""
+    widths = widths or {}
+    largest = 0
+    for sid, tile in cfg.items():
+        width = widths.get(sid) or dtype_bytes
+        dims = [value for field, value in tile.items() if field.startswith("d")]
+        if dims:
+            largest = max(largest, math.prod(dims) * width)
+        elif include_cube and "mL0" in tile:
+            largest = max(largest, tile["mL0"] * tile["kL0"] * width)
+    return largest
 
 
 def scope_of(catalog_id):
@@ -155,75 +168,34 @@ BYTE_FACTORS = (
     256.0,
 )
 
-_NUM = re.compile(r"-?\d+")
-
-
 # --------------------------------------------------------------------------- keys
+
+
 def structural_signature(src):
-    """Hash of the program with every tile literal erased.
-
-    The ratchet restores the global best before each action, so a tile lever
-    selected twice may be looking at two different programs. Observations taken
-    on the old structure are not evidence about the new one. This changes when
-    the structure changes and not when a tile value does, which is exactly the
-    condition for reusing a study.
-
-    Only the tile CALL's arguments are erased, which is exactly what
-    `apply.apply` rewrites, so a BO step never changes the signature. That
-    holds at every arity: a 1-argument call and a 4-argument call are both erased
-    down to their `<vec>` marker.
-
-    What is still NOT erased is a tile driven through a symbol
-    (`set_vec_tile_shapes(TILE)` with `TILE = 8192` bound elsewhere). Its binding
-    site is an ordinary assignment. `apply` classifies that call `vec_dyn` and
-    leaves it alone, so the two limitations still cancel -- but a literal
-    1-argument call, `set_vec_tile_shapes(8192)`, is now tuned.
-
-    Hashed through the AST, not the text. This used to hash the erased SOURCE,
-    so a reflowed line, a changed comment or a rewritten docstring moved it --
-    and every delta a model writes rewrites comments. Two things paid for that.
-    `_live` un-retires an action the moment the signature moves, so a prune that
-    was supposed to hold "while the structure is unchanged" lapsed on a comment
-    and the selector handed the action back. `lever_key` keys the BO study by it,
-    so the surrogate for that space was discarded and its measurements re-bought
-    from the device. `domain.fingerprint`'s docstring names this exact failure as
-    the reason it does not use this function.
-
-    A renamed variable still moves it. That is deliberate: normalising names away
-    would collapse programs that differ, and unlike a comment a rename is an edit
-    to the program itself.
-    """
     try:
         sites = apply.discover_sites(src)
     except SyntaxError:
         return "unparseable"
-    out, cur = [], 0
-    for s in sorted(sites, key=lambda x: (x.start, x.end)):
-        # Zero-width sites are INSERTION points for a knob the file does not
-        # carry ("write this key here"), not spans of anything, and several of
-        # them share one offset. Erasing them emitted adjacent string literals
-        # inside a call and the result did not parse -- which sent every hash
-        # down the text fallback, the behaviour this was replacing. An absent
-        # knob is absent in both programs being compared, so it contributes
-        # nothing either way.
-        if s.end <= s.start or s.start < cur:
+    return signature_from_spans(src, ((s.start, s.end, s.kind) for s in sites))
+
+
+def signature_from_spans(src, spans):
+    """Hash the program after replacing tunable spans; preserve ties in source order."""
+    pieces, end = [], 0
+    for start, stop, kind in sorted(spans, key=lambda span: span[:2]):
+        if stop <= start or start < end:
             continue
-        out.append(src[slice(cur, s.start)])
-        # Quoted, so the erased program still parses: a tile site spans a whole
-        # call statement, a global site spans one dict value, and a string
-        # literal is legal in both positions.
-        out.append(f'"<{s.kind}>"')
-        cur = s.end
-    out.append(src[cur:])
-    erased = "".join(out)
+        pieces.extend((src[end:start], f'"<{kind}>"'))
+        end = stop
+    erased = "".join([*pieces, src[end:]])
     try:
         tree = ast.parse(erased)
-    except SyntaxError:  # pragma: no cover
-        # The erasure produced something unparseable. Fall back to the text, which
-        # is what this did before -- noisier, never wrong.
-        return hashlib.sha256(erased.encode("utf-8")).hexdigest()[:12]
-    _strip_docstrings(tree)
-    return hashlib.sha256(ast.unparse(tree).encode("utf-8")).hexdigest()[:12]
+    except SyntaxError:
+        normalized = erased
+    else:
+        _strip_docstrings(tree)
+        normalized = ast.unparse(tree)
+    return hashlib.sha256(normalized.encode("utf-8")).hexdigest()[:12]
 
 
 def _strip_docstrings(tree):
@@ -278,34 +250,6 @@ def _is_tile(c, sid=""):
     return any(k.startswith("d") for k in c) or "mL0" in c
 
 
-def draw_tile_bytes(cfg, dtype_bytes, widths=None):
-    """Elements in the largest site, times the dtype. Cube sites report their L0A.
-
-    Arity-agnostic: the vec footprint is the product of however many dimensions
-    the call carries, which is the same quantity `feasibility.py` charges to the
-    unified buffer.
-
-    `widths` is the per-site element width from the derived domain, for the same
-    reason the comment at the harness's call site gives about `dtype_bytes`
-    itself: sizing a bf16 site at fp32 is not conservative, it is wrong, and
-    sizing an fp32 site at the int8 of some other site in the file is wrong in
-    the other direction.
-    """
-    widths = widths or {}
-    n = 0
-    for sid, c in cfg.items():
-        db = widths.get(sid) or dtype_bytes
-        fields = [k for k in c if k.startswith("d")]
-        if fields:
-            p = 1
-            for f in fields:
-                p *= c[f]
-            n = max(n, p * db)
-        elif "mL0" in c:
-            n = max(n, c["mL0"] * c["kL0"] * db)
-    return n
-
-
 def _snap(value, domain):
     """Nearest ladder rung on a log scale.
 
@@ -340,7 +284,12 @@ def _cube_l1(before, after, ax):
     return after[f"{ax}L0"] * (l1 // l0)
 
 
-def _scaled(cfg, byte_factor):
+def _vector_domain(index, arity, value):
+    ladder = space.VEC_TRAILING_CHOICES if index == arity - 1 else space.VEC_CHOICES
+    return space.admit(ladder, value)
+
+
+def _scaled(cfg, byte_factor, vector_domain=None):
     """Multiply every tile site's FOOTPRINT by `byte_factor`, then snap to ladders.
 
     Every dimension moves, not the leading one only. With the leading dimension
@@ -357,13 +306,9 @@ def _scaled(cfg, byte_factor):
         if fields:
             f = byte_factor ** (1.0 / len(fields))
             for i, k in enumerate(fields):
-                dom = (
-                    space.VEC_TRAILING_CHOICES
-                    if i == len(fields) - 1
-                    else space.VEC_CHOICES
-                )
-                d[k] = _snap(c[k] * f, space.admit(dom, c[k]))
-        elif "mL0" in c:
+                ladder = (vector_domain or _vector_domain)(i, len(fields), c[k])
+                d[k] = _snap(c[k] * f, ladder)
+        elif vector_domain is None and "mL0" in c:
             f = byte_factor**0.5  # the L0A footprint is mL0 x kL0
             for k in ("mL0", "kL0", "nL0"):
                 d[k] = _snap(c[k] * f, space.admit(space.CUBE_CHOICES, c[k]))
@@ -383,7 +328,7 @@ def _rung(value, domain, step):
     return d[max(0, min(len(d) - 1, i + step))]
 
 
-def _nudged(cur, idx, step):
+def _nudged(cur, idx, step, vector_domain=None):
     """Move ONE dimension by `step` rungs, leaving the others where they are.
 
     Uniform scaling cannot make a fine footprint change to a multi-dimensional
@@ -405,14 +350,10 @@ def _nudged(cur, idx, step):
         fields = sorted((k for k in c if k.startswith("d")), key=lambda k: int(k[1:]))
         if fields and idx < len(fields):
             f = fields[idx]
-            dom = (
-                space.VEC_TRAILING_CHOICES
-                if idx == len(fields) - 1
-                else space.VEC_CHOICES
-            )
-            d[f] = _rung(c[f], space.admit(dom, c[f]), step)
+            ladder = (vector_domain or _vector_domain)(idx, len(fields), c[f])
+            d[f] = _rung(c[f], ladder, step)
             changed |= d[f] != c[f]
-        elif "mL0" in c and idx < 3:
+        elif vector_domain is None and "mL0" in c and idx < 3:
             ax = ("m", "k", "n")[idx]
             k = f"{ax}L0"
             d[k] = _rung(c[k], space.admit(space.CUBE_CHOICES, c[k]), step)
@@ -423,6 +364,10 @@ def _nudged(cur, idx, step):
 
 
 def _family(cur, dtype_bytes, widths=None):
+    return seed_family(cur, dtype_bytes, widths, apply.MAX_VEC_ARITY)
+
+
+def seed_family(cur, dtype_bytes, widths, arity, *, vector_domain=None):
     """[(tile_bytes, config)] around the current tile, deduplicated, small to large.
 
     Two generators, because they cover different scales. The uniform scalings
@@ -431,23 +376,26 @@ def _family(cur, dtype_bytes, widths=None):
     fine, x1.5 per step, which is what a kernel generated at 64 KB needs to reach
     96 KB without overshooting to 144.
     """
-    seen = {draw_tile_bytes(cur, dtype_bytes, widths)}
+    def footprint(cfg):
+        return draw_tile_bytes(cfg, dtype_bytes, widths, include_cube=vector_domain is None)
+
+    seen = {footprint(cur)}
     fam = []
 
     def add(cfg):
         if cfg is None:
             return
-        nb = draw_tile_bytes(cfg, dtype_bytes, widths)
+        nb = footprint(cfg)
         if nb in seen:
             return
         seen.add(nb)
         fam.append((nb, cfg))
 
     for f in BYTE_FACTORS:
-        add(_scaled(cur, f))
-    for idx in range(apply.MAX_VEC_ARITY):
+        add(_scaled(cur, f, vector_domain))
+    for idx in range(arity):
         for step in (1, -1, 2, -2):
-            add(_nudged(cur, idx, step))
+            add(_nudged(cur, idx, step, vector_domain))
     fam.sort(key=lambda x: x[0])
     return fam
 
@@ -462,17 +410,17 @@ class SeedOptions(NamedTuple):
     dom: Any = None
 
 
-def _band_ok(nb, cfg, bounds, hw, opts):
+def _band_ok(nb, cfg, bounds, hw, opts, feasible=None, verify=None):
     """Whether one family member clears both the byte band and the derived domain."""
     lo, hi = bounds
     if not lo <= nb <= hi:
         return False
-    if not space.static_feasible(cfg, hw)[0]:
+    if not (feasible or space.static_feasible)(cfg, hw)[0]:
         return False
     # And the derived domain, which is where residency lives. The band
     # above bounds the tile's own bytes; it does not know that the site
     # holds several of them at once.
-    return not opts.dom or verify_domain(opts.dom, cfg, opts.dtype_bytes)[0]
+    return not opts.dom or (verify or verify_domain)(opts.dom, cfg, opts.dtype_bytes)[0]
 
 
 def seed_points(src, hw, opts=SeedOptions()):
@@ -508,10 +456,15 @@ def seed_points(src, hw, opts=SeedOptions()):
         for k, v in cur.items()
         if _is_tile(v, k) and (opts.scope is None or k.startswith(opts.scope + "#"))
     }
+    return seeds_from_anchor(cur, hw, opts, _family)
+
+
+def seeds_from_anchor(cur, hw, opts, family, *, feasible=None, verify=None):
+    """Use the measured anchor and the endpoints of its admissible footprint band."""
     if not cur:
         return []
     out = [(cur, opts.current_latency, "current")]
-    fam = _family(cur, opts.dtype_bytes, opts.widths)
+    fam = family(cur, opts.dtype_bytes, opts.widths)
     if not fam:
         return out
 
@@ -521,7 +474,7 @@ def seed_points(src, hw, opts=SeedOptions()):
     # ceiling: without it the floor seed can come out many times larger than
     # the buffer holds, which the harness gate then refuses.
     lo, hi = FLOOR_KB * 1024, ceil_kb(hw) * 1024
-    band = [(nb, cfg) for nb, cfg in fam if _band_ok(nb, cfg, (lo, hi), hw, opts)]
+    band = [(nb, cfg) for nb, cfg in fam if _band_ok(nb, cfg, (lo, hi), hw, opts, feasible, verify)]
     if band:
         out.append((band[0][1], None, "floor"))
         if len(band) > 1:
@@ -530,41 +483,34 @@ def seed_points(src, hw, opts=SeedOptions()):
 
 
 # --------------------------------------------------------------------------- study
+
+
 def rebuild_study(record, sites, groups, anchor, seed=0):
-    """Reconstruct the Optuna study from the trials persisted in the state file.
+    return replay_study(record, seed, lambda key, held: _dist(key, sites, groups, anchor, held))
 
-    Every value a persisted trial HOLDS is admitted into its own distribution,
-    not only the current anchor's. The ladders are a sampling grid, and the
-    anchor moves: a kernel whose G_TILE is 12 (off-ladder) seeds a trial at
-    `vec#0.d0 = 12`, and the moment the core proposes 24 as the new anchor, a
-    distribution built from the anchor alone no longer contains 12 and the
-    replay raises -- `ValueError: '12' not in (1, 2, 4, 8, 16, 24, ...)` --
-    and takes the rest of the campaign with it.
 
-    A trial the study still refuses is DROPPED and counted, never raised: a
-    proposal that cannot be made is a proposal the caller does without, and it
-    must not cost the measurement that asked for it.
-    """
+def replay_study(record, seed, distribution, accept_params=None):
+    """Rebuild a seeded TPE study, retaining off-grid values from completed trials."""
     import optuna
 
     optuna.logging.set_verbosity(optuna.logging.WARNING)
     study = optuna.create_study(
         direction="minimize",
-        # 3, not the default 10. Two of the three seeds are already observations
-        # by the time the sampler is consulted, so the acquisition step is doing
-        # work from the fourth candidate rather than the eleventh.
         sampler=optuna.samplers.TPESampler(seed=seed, n_startup_trials=3),
     )
     trials = [t for t in record.get("trials", []) if t.get("value") is not None]
     held = held_values(record)
     dropped = 0
     for t in trials:
+        if accept_params is not None and not accept_params(t.get("params")):
+            dropped += 1
+            continue
         try:
             study.add_trial(
                 optuna.trial.create_trial(
                     params=t["params"],
                     distributions={
-                        k: _dist(k, sites, groups, anchor, held.get(k))
+                        k: distribution(k, held.get(k))
                         for k in t["params"]
                     },
                     value=float(t["value"]),
@@ -624,7 +570,7 @@ def _dist(name, sites, groups, anchor, held=None):
                 else None
             )
             return optuna.distributions.CategoricalDistribution(
-                _with_held(space.admit(base, val), held)
+                with_held(space.admit(base, val), held)
             )
         base = space.CUBE_CHOICES
     elif field.startswith("d"):
@@ -636,11 +582,11 @@ def _dist(name, sites, groups, anchor, held=None):
     else:
         base = space.GLOBAL_DOMAINS.get(space.global_knob(sid), [])
     return optuna.distributions.CategoricalDistribution(
-        _with_held(space.admit(base, a.get(field)), held)
+        with_held(space.admit(base, a.get(field)), held)
     )
 
 
-def _with_held(base, held):
+def with_held(base, held):
     """`base`, plus every value the persisted trials already hold."""
     extra = {v for v in (held or ()) if v not in base}
     return sorted(set(base) | extra, key=lambda x: (str(type(x)), x)) if extra else base
@@ -664,7 +610,7 @@ class AskOptions:
     seed: int = 0
 
 
-def _fill_seeds(rec, sites, pts):
+def fill_seeds(rec, sites, pts, *, checked_params=None):
     """Spend the seed points: record the ones already measured, queue the rest.
 
     A seed that carries a value was measured by somebody else, so it becomes an
@@ -673,10 +619,14 @@ def _fill_seeds(rec, sites, pts):
     rec["seeded"] = True
     rec["queue"] = []
     for cfg, val, label in pts:
+        if checked_params is not None:
+            params = checked_params(cfg, label)
+            if params is None:
+                continue
         if val is not None:
             rec["trials"].append(
                 {
-                    "params": space.flatten(cfg, sites),
+                    "params": params if checked_params is not None else space.flatten(cfg, sites),
                     "value": float(val),
                     "label": label,
                     "status": "ok",
@@ -687,14 +637,14 @@ def _fill_seeds(rec, sites, pts):
             rec["queue"].append({"config": cfg, "label": label})
 
 
-def _next_seed(rec, sites, scope):
+def next_seed(rec, sites, scope, flatten=None):
     """The next queued seed as (config, meta), or None when the queue is empty."""
     queue = rec.get("queue") or []
     if not queue:
         return None
     item = queue.pop(0)
     rec["pending"] = {
-        "params": space.flatten(item["config"], sites),
+        "params": (flatten or space.flatten)(item["config"], sites),
         "label": item["label"],
     }
     return item["config"], {
@@ -723,30 +673,27 @@ def draw_one_site(study, ctx):
 
     Returns (trial, config, site id).
     """
-    rec, sites, anchor = ctx["rec"], ctx["sites"], ctx["anchor"]
-    site = sites[rec.get("cursor", 0) % len(sites)]
+    sites, anchor = ctx["sites"], ctx["anchor"]
+    site = sites[ctx["rec"].get("cursor", 0) % len(sites)]
+    return draw_cluster(study, ctx, [site], site.id, space,
+                        lambda name, held: _dist(name, sites, None, anchor, held))
+
+
+def draw_cluster(study, ctx, moving, selected, coordinates, distribution, groups=None):
+    """Advance the cursor once and ask only for the coordinates of the chosen sites."""
+    rec, anchor = ctx["rec"], ctx["anchor"]
     rec["cursor"] = rec.get("cursor", 0) + 1
-    at_anchor = {site.id: dict(anchor.get(site.id, {}))}
-    # The same `held` the replay used. Without it this asked for a distribution
-    # built from the anchor alone, while the study held trials replayed against
-    # a wider one -- so a kernel whose G_TILE is 12 (off-ladder) rebuilt
-    # cleanly and then raised on the very next draw: `'12' not in (1, 2, 4, 8,
-    # 16, 24, ...)`. Guarded, that is not a crash any more, but it is still the
-    # lever dead for the rest of the action, which leaves the coder guessing
-    # tile numbers by hand.
+    at_anchor = {site.id: dict(anchor.get(site.id, {})) for site in moving}
     held = held_values(rec)
-    trial = study.ask(
-        {
-            k: _dist(k, sites, None, anchor, held.get(k))
-            for k in space.flatten(at_anchor, [site])
-        }
-    )
+    trial = study.ask({key: distribution(key, held.get(key))
+                       for key in coordinates.flatten(at_anchor, moving, groups)})
     cfg = dict(anchor)
-    cfg.update(space.unflatten(trial.params, [site]))
-    return trial, cfg, site.id
+    cfg.update(coordinates.unflatten(trial.params, moving, groups))
+    return trial, cfg, selected
 
 
-def gate_draw(cfg, hw, dtype_bytes, widths=None, dom=None):
+def gate_draw(cfg, hw, dtype_bytes, widths=None, dom=None, *,
+              feasible=None, verify=None, footprint=None):
     """The free gates a draw must clear. Returns (ok, status, reason).
 
     The widened ladder spans 1 to 16384 per dimension, so the product reaches 268M
@@ -765,14 +712,14 @@ def gate_draw(cfg, hw, dtype_bytes, widths=None, dom=None):
     other direction, halving the buffer for a residency-1 site is 2x too tight,
     and rejects tiles the kernel runs well at.
     """
-    ok, reason = space.static_feasible(cfg, hw)
+    ok, reason = (feasible or space.static_feasible)(cfg, hw)
     if not ok:
         return False, "infeasible_static", reason
     if dom:
-        ok, why = verify_domain(dom, cfg, dtype_bytes)
+        ok, why = (verify or verify_domain)(dom, cfg, dtype_bytes)
         return (True, "ok", reason) if ok else (False, "over_buffer", why)
     cap = ceil_kb(hw)
-    nb = draw_tile_bytes(cfg, dtype_bytes, widths)
+    nb = (footprint or draw_tile_bytes)(cfg, dtype_bytes, widths)
     if nb > cap * 1024:
         return (
             False,
@@ -791,15 +738,22 @@ def _tpe_candidate(rec, sites, src, scope, hw, opts):
     in_scope = {s.id for s in sites}
     ctx = {"rec": rec, "sites": sites, "anchor": anchor}
     study = rebuild_study(rec, sites, None, anchor, opts.seed)
+    return draw_until_feasible(study, ctx, scope, in_scope, hw, opts,
+                               draw_one_site, gate_draw, lambda trial, cfg: trial.params)
+
+
+def draw_until_feasible(study, ctx, scope, in_scope, hw, opts, draw, gate, coordinates):
+    """Record each free rejection and return the first feasible scoped proposal."""
+    rec = ctx["rec"]
     tried_sites = []
     for _ in range(32):  # gate rejections are free; keep asking
-        trial, cfg, site_id = draw_one_site(study, ctx)
+        trial, cfg, site_id = draw(study, ctx)
         tried_sites.append(site_id)
-        ok, status, reason = gate_draw(
+        ok, status, reason = gate(
             cfg, hw, opts.dtype_bytes, opts.vec_dtype_bytes, opts.domain
         )
         if ok:
-            rec["pending"] = {"params": trial.params, "label": "tpe"}
+            rec["pending"] = {"params": coordinates(trial, cfg), "label": "tpe"}
             # Feasibility is judged on the WHOLE program -- the buffer is shared,
             # so a cube tile's legality depends on what the vec sites hold -- but
             # what goes back is the scoped subset. The caller writes what it is
@@ -811,7 +765,7 @@ def _tpe_candidate(rec, sites, src, scope, hw, opts):
             )
         rec["trials"].append(
             {
-                "params": trial.params,
+                "params": coordinates(trial, cfg),
                 "value": PENALTY,
                 "label": "tpe",
                 "status": status,
@@ -859,7 +813,7 @@ def ask(state_bo, catalog_id, src, hw, opts=None):
 
     # --- seeds first -------------------------------------------------------
     if not rec["seeded"]:
-        _fill_seeds(
+        fill_seeds(
             rec,
             sites,
             seed_points(
@@ -874,7 +828,7 @@ def ask(state_bo, catalog_id, src, hw, opts=None):
                 ),
             ),
         )
-    seeded = _next_seed(rec, sites, scope)
+    seeded = next_seed(rec, sites, scope)
     if seeded:
         return seeded
 
@@ -888,6 +842,11 @@ def tell(state_bo, catalog_id, src, s, p):
     rec = state_bo.get(key)
     if not rec or not rec.get("pending"):
         return False
+    return record_pending(rec, s, p)
+
+
+def record_pending(rec, s, p):
+    """Commit the pending observation once its source has been checked by the frontend."""
     pend = rec.pop("pending")
     rec["trials"].append(
         {
@@ -898,3 +857,8 @@ def tell(state_bo, catalog_id, src, s, p):
         }
     )
     return True
+
+
+_fill_seeds = fill_seeds
+_next_seed = next_seed
+_with_held = with_held

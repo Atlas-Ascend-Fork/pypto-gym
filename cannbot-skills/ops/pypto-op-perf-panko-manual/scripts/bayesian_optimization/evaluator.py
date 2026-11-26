@@ -31,7 +31,6 @@ leaves them None: run_cmd = subprocess, measure_fn = the frozen scripts/measure_
 pass fakes so the whole (s, p) contract, correctness gating, and base-restore run without an NPU.
 """
 
-import json
 import os
 import re
 import shlex
@@ -40,8 +39,14 @@ import signal
 import subprocess
 import sys
 import time
+from pathlib import Path
 
 from . import apply
+
+if __package__ == "bayesian_optimization":
+    from jsonio import last_object
+else:
+    from ..jsonio import last_object
 
 
 FIRST_CALL_MARKER = "[panko-progress] first_call_done"
@@ -190,15 +195,16 @@ def _run_one(step, cwd, timeout, env=None):
     return (r.stdout or ""), r.returncode
 
 
-def run_command(cmd, timeout, env=None):
+def run_command(cmd, timeout, env=None, *, run_step=None):
     """Run a correctness command without a shell. Returns (combined output, exit code).
 
     `&&` semantics: the steps run in order and stop at the first failure.
     """
     steps, cwd = command_steps(cmd)
+    run_step = run_step or _run_one
     text, code = "", 0
     for step in steps:
-        out, code = _run_one(step, cwd, timeout, env)
+        out, code = run_step(step, cwd, timeout, env)
         text += out
         if code:
             break
@@ -467,7 +473,8 @@ class RealEvaluator:
                  lint_root=None, lint_stage=7,
                  warmup=1, runs=9, agg="median", eval_timeout_s=300,
                  run_cmd=None, measure_fn=None,
-                 fault_backoff_s=(30, 90), sleep_fn=None, evaluation_mode="subprocess"):
+                 fault_backoff_s=(30, 90), sleep_fn=None, evaluation_mode="subprocess",
+                 write_source=None):
         """test_command : shell string that exits 0 iff golden+layout pass (from the dispatch prompt).
         lint_root      : path to the pypto-op-lint hook directory under
                          cannbot-skills/plugins-official/pypto-op-orchestrator/hooks
@@ -481,6 +488,7 @@ class RealEvaluator:
                          waits bound a trial at about two extra minutes, which
                          is cheaper than one lost run by a wide margin.
         sleep_fn       : injected in tests so the schedule is asserted, not waited on.
+        write_source   : frontend staging hook. Its on-disk bytes identify the trial.
         """
         self.op = op
         self.op_dir = op_dir
@@ -522,7 +530,9 @@ class RealEvaluator:
             raise ValueError("injected runners require subprocess mode")
         self.evaluation_mode = evaluation_mode
         self._session_result = {}
-        with open(op_file, "r", encoding="utf-8") as f:
+        self.write_source = write_source
+        self.last_trial_bytes = None
+        with open(op_file, "r", encoding="utf-8", newline="" if write_source else None) as f:
             self.base_src = f.read()
         # Discover the per-site tunable tile calls once; pass self.sites to driver.run_bo.
         try:
@@ -541,11 +551,12 @@ class RealEvaluator:
         # under whatever `last_detail` still held attributed one trial's compiler
         # error to another trial's parameters.
         self.last_detail = ""
+        self.last_trial_bytes = None
         new_src, n = apply.apply(self.base_src, site_configs)
         if n == 0:
             return 0, None  # nothing to apply -> guard (misconfigured site ids)
-        self._write(new_src)
         try:
+            self.last_trial_bytes = self._write(new_src)
             # `_run_test` distinguishes "this candidate is wrong" from "the device
             # could not be used", and waits out the second. Only the first is a
             # verdict; the second must not be charged, counted, or learned from.
@@ -795,8 +806,12 @@ class RealEvaluator:
         )
 
     def _write(self, src):
+        if self.write_source is not None:
+            self.write_source(self.op_file, src)
+            return Path(self.op_file).read_bytes()
         with open(self.op_file, "w", encoding="utf-8") as f:
             f.write(src)
+        return None
 
     def _lint_ok(self):
         if self.evaluation_mode != "subprocess":
@@ -873,13 +888,9 @@ class RealEvaluator:
         # Kept so `_env_fault` can see a device fault raised during measurement,
         # not only during the correctness command.
         self._last_output = out
-        for line in reversed(out.strip().splitlines()):
-            line = line.strip()
-            if line.startswith("{"):
-                try:
-                    return json.loads(line)
-                except ValueError:
-                    continue
+        result = last_object(out)
+        if result is not None:
+            return result
         if timed_out:
             return classify_timeout(out)
         return {}

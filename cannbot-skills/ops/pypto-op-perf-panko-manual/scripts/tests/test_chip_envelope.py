@@ -87,6 +87,19 @@ class OneEnvelopeTest(unittest.TestCase):
         _, domain = bayesian.block.hw_for(str(self.op_file), None, env)
         self.assertEqual(domain.get("ub_bytes"), 248 * 1024)
 
+    def test_vector_seed_uses_hardware_capacity_without_a_domain(self):
+        tile = {"vec#0": {"d0": 16, "d1": 32}}
+        hw = bayesian.space.HW(ub_budget_kb=64, dtype_bytes=4)
+        self.assertEqual(bayesian.seed.features(tile, hw)["vec#0.ub"], 2048 / 65536)
+        domain = {"ub_bytes": 32768}
+        self.assertEqual(bayesian.seed.features(tile, hw, domain)["vec#0.ub"], 2048 / 32768)
+
+    def test_vector_seed_omits_unknown_occupancy_but_keeps_trip_count(self):
+        tile = {"vec#0": {"d0": 16, "d1": 32}}
+        features = bayesian.seed.features(tile, bayesian.space.HW(), {"capacity_elems": 1024})
+        self.assertNotIn("vec#0.ub", features)
+        self.assertEqual(features["vec#0.trips"], 2)
+
     def test_a_run_carries_its_own_envelope(self):
         """A resumed campaign keeps validating against what it started with."""
         env = harness.chip_envelope({"chip_envelope": {"ub_kb": 248, "l0c_kb": 256}})
@@ -225,8 +238,8 @@ class ShadowedCallsRunTest(unittest.TestCase):
 
     def test_hw_for_runs(self):
         hw, domain = bayesian.block.hw_for(str(self.op_file))
-        self.assertTrue(hw.ub_budget_kb)
-        self.assertIsInstance(domain, dict)
+        self.assertEqual(hw.ub_budget_kb, 0)
+        self.assertEqual(domain["ub_bytes"], 0)
 
     def test_memory_key_runs(self):
         _, domain = bayesian.block.hw_for(str(self.op_file))

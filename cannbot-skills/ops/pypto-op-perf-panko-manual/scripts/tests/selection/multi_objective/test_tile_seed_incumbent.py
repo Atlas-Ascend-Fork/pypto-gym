@@ -28,6 +28,7 @@ import hashlib
 import sys
 import tempfile
 import unittest
+from unittest.mock import patch
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parents[2]))
@@ -76,6 +77,18 @@ class SeedIncumbentTest(unittest.TestCase):
         self.assertIsNone(self._seed_value(st))
         self.assertEqual(self._pending(st), "current")
         self.assertFalse(res.get("applied"), "the current config is what is on disk")
+
+    def test_unmeasured_registered_incumbent_keeps_staged_crlf_identity(self):
+        import _registered_backend
+
+        original = KERNEL.replace("\n", "\r\n").encode()
+        self.f.write_bytes(original)
+        with patch("panko.backend.current", return_value=_registered_backend):
+            proposal = self._propose(self._state({}))
+        self.assertTrue(proposal["requires_measurement"])
+        self.assertEqual(proposal["sites"], 0)
+        self.assertEqual(proposal["code_hash"], hashlib.sha256(original).hexdigest())
+        self.assertEqual(self.f.read_bytes(), original)
 
     def test_an_incorrect_measurement_is_not_an_incumbent(self):
         st = self._state({self.base: {"s": 0, "p": FRONT_BASE_US, "m": {}},

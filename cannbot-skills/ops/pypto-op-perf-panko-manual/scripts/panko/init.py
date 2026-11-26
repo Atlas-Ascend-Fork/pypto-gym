@@ -23,8 +23,8 @@ import evaluation_session
 from .config import (DEFAULT_CONFIG, OPTUNA_MIN_VERSION, Refusal, SEARCH_PROTOCOL, SEED_V, SKILL_ROOT, _diag_log,
                      bayesian, bayesian_capability, out, predicates)
 from .state import (_apply_chip_memory, _code_version, _domain_state, _pypto_defaults, _resolve_envelope,
-                    confirm_chip, debug_options_signature, file_hash, next_id, npath, op_file_path, read_text, save,
-                    snapshot, wrapper_signature)
+                    confirm_chip, debug_options_signature, file_hash, next_id, npath, occupancy_options, op_file_path,
+                    read_text, save, snapshot, wrapper_signature)
 from .measurement import (_preopt_metrics, cli_pipes, cli_samples, compute_j, derive_eval_timeout, objective_values,
                           objectives_of, observe_noise, parse_objectives)
 from .front import _hv_reference_report, archive_record, refuse_no_hv_reference
@@ -315,25 +315,29 @@ def _init_state(a, cfg, opening):
     }
     st["nodes"]["held"] = []
     _init_noise(st, a, opening, preopt_m)
+    from .backend import current
+    if current() is not None:
+        st.update(current().state_metadata(a))
     return st
 
 
 def _seed_frontier(st, a, cfg, seeds):
     """Seed the frontier from the action catalog. Returns the predicate reading."""
-    preds = (predicates.compute(a.op_file or "", a.op_dir)
+    preds = (predicates.compute(a.op_file or "", a.op_dir, **occupancy_options(st))
              if (predicates and cfg.get("action_preconditions", True)) else None)
     st["predicates"] = preds
     learn = cfg.get("prior_gain_source", DEFAULT_CONFIG["prior_gain_source"]) == "learned"
     _snapshot_prior_table(st, a.op_dir)
     table = action_posterior.load_table(_prior_table_path(st)) if learn else None
     st["prior_gain_source"] = ("learned" if table else "catalog")
+    from .backend import current as current_backend
     for sd in seeds:
         if sd.get("conversion") and not cfg.get("conversion_actions", True):
             continue
         node = {
             "id": next_id(st, "u"), "parent": "root", "stage": sd["stage"],
             "catalog_id": sd.get("id"),   # keep the F-x/S-x/I-x id for symptom matching
-            "delta": sd["delta"], "V": float(sd.get("prior_gain", 0.5)),
+            "delta": sd["delta"], "V": (0.5 if current_backend() is not None else float(sd.get("prior_gain", 0.5))),
             "prior_gain": float(sd.get("prior_gain", 0.5)), "tried": 0,
             "requires": sd.get("requires", []),
             "prior_gain_catalog": float(sd.get("prior_gain", 0.5)),
@@ -498,6 +502,9 @@ def cmd_init(a):
                                        op_file_path(st, a.op_dir),
                                        cli_pipes(a, "preopt_"))  # first-move symptom bias
     _init_snapshot(a, op_file, opening["preopt_hash"])
+    from .backend import current
+    if current() is not None:
+        current().verify_initialization(a, st)
     save(a.op_dir, st)
     evaluation_session.clear_terminal_marker(a.op_dir)
     _init_baseline_log(a, opening, objs, pre_vals)
@@ -628,6 +635,10 @@ def _init_p_ref(a, cfg, user_cfg):
     """
     if a.p_ref is not None:
         return "explicit:cli"
+    from .backend import current
+    if current() is not None:
+        a.p_ref, provenance = current().default_reference
+        return provenance
     a.p_ref = float(a.preopt_p)
     if "success_stop" not in user_cfg:
         cfg["success_stop"] = False

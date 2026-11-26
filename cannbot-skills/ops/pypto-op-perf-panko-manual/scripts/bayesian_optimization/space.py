@@ -241,7 +241,7 @@ class HW:
     # these two need only the program and the chip. Leaving the footprint bound
     # switched off is what let a 16384-element tile reach the device against a
     # buffer that holds about 12288.
-    ub_budget_kb: int = 192
+    ub_budget_kb: int = 0  # Unknown until the target supplies a capacity.
     # 0 => unknown, rule off. Supplied by the optimizer as a FACT about
     # residency, never as a bound.
     n_live_tiles: int = 0
@@ -315,13 +315,13 @@ def kind_of(sites, sid):
 
 
 # ------------------------------------------------------------------------------- per-site space
-def admit(base, val):
+def admit(base, val, *, key=None):
     """Base domain, guaranteeing the anchor (current) value is a legal choice. Optuna categoricals
     must contain the enqueued warm-start value, and real kernels use values outside our static sets
     (device_sched_mode=3, a 40-row tile, a 10240-wide tile, ...) — so always include the current
     one. The ladder is a sampling grid, never a constraint on what the kernel may already hold.
     """
-    return base if (val is None or val in base) else sorted(set(base) | {val})
+    return base if (val is None or val in base) else sorted(set(base) | {val}, key=key)
 
 
 CONST_SCALES = [1 / 8, 1 / 4, 1 / 2, 1, 2, 4, 8]
@@ -393,23 +393,19 @@ def vec_domain(site_id, field, fields, anchor_cfg, domain=None):
     per candidate, too narrow is invisible.
     """
     base = VEC_TRAILING_CHOICES if field == fields[-1] else VEC_CHOICES
-    derived = (domain or {}).get("per_site", {}).get(site_id, {}).get(field)
-    ladder = list(derived if derived else base)
-    # Drop rungs that overflow the UB even with every other dimension at its
-    # smallest -- no feasible tile can use them, so sampling them only burns TPE's
-    # startup draws (the ladder reaches 16384 against a cap that can be near 1024).
-    # This removes no reachable config; `dom` still re-admits the anchor, so the
-    # running kernel's value is a legal choice even if it sits above the cap.
-    # Aliased: the bare import rebound the PARAMETER `domain` to the module, so
-    # the derived domain was lost and the module itself was passed in its place.
     from . import domain as domain_mod
-
-    cap = domain_mod.vec_ladder_cap(domain, site_id, field, fields)
-    if cap:
-        pruned = [v for v in ladder if v <= cap]
-        if pruned:  # never empty the ladder
-            ladder = pruned
+    ladder = capped_ladder(domain, site_id, field, base,
+                           domain_mod.vec_ladder_cap(domain, site_id, field, fields))
     return admit(ladder, (anchor_cfg or {}).get(field))
+
+
+def capped_ladder(domain, site_id, field, fallback, cap):
+    """Use a derived ladder when available; apply the cap only if a rung remains."""
+    derived = (domain or {}).get("per_site", {}).get(site_id, {}).get(field)
+    ladder = list(derived or fallback)
+    if cap:
+        return [v for v in ladder if v <= cap] or ladder
+    return ladder
 
 
 def tied_lead_domain(tie, sites, anchor=None, domain=None):
@@ -551,7 +547,7 @@ def _draw_site(trial, site, r, ctx):
     return _draw_vec(trial, r, a, ctx)
 
 
-def _apply_tie(cfg, tie):
+def _apply_tie(cfg, tie, fields_of=vec_fields):
     """Write the shared leading value back over every member of a tied group.
 
     A tied site is drawn independently (it is its own `rep`), so without this the
@@ -562,7 +558,7 @@ def _apply_tie(cfg, tie):
         head = next((cfg.get(g) for g in grp if g in cfg), None)
         if not head:
             continue
-        f0 = next(iter(vec_fields(head)), None)
+        f0 = next(iter(fields_of(head)), None)
         if f0 is None:
             continue
         for sid in grp:
@@ -591,14 +587,23 @@ def suggest(trial, sites, opts=None):
         # `tied_lead_domain`.
         "lead_dom": tied_lead_domain(opts.tie, sites, opts.anchor, opts.domain),
     }
+    cfg = draw_grouped(trial, sites, rep, ctx, _draw_site)
+    _apply_tie(cfg, opts.tie)
+    return cfg
+
+
+def draw_grouped(trial, sites, rep, ctx, draw_site, *, movable=None, anchor=None):
+    """Draw each representative once. Held sites keep their values outside the trial."""
     drawn = {}
     cfg = {}
-    for s in sites:
-        r = rep[s.id]
-        if r not in drawn:
-            drawn[r] = _draw_site(trial, s, r, ctx)
-        cfg[s.id] = dict(drawn[r])
-    _apply_tie(cfg, opts.tie)
+    for site in sites:
+        if movable is not None and site.id not in movable:
+            cfg[site.id] = dict(anchor.get(site.id) or {})
+            continue
+        representative = rep[site.id]
+        if representative not in drawn:
+            drawn[representative] = draw_site(trial, site, representative, ctx)
+        cfg[site.id] = dict(drawn[representative])
     return cfg
 
 
@@ -640,19 +645,26 @@ def flatten(site_configs, sites, groups=None, tie=None):
     """
     rep = _rep(sites, groups)
     lead = _tie_rep(sites, tie)
+    return encode_sites(site_configs, sites, rep, lead, vec_fields, cube_encoder=_cube_to_params)
+
+
+def encode_sites(site_configs, sites, rep, lead, fields_of, *, partial=False, cube_encoder=None):
+    """Encode a site map using its group representatives and leading-axis ties."""
     params = {}
     for s in sites:
         r = rep[s.id]
+        if partial and site_configs.get(s.id) is None:
+            continue
         cfg = site_configs[s.id]
-        if s.kind == "cube":
+        if cube_encoder and s.kind == "cube":
             # L1 is encoded as a multiplier so the params match the fixed domain
             # `suggest` draws from; the config keeps the actual L1 value.
-            params.update(_cube_to_params(r, cfg))
+            params.update(cube_encoder(r, cfg))
             continue
         # Field-agnostic for the rest: the config carries whatever knobs the site
         # has, which for a vec site is however many arguments the call was written
         # with.
-        fields = vec_fields(cfg) if s.kind == "vec" else []
+        fields = fields_of(cfg) if s.kind == "vec" else []
         for field, v in cfg.items():
             params[_lead_key(lead, r, field, fields)] = v
     return params
@@ -662,11 +674,16 @@ def unflatten(params, sites, groups=None, tie=None):
     """Flat Optuna params -> per-site config dict."""
     rep = _rep(sites, groups)
     lead = _tie_rep(sites, tie)
+    return decode_sites(params, sites, rep, lead, cube_decoder=_params_to_cube)
+
+
+def decode_sites(params, sites, rep, lead, *, cube_decoder=None):
+    """Recover local coordinates and the shared leading axis for each site."""
     cfg = {}
     for s in sites:
         pre = rep[s.id] + "."
-        if s.kind == "cube":
-            cfg[s.id] = _params_to_cube(pre, params)
+        if cube_decoder and s.kind == "cube":
+            cfg[s.id] = cube_decoder(pre, params)
             continue
         own = {}
         for k, v in params.items():
@@ -963,9 +980,12 @@ def repair(cfg, check, ctx=RepairContext()):
     return None, ctx.max_steps
 
 
-def _is_capacity(why):
+def is_capacity(why):
     return (
         why.startswith(("L0A", "L0B", "L0C", "L1 tile", "largest tile"))
         or " UB" in why
         or "head_dim" in why
     )
+
+
+_is_capacity = is_capacity

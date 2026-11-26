@@ -17,7 +17,7 @@ faults ends the run on the device, not on the search.
 import evaluation_session
 
 from .config import DEFAULT_CONFIG, FREE, Refusal, UNMEASURED_FIELDS, _bound, bayesian, out, predicates
-from .state import _structure, live_frontier, op_file_path, ratchet_best_hash, restore, save
+from .state import _structure, live_frontier, occupancy_options, op_file_path, ratchet_best_hash, restore, save
 from .measurement import objective_values, objectives_of
 from .front import delivery_point
 
@@ -48,7 +48,7 @@ def _admit(st, op_dir):
     """
     if predicates is None or not st["config"].get("action_preconditions", True):
         return []
-    preds = predicates.compute(op_file_path(st, op_dir) or "", op_dir)
+    preds = predicates.compute(op_file_path(st, op_dir) or "", op_dir, **occupancy_options(st))
     st["predicates"] = preds
     pruned = set(st["nodes"].get("pruned", []))
     admitted = []
@@ -455,7 +455,7 @@ def stop_condition(st, a):
     return None
 
 
-def block_budget(pr, cfg, a):
+def block_budget(pr, cfg, a, *, share_floor=None):
     """How many device trials this block may spend.
 
     Three limits, and the block gets the smallest: what is left of the run
@@ -486,8 +486,9 @@ def block_budget(pr, cfg, a):
         # left: `max(remaining, cap)` would top up a block that had already
         # overspent, and the share could then never bind.
         total_allowed = int(share * pr["evals_used"])
-        if cap:
-            total_allowed = max(total_allowed, cap)
+        floor = cap if share_floor is None else share_floor
+        if floor:
+            total_allowed = max(total_allowed, floor)
         limits.append(max(0, total_allowed - spent))
     if cap:
         limits.append(cap)

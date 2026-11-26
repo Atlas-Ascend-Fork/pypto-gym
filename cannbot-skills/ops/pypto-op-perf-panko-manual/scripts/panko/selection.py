@@ -13,18 +13,20 @@ The learned prior and its store, the Thompson draw, the symptom boost, and
 the tile lever that proposes numbers the model cannot.
 """
 
-import hashlib
+import io
 import json
 import math
 import os
 import shutil
 import time
+import tokenize
+from pathlib import Path
 
 import action_posterior
 import prior_store
 
 from .config import DEFAULT_CATALOG, DEFAULT_CONFIG, SYMPTOM_ACTIONS, SYMPTOM_THRESH, bayesian, w_stage
-from .state import _domain_state, chip_envelope, op_file_path, open_node, read_text, sdir
+from .state import _domain_state, chip_envelope, file_hash, op_file_path, open_node, sdir
 from .measurement import _occupancies, incumbent_latency, objectives_of
 from .front import demand_hint_text
 from .log import log_open_action
@@ -133,7 +135,7 @@ def _symptom_reboost(st, util, bubble, op_file=None, pipes=None):
         util = bubble = 0.0
 
     active = []
-    occ, l1 = _occupancies(op_file)
+    occ, l1 = _occupancies(op_file, st)
     if occ is not None and occ < SYMPTOM_THRESH["occupancy"]:
         active.append("occupancy")
     if l1 is not None and l1 < SYMPTOM_THRESH["l1_occupancy"]:
@@ -187,6 +189,13 @@ def _retune_verdict(st, op_file):
                     "resident."}
 
 
+def _read_tile_source(op_file):
+    """Read one artifact for its cache identity and decode it for Python analysis."""
+    data = Path(op_file).read_bytes()
+    encoding, _ = tokenize.detect_encoding(io.BytesIO(data).readline)
+    return data, data.decode(encoding), encoding
+
+
 def _tile_bayes_tell(st, op_dir, parent_id, s, p):
     """Report the measurement to the study that proposed it. Silent when the
     action is not a BO lever: every other action still goes through the model.
@@ -200,8 +209,10 @@ def _tile_bayes_tell(st, op_dir, parent_id, s, p):
     op_file = op_file_path(st, op_dir)
     if not op_file or not os.path.exists(op_file):
         return
-    src = read_text(op_file)
-    bayesian.lever.tell(st.setdefault("bayesian_optimization_studies", {}), cid, src, s, p)
+    _, src, _ = _read_tile_source(op_file)
+    from .backend import current
+    context = current().tile_constants(st, op_file, src) if current() else {}
+    bayesian.lever.tell(st.setdefault("bayesian_optimization_studies", {}), cid, src, s, p, **context)
 
 
 def _expansion_demand(st, demand):
@@ -261,8 +272,11 @@ def _log_selection(op_dir, st, best, rec, sel):
                     + f" · of {len(rec['candidates'])} candidates")
 
 
-def _selects_path(op_dir):
+def selects_path(op_dir):
     return os.path.join(sdir(op_dir), "selects.jsonl")
+
+
+_selects_path = selects_path
 
 
 def record_select(op_dir, st, frontier, chosen, sel):
@@ -448,6 +462,9 @@ def _record_outcome(st, a, outcome, arc_verdict=None, accepted=None):
            "code_version": st.get("code_version")}
     shared = os.path.join(prior_store.store_dir(soc=_soc(st)),
                           f"{_campaign_id(st)}.jsonl")
+    from .backend import current
+    if current() is not None and not current().EXPORT_OUTCOMES:
+        shared = None
     errs = prior_store.append_outcome(
         row, os.path.join(sdir(a.op_dir), "action_outcomes.jsonl"), shared)
     if errs:
@@ -589,7 +606,7 @@ def tile_bayes_propose(st, op_dir, node):
         return {"applied": False,
                 "reason": f"op_file not found: {op_file!r} (cwd={os.getcwd()!r}). "
                           f"bayesian_optimization_tile_search is ON but the lever cannot read the kernel."}
-    src = read_text(op_file)
+    source_bytes, src, encoding = _read_tile_source(op_file)
     studies = st.setdefault("bayesian_optimization_studies", {})
     # The same 2x `cmd_block` threads below, in the one path that never got it.
     # `bayesian.space.HW` defaults `dtype_bytes` to 4 and so does `bayesian.lever.ask`, while
@@ -607,7 +624,9 @@ def tile_bayes_propose(st, op_dir, node):
     # which it can then never climb back to. Meanwhile the block path, correct
     # at 2 B, kept working: the same search_state.json says "at 2B" under
     # `blocks` and "at 4B" under `bayesian_optimization_studies`.
-    hw, domain = bayesian.block.hw_for(op_file, st.get("live_tiles"), chip_envelope(st))
+    from .backend import current
+    context = current().tile_constants(st, op_file, src) if current() else {}
+    hw, domain = bayesian.block.hw_for(op_file, st.get("live_tiles"), chip_envelope(st), **context)
     cfg, meta = bayesian.lever.ask(
         studies, node["catalog_id"], src, hw,
         bayesian.lever.AskOptions(
@@ -617,16 +636,22 @@ def tile_bayes_propose(st, op_dir, node):
             # The incumbent is the program ON DISK, which `select` has just
             # restored -- the front base, not necessarily the global best. Same
             # clock as the trials it seeds, and the same rule as `_block_search`.
-            current_latency=incumbent_latency(st, src)))
+            current_latency=incumbent_latency(st, source_bytes)))
     if cfg is None:
         return {"applied": False, "reason": meta.get("reason", "no candidate")}
-    new_src, n = bayesian.apply.apply(src, cfg)
+    new_src, n = bayesian.apply.apply(src, cfg, **context)
     if not n or new_src == src:
+        if current() is not None:
+            return {"applied": True, "requires_measurement": True, "config": cfg,
+                    "label": meta.get("label"), "trial": meta.get("trial"), "sites": 0,
+                    "code_hash": file_hash(op_file)}
         return {"applied": False, "reason": "no site rewritten"}
-    with open(op_file, "w", encoding="utf-8") as f:
-        f.write(new_src)
+    if current() is not None:
+        current().write_source(op_file, new_src)
+    else:
+        Path(op_file).write_bytes(new_src.encode(encoding))
     return {"applied": True, "config": cfg, "label": meta.get("label"),
             "trial": meta.get("trial"), "sites": n,
-            "code_hash": hashlib.sha256(new_src.encode("utf-8")).hexdigest(),
+            "code_hash": file_hash(op_file),
             "note": "already written to the kernel; do NOT dispatch the coder, "
                     "just evaluate and record"}

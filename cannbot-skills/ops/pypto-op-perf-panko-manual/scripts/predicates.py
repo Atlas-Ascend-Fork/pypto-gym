@@ -33,18 +33,26 @@ Usage:
     python3 predicates.py <impl.py> [--op-dir <dir>]
 """
 
+from dataclasses import dataclass
+from typing import Callable
+
 import argparse
 import ast
+from importlib import import_module
 import os
 import re
 import sys
 
-sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-import feasibility  # noqa: E402  same directory
-from pypto_ast import pypto_roots  # noqa: E402  same directory
-
-sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-import jsonio  # noqa: E402
+# Structural event analysis is independent of the DSL. Delay only the DSL
+# dependencies for the namespaced library import; the Classic entry keeps its
+# established module bindings.
+if __package__:
+    jsonio = import_module(__package__ + ".jsonio")
+    pypto_roots = import_module(__package__ + ".pypto_ast").pypto_roots
+else:
+    import feasibility
+    from pypto_ast import pypto_roots
+    import jsonio
 
 # Calls that can only exist if the kernel really has a Cube/matmul operation.
 CUBE_CALLS = {
@@ -64,7 +72,7 @@ BROADCAST_CALLS = {
     "combine_axis",
 }
 # Calls that write a tile back out to global memory.
-WRITEBACK_CALLS = {"assemble", "copy_out", "store", "scatter"}
+WRITEBACK_CALLS = frozenset(("assemble", "copy_out", "store", "scatter"))
 # Layout work the kernel does per tile that the host could do once. A pypto
 # reshape of a view-generated tensor is forced inplace=False -- a physical copy
 # on every tile -- and the others are the same trade in a different shape.
@@ -79,7 +87,7 @@ def _read_text(path, errors="replace"):
         return f.read()
 
 
-def pypto_calls(tree):
+def pypto_calls(tree, roots=None):
     """Every PyPTO call name in the file, attribute or bare.
 
     PyPTO only. `<op>_impl.py` holds the kernel AND the host-side torch wrapper,
@@ -92,47 +100,12 @@ def pypto_calls(tree):
     `_is_pypto_call` was already the boundary test in this file -- the layout
     and residency predicates use it -- and this is the one place that did not.
     """
-    roots = pypto_roots(tree)
+    roots = pypto_roots(tree) if roots is None else roots
     return {
         _call_name(node)
         for node in ast.walk(tree)
         if isinstance(node, ast.Call) and _is_pypto_call(node, roots)
     }
-
-
-def _chunk_loop(node):
-    """Is this call a chunk-shaped `pypto.loop`?
-
-    Two pieces of evidence are accepted: a name= argument that mentions a chunk,
-    or a `pypto.loop(start, stop, step)` whose step is not the literal 1, because
-    a strided loop's step IS the chunk width.
-
-    The strided form was added because the name test alone misses every chunked
-    scan in this repo. `chunked_gated_delta_rule_impl.py:379` writes
-    `pypto.loop(0, s, l, name="LOOP_S_TND")` and
-    `qkv_rms_norm_rope_cache_impl.py:234` writes
-    `pypto.loop(0, params.tokens, params.token_tile, ...)` -- `l` and `token_tile`
-    are the chunk sizes F-19 retunes, and neither loop is called a chunk. Step 1
-    is excluded because it is an ordinary range, which is how the sparse-attention
-    and grouped-GEMM kernels use the same three-argument form.
-    """
-    fn = node.func
-    if (fn.attr if isinstance(fn, ast.Attribute) else getattr(fn, "id", "")) != "loop":
-        return False
-    for kw in node.keywords or []:
-        if kw.arg == "name" and isinstance(kw.value, ast.Constant):
-            if re.search(r"chunk|_bt\b|\bbt\b", str(kw.value.value), re.I):
-                return True
-    if len(node.args) < 3:
-        return False
-    # A SYMBOL, or an integer other than 1. Every real chunk step in this repo is
-    # a name (`l`, `L`, `params.token_tile`); requiring one rather than "anything
-    # but 1" keeps out `pypto.loop(n, 0, -1)`, which is reverse iteration and
-    # parses as a UnaryOp rather than a Constant.
-    step = node.args[2]
-    named_step = isinstance(step, (ast.Name, ast.Attribute))
-    literal_step = isinstance(step, ast.Constant) and isinstance(step.value, int)
-    return bool(named_step or (literal_step and step.value != 1))
 
 
 def _chunk_assign(node):
@@ -143,7 +116,7 @@ def _chunk_assign(node):
     )
 
 
-def _chunk_constant(tree):
+def _chunk_constant(tree, chunk_loop):
     """Is there a chunk-shaped loop or constant? Necessary, not sufficient.
 
     Three pieces of evidence are accepted, and anything weaker is treated as
@@ -151,7 +124,7 @@ def _chunk_constant(tree):
     named constant.
     """
     for node in ast.walk(tree):
-        if isinstance(node, ast.Call) and _chunk_loop(node):
+        if isinstance(node, ast.Call) and chunk_loop(node):
             return True
         if isinstance(node, ast.Assign) and _chunk_assign(node):
             return True
@@ -341,26 +314,6 @@ def _loop_carried_dependency(tree):
     return False
 
 
-def _has_chunked_scan(tree, src):
-    """A chunked SCAN: a chunk constant AND a recurrence to chunk.
-
-    The chunk constant alone is not enough. A predicate can read False at init
-    and True at close, so F-19 -- "retune the chunked-scan granularity (chunk
-    size bt)" -- is admitted to the frontier of a pure elementwise map that
-    contains no scan of any kind. What flips it is the SEARCH ITSELF: a winning
-    1-D flatten introduces a `CHUNK` constant, and the predicate matches the
-    name.
-
-    That is the general hazard, and it is worth stating in one place. Predicates
-    are re-derived from the OPTIMISED source, so a search can manufacture its own
-    preconditions and then admit actions that were correctly held back from the
-    kernel it started with. Requiring the recurrence closes this instance:
-    chunking an axis creates a chunk constant, and cannot create a loop-carried
-    dependency that the program did not already have.
-    """
-    return _chunk_constant(tree) and _loop_carried_dependency(tree)
-
-
 def _module_count(op_dir):
     """From DESIGN.md if it says so, else from the modules directory.
 
@@ -383,12 +336,15 @@ def _module_count(op_dir):
     return None
 
 
-def _call_name(call):
+def call_name(call):
     fn = call.func
     return fn.attr if isinstance(fn, ast.Attribute) else getattr(fn, "id", "")
 
 
-def _is_pypto_call(call, roots=frozenset({"pypto"})):
+_call_name = call_name
+
+
+def is_pypto_call(call, roots=frozenset({"pypto"})):
     """Is this a call on the pypto module?
 
     The distinction matters: the same file holds the tile-level kernel and the
@@ -405,27 +361,10 @@ def _is_pypto_call(call, roots=frozenset({"pypto"})):
     return isinstance(node, ast.Name) and node.id in roots
 
 
-def _tile_producers(tree, roots):
-    """Names assigned the result of a pypto call that is not a write-back.
-
-    Host-side torch/numpy locals are not tiles, and a write-back produces no
-    value to keep alive, so neither is counted.
-    """
-    produced = set()
-    for node in ast.walk(tree):
-        if not isinstance(node, ast.Assign) or not isinstance(node.value, ast.Call):
-            continue
-        if not _is_pypto_call(node.value, roots):
-            continue
-        if _call_name(node.value) in WRITEBACK_CALLS:
-            continue
-        for t in node.targets:
-            if isinstance(t, ast.Name):
-                produced.add(t.id)
-    return produced
+_is_pypto_call = is_pypto_call
 
 
-def _materializes_large_intermediate(tree):
+def _materializes_large_intermediate(tree, roots=None, writebacks=WRITEBACK_CALLS):
     """Does the kernel hold a value it could instead recompute or not store?
 
     Two independent pieces of evidence, either sufficient:
@@ -445,8 +384,8 @@ def _materializes_large_intermediate(tree):
     intermediate to trade. Such a kernel used to cost a real evaluation to
     discover the same thing at run time.
     """
-    roots = pypto_roots(tree)
-    produced = _tile_producers(tree, roots)
+    roots = pypto_roots(tree) if roots is None else roots
+    produced = tile_producers(tree, roots, is_call=_is_pypto_call, writebacks=writebacks)
     loads = {}
     for node in ast.walk(tree):
         if (
@@ -462,21 +401,13 @@ def _materializes_large_intermediate(tree):
         return (
             isinstance(node, ast.Call)
             and _is_pypto_call(node, roots)
-            and _call_name(node) in WRITEBACK_CALLS
+            and _call_name(node) in writebacks
         )
 
-    writebacks = sum(1 for node in ast.walk(tree) if _is_writeback(node))
-    return writebacks > 1
+    return sum(1 for node in ast.walk(tree) if _is_writeback(node)) > 1
 
 
-def _is_pypto_loop_for(node):
-    """`for x in pypto.loop(...):` -> the loop Call, else None."""
-    if not isinstance(node, ast.For) or not isinstance(node.iter, ast.Call):
-        return None
-    return node.iter if _call_name(node.iter) == "loop" else None
-
-
-def _has_nested_pypto_loop(tree):
+def _has_nested_pypto_loop(tree, loop_for):
     """Is there a pypto.loop with another pypto.loop inside it?
 
     Necessary for any transform that folds an outer axis into an inner loop: a
@@ -485,10 +416,10 @@ def _has_nested_pypto_loop(tree):
     has_cube_op does.
     """
     for node in ast.walk(tree):
-        if _is_pypto_loop_for(node) is None:
+        if not loop_for(node):
             continue
         if any(
-            _is_pypto_loop_for(inner) is not None
+            loop_for(inner)
             for stmt in node.body
             for inner in ast.walk(stmt)
         ):
@@ -496,19 +427,21 @@ def _has_nested_pypto_loop(tree):
     return False
 
 
-def _has_inkernel_layout_op(tree):
-    """Does the kernel reshape / expand / transpose / concat a tile itself?"""
-    roots = pypto_roots(tree)
-    return any(
-        isinstance(n, ast.Call)
-        and _is_pypto_call(n, roots)
-        and _call_name(n) in LAYOUT_CALLS
-        for n in ast.walk(tree)
-    )
+@dataclass(frozen=True)
+class PredicateRules:
+    roots: Callable
+    cube_calls: set
+    broadcasts: set
+    writebacks: set
+    is_loop: Callable
+    declares_cube: Callable = None
 
 
-def compute(impl_path, op_dir=None):
-    """Predicate dict. Unknown values are reported as True / None (admissive)."""
+def compute(impl_path, op_dir=None, *, rules=None, gate=None, hw=None):
+    """Evaluate catalog preconditions; unreadable source leaves actions eligible."""
+    if gate is None:
+        gate = import_module(__package__ + ".feasibility") if __package__ else feasibility
+    options = {"hw": hw} if hw is not None else {}
     try:
         src = _read_text(impl_path)
         tree = ast.parse(src)
@@ -532,14 +465,26 @@ def compute(impl_path, op_dir=None):
             "determined": False,
         }
 
-    calls = pypto_calls(tree)
+    if rules is None:
+        rules = PredicateRules(pypto_roots, CUBE_CALLS, BROADCAST_CALLS, WRITEBACK_CALLS,
+                               lambda call, roots: _call_name(call) == "loop")
+    roots = rules.roots(tree)
+    calls = pypto_calls(tree, roots)
+
+    def chunk_loop(call):
+        return rules.is_loop(call, roots) and chunk_shape(call)
+
+    def loop_for(node):
+        return (isinstance(node, ast.For) and isinstance(node.iter, ast.Call)
+                and rules.is_loop(node.iter, roots))
+
     return {
-        "has_cube_op": bool(calls & CUBE_CALLS),
-        "has_broadcast": bool(calls & BROADCAST_CALLS),
-        "has_chunked_scan": _has_chunked_scan(tree, src),
-        "has_inkernel_layout_op": _has_inkernel_layout_op(tree),
-        "has_nested_pypto_loop": _has_nested_pypto_loop(tree),
-        "materializes_large_intermediate": _materializes_large_intermediate(tree),
+        "has_cube_op": bool(calls & rules.cube_calls) or bool(rules.declares_cube and rules.declares_cube(src)),
+        "has_broadcast": bool(calls & rules.broadcasts),
+        "has_chunked_scan": _chunk_constant(tree, chunk_loop) and _loop_carried_dependency(tree),
+        "has_inkernel_layout_op": bool(calls & LAYOUT_CALLS),
+        "has_nested_pypto_loop": _has_nested_pypto_loop(tree, loop_for),
+        "materializes_large_intermediate": _materializes_large_intermediate(tree, roots, rules.writebacks),
         "module_count": _module_count(op_dir),
         # How much of the unified buffer the vector tiles are estimated to hold.
         # Unlike the booleans above this is a ratio, and unlike everything the
@@ -547,11 +492,11 @@ def compute(impl_path, op_dir=None):
         # four times smaller than the buffer affords costs latency on every
         # iteration and says nothing about itself in a trace: the kernel is
         # simply, quietly, slow. None when it cannot be estimated.
-        "ub_occupancy": feasibility.ub_occupancy(impl_path),
+        "ub_occupancy": gate.ub_occupancy(impl_path, **options),
         # The cube counterpart, over L1 rather than the unified buffer. None for
         # a kernel with no matmul, which is the honest answer: a vector operator
         # has no L1 symptom rather than a bad one.
-        "l1_occupancy": feasibility.l1_occupancy(impl_path),
+        "l1_occupancy": gate.l1_occupancy(impl_path, **options),
         "determined": True,
     }
 
@@ -585,6 +530,44 @@ def main():
     ap.add_argument("--op-dir", default=None)
     a = ap.parse_args()
     jsonio.emit(compute(a.impl, a.op_dir or os.path.dirname(a.impl)), indent=2)
+
+
+def chunk_shape(node):
+    """Detect chunk naming or a symbolic/non-unit forward step."""
+    for kw in node.keywords or []:
+        if kw.arg == "name" and isinstance(kw.value, ast.Constant):
+            if re.search(r"chunk|_bt\b|\bbt\b", str(kw.value.value), re.I):
+                return True
+    if len(node.args) < 3:
+        return False
+    # A SYMBOL, or an integer other than 1. Every real chunk step in this repo is
+    # a name (`l`, `L`, `params.token_tile`); requiring one rather than "anything
+    # but 1" keeps out `pypto.loop(n, 0, -1)`, which is reverse iteration and
+    # parses as a UnaryOp rather than a Constant.
+    step = node.args[2]
+    named_step = isinstance(step, (ast.Name, ast.Attribute))
+    literal_step = isinstance(step, ast.Constant) and isinstance(step.value, int)
+    return bool(named_step or (literal_step and step.value != 1))
+
+
+def tile_producers(tree, roots, *, is_call, writebacks):
+    """Names assigned the result of a pypto call that is not a write-back.
+
+    Host-side torch/numpy locals are not tiles, and a write-back produces no
+    value to keep alive, so neither is counted.
+    """
+    produced = set()
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.Assign) or not isinstance(node.value, ast.Call):
+            continue
+        if not is_call(node.value, roots):
+            continue
+        if _call_name(node.value) in writebacks:
+            continue
+        for t in node.targets:
+            if isinstance(t, ast.Name):
+                produced.add(t.id)
+    return produced
 
 
 if __name__ == "__main__":

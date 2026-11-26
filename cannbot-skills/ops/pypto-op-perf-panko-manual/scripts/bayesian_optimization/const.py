@@ -34,23 +34,12 @@ admitting more; the incumbent-value check and the golden are what bound the cost
 
 import ast
 
+if __package__ == "bayesian_optimization":
+    import pypto_ast
+else:
+    from .. import pypto_ast
+
 _LOOP = "loop"
-
-
-def _fname(func):
-    if isinstance(func, ast.Attribute):
-        return func.attr
-    if isinstance(func, ast.Name):
-        return func.id
-    return ""
-
-
-def _is_jit(fn):
-    for d in getattr(fn, "decorator_list", []):
-        node = d.func if isinstance(d, ast.Call) else d
-        if _fname(node) == "jit":
-            return True
-    return False
 
 
 def _int_lit(n):
@@ -113,14 +102,6 @@ def bindings(tree, starts):
     return out
 
 
-def _parents(tree):
-    out = {}
-    for node in ast.walk(tree):
-        for child in ast.iter_child_nodes(node):
-            out[child] = node
-    return out
-
-
 def _contexts(node, parents, jit_nodes):
     """The contexts a Name read sits inside."""
     flags, cur = set(), node
@@ -131,7 +112,7 @@ def _contexts(node, parents, jit_nodes):
         if isinstance(cur, (ast.arg, ast.AnnAssign)):
             flags.add("annot")
         if isinstance(cur, ast.Call):
-            n = _fname(cur.func)
+            n = pypto_ast.function_name(cur.func)
             if n == _LOOP:
                 flags.add("loop")
             elif (
@@ -184,10 +165,10 @@ def analyse(src):
     binds = bindings(tree, starts)
     if not binds:
         return {}
-    parents = _parents(tree)
+    parents = pypto_ast.parent_map(tree)
     jit_nodes = set()
     for fn in ast.walk(tree):
-        if isinstance(fn, (ast.FunctionDef, ast.AsyncFunctionDef)) and _is_jit(fn):
+        if isinstance(fn, (ast.FunctionDef, ast.AsyncFunctionDef)) and any(pypto_ast.jit_decorators(fn)):
             jit_nodes.update(ast.walk(fn))
     reads = [
         n

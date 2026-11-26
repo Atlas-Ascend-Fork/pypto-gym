@@ -144,16 +144,22 @@ def line_starts(src):
     return lambda ln, col: starts[ln - 1] + col
 
 
+def body_spans(tree, node_types, offset):
+    """Yield each matching node and its body span in the caller's source coordinates."""
+    for node in ast.walk(tree):
+        if isinstance(node, node_types) and node.body:
+            first, last = node.body[0], node.body[-1]
+            yield node, (offset(first.lineno, first.col_offset),
+                         offset(last.end_lineno, last.end_col_offset))
+
+
+def loop_spans(tree, offset):
+    return [span for _, span in body_spans(tree, (ast.For, ast.AsyncFor, ast.While), offset)]
+
+
 def _func_spans(tree, off):
-    """{function name: byte span of its body}, for every `def` in the module."""
-    spans = {}
-    for n in ast.walk(tree):
-        if isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef)) and n.body:
-            spans[n.name] = (
-                off(n.body[0].lineno, n.body[0].col_offset),
-                off(n.body[-1].end_lineno, n.body[-1].end_col_offset),
-            )
-    return spans
+    functions = body_spans(tree, (ast.FunctionDef, ast.AsyncFunctionDef), off)
+    return {node.name: span for node, span in functions}
 
 
 def _enclosing_func(spans, pos):
@@ -595,20 +601,7 @@ def discover_sites(src):
     """
     tree = ast.parse(src)
     off = line_starts(src)
-    # Byte spans of every loop body. Both kinds count: `for idx in pypto.loop(...)`
-    # and the plain `for n_off in range(0, N, NC)` a model writes to chunk an axis --
-    # the second is a Python loop unrolled at trace time, and a tile inside it still
-    # governs every chunk.
-    loops = []
-    for n in ast.walk(tree):
-        if not isinstance(n, (ast.For, ast.AsyncFor, ast.While)) or not n.body:
-            continue
-        loops.append(
-            (
-                off(n.body[0].lineno, n.body[0].col_offset),
-                off(n.body[-1].end_lineno, n.body[-1].end_col_offset),
-            )
-        )
+    loops = loop_spans(tree, off)
     fspans = _func_spans(tree, off)
     ctx = (off, src, loops, _inherited_depth(tree, off, loops, fspans), fspans)
     found = _walk_calls(tree, ctx)
@@ -622,7 +615,7 @@ def discover_sites(src):
     )
 
 
-def tie_groups(sites, anchor):
+def tie_groups(sites, anchor, fields_of=space.vec_fields, *, match_leading=False):
     """Vec sites whose LEADING tile dimension must move together, as id lists.
 
     The row extent is a hand-off, not a per-site choice. Several vec scopes
@@ -652,9 +645,16 @@ def tie_groups(sites, anchor):
         # wide scopes and delete the best configuration this kernel has. Unknown
         # arity means do not tie.
         a = (anchor or {}).get(s.id)
-        if not a or len(space.vec_fields(a)) < 2:
+        fields = fields_of(a) if a else ()
+        if len(fields) < 2:
             continue
-        by_span.setdefault(s.loop_span, []).append(s.id)
+        key = s.loop_span
+        if match_leading:
+            extent = a.get(fields[0])
+            if not isinstance(extent, int) or isinstance(extent, bool) or extent < 1:
+                continue
+            key = (key, extent)
+        by_span.setdefault(key, []).append(s.id)
     return [g for g in by_span.values() if len(g) > 1]
 
 
@@ -813,9 +813,14 @@ def apply(src, site_configs):
     for pos, knobs in kwarg_inserts.items():
         body = ", ".join(f'"{k}": {{-1: {v}}}' for k, v in sorted(knobs.items()))
         edits.append((pos, pos, f", pass_options={{{body}}}"))
-    for start, end, text in sorted(edits, reverse=True):
+    return splice_edits(src, sorted(edits, reverse=True)), n_sites
+
+
+def splice_edits(src, descending_edits):
+    """Apply replacements from right to left so original offsets stay valid."""
+    for start, end, text in descending_edits:
         src = src[:start] + text + src[end:]
-    return src, n_sites
+    return src
 
 
 def _read_site(kind, nums):
