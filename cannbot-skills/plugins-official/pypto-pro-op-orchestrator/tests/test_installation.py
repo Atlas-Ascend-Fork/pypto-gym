@@ -11,6 +11,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import importlib.util
 import json
 import os
@@ -59,6 +60,16 @@ def expected_skill_files() -> dict:
             if path.is_file() and not ignored.intersection(relative.parts):
                 files[f"skills/{skill}/{relative.as_posix()}"] = path.read_bytes()
         files[f"skills/{skill}/LICENSE"] = license_content
+    core = PLUGIN_ROOT.parents[1] / "ops/pypto-op-perf-panko-manual/scripts"
+    prefix = "skills/pypto-pro-op-perf-panko-manual/scripts/_core"
+    fingerprint = hashlib.sha256()
+    for path in sorted(core.rglob("*.py")):
+        relative = path.relative_to(core)
+        if {"tests", "__pycache__"}.isdisjoint(relative.parts):
+            content = path.read_bytes()
+            files[f"{prefix}/{relative.as_posix()}"] = content
+            fingerprint.update(relative.as_posix().encode() + b"\0" + content)
+    files[f"{prefix}/VERSION"] = f"core-sha256:{fingerprint.hexdigest()}\n".encode()
     return files
 
 
@@ -191,7 +202,7 @@ class ActualResourceTest(unittest.TestCase):
             result = installer.install(project)
             config = project / ".opencode"
             self.assert_skill_bundle(config, expected_skill_files())
-            self.assertEqual(set(result["skills"]), {"pypto-pro-kernel"})
+            self.assertEqual(set(result["skills"]), {"pypto-pro-kernel", "pypto-pro-op-perf-panko-manual"})
             for excluded in (
                 "pypto-pro-cann-delivery",
                 "pypto-pro-precision-debug",
@@ -206,6 +217,10 @@ class ActualResourceTest(unittest.TestCase):
             standard = kernel / "references/workflows/op-standard.md"
             for entry in (project / "AGENTS.md", config / "agents" / f"{installer.PLUGIN}.md"):
                 self.assertIn(installer.display_path(kernel / "SKILL.md"), entry.read_text(encoding="utf-8"))
+            workflow = config / "references/multi-agent-workflow.md"
+            primary_link = f"../agents/{installer.PLUGIN}.md"
+            self.assertIn(f"]({primary_link})", workflow.read_text(encoding="utf-8"))
+            self.assertIn("## PANKO 委派", (workflow.parent / primary_link).read_text(encoding="utf-8"))
             reference = "../../scripts/precision_compare.py"
             self.assertIn(f"]({reference})", standard.read_text(encoding="utf-8"))
             self.assertTrue((standard.parent / reference).is_file())
@@ -284,6 +299,8 @@ class InstallationTest(unittest.TestCase):
             for skill in installer.SKILLS
         }
         self.source = self.sources[installer.SKILLS[0]]
+        self.core_backend = self.source.parent / "pypto-op-perf-panko-manual/scripts/panko/backend.py"
+        write(self.core_backend, "# Shared core\n")
         write(
             self.plugin / "AGENTS.md",
             "---\nname: pypto-pro-op-orchestrator\nmode: primary\n---\n"
@@ -895,10 +912,26 @@ class InstallationTest(unittest.TestCase):
                 self.install()
         self.assertFalse(self.project.exists())
 
+    def test_refresh_updates_core_and_protects_local_edits(self):
+        self.install()
+        core = self.config / "skills/pypto-pro-op-perf-panko-manual/scripts/_core"
+        version = (core / "VERSION").read_bytes()
+        write(self.core_backend, "# Updated core\n")
+        self.install()
+        installed = core / "panko/backend.py"
+        self.assertEqual(installed.read_bytes(), self.core_backend.read_bytes())
+        self.assertNotEqual((core / "VERSION").read_bytes(), version)
+        write(installed, "# Local changes\n")
+        before = self.tree_snapshot()
+        with self.assertRaisesRegex(installer.InstallError, "unmanaged or modified"):
+            self.install()
+        self.assertEqual(self.tree_snapshot(), before)
+
     def test_refresh_failure_restores_previous_receipt_manifest_and_skill(self):
         self.install()
         before = self.tree_snapshot()
         write(self.source / "examples/add.py", "Updated source resource\n")
+        write(self.core_backend, "# Updated core\n")
         atomic_write = installer._atomic_write
         failed = False
 

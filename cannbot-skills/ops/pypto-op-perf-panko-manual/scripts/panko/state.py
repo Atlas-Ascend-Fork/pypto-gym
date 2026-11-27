@@ -499,7 +499,7 @@ def decorated_jit(node):
     return False
 
 
-def _wrapper_drift(st, path):
+def wrapper_drift(st, path):
     """"" if the wrapper still matches the baseline, else why it does not."""
     if not st.get("wrapper_signature"):
         return ""

@@ -24,7 +24,7 @@ from .backend import current
 from .config import (CATALOG_PRIOR_DEFAULT, CandidateRow, MeasurementVerdict, RatchetMeasurement, Refusal,
                      SEARCH_PROTOCOL, STAGE_ORDER, SelectionContext, _bound, clamp_belief, clamp_prior, clamp_stage,
                      feasibility, out)
-from .state import (_base_hash, _domain_state, _gstag, _refine_base, _semantic_noop, _structure, _wrapper_drift,
+from .state import (_base_hash, _domain_state, _gstag, _refine_base, _semantic_noop, _structure, wrapper_drift,
                     accumulate_wall_clock, chip_envelope, file_hash, live_frontier, load, next_id, npath,
                     op_file_path, preopt_code_hash, ratchet_best_hash, restore, rollback, save, snapshot)
 from .measurement import (block_samples, cli_samples, compute_j, median_of, objective_values, objectives_of,
@@ -245,7 +245,7 @@ def _record_wrapper_drift(a, st, pr):
     """`feasible` is the cheap gate and it is not mandatory, so the ratchet checks
     too. A measurement taken on a changed wrapper is not comparable with the rest
     of the campaign and must not be allowed to set the best. Emits and raises."""
-    drift = _wrapper_drift(st, op_file_path(st, a.op_dir))
+    drift = wrapper_drift(st, op_file_path(st, a.op_dir))
     if not drift:
         return
     pr["wrapper_drift_rejected"] = pr.get("wrapper_drift_rejected", 0) + 1
@@ -394,7 +394,6 @@ def cmd_record(a):
         return
     _record_wrapper_drift(a, st, pr)
 
-    pr["evals_used"] += 1
     # A block winner is promoted through this path deliberately (so the ratchet
     # runs in exactly one place), but the block measured it and the CLI call
     # that promotes it carries no reading. Recover it from the block record
@@ -539,7 +538,7 @@ def _reject_wrapper_drift(a, st, pr, op_f, retune):
 
     Returns True when it has emitted a rejection and the caller must stop.
     """
-    drift = _wrapper_drift(st, op_f)
+    drift = wrapper_drift(st, op_f)
     if not drift:
         return False
     pr["wrapper_drift_rejected"] = pr.get("wrapper_drift_rejected", 0) + 1
@@ -1222,7 +1221,9 @@ def _refuse_unmeasured_objectives(a, st, pr, m_rec):
 
 
 def _record_cache_entry(a, st, cache):
-    """Memoize the candidate's measurement and whatever readings came with it."""
+    """Cache the measurement and charge it unless its tile trial already paid for it."""
+    if not getattr(a, "evaluation_already_charged", False):
+        st["progress"]["evals_used"] += 1
     # The further objectives ride on every measured candidate -- kept AND
     # reverted, since `eval_cache` keeps both.
     m_eval = record_metrics(a, st)

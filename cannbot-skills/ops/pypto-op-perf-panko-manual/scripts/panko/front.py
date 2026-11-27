@@ -23,7 +23,7 @@ import mo_hv
 
 from .config import (DEFAULT_CONFIG, FrontContext, J_OBJECTIVE, OBJECTIVE_ALIASES, Refusal, VERIFY_ALPHA, VERIFY_BOOT,
                      VERIFY_SEED, out)
-from .state import (_base_hash, _wrapper_drift, file_hash, live_frontier, npath, op_file_path,
+from .state import (_base_hash, wrapper_drift, file_hash, live_frontier, npath, op_file_path,
                     open_node, preopt_code_hash)
 from .measurement import (bootstrap_speedup, compute_j, is_bytes, median_of, objective_values, objectives_of,
                           preopt_values)
@@ -264,7 +264,7 @@ def delivery_point(st, op_dir):
             path = op_file_path(st, op_dir)
             if h != best_hash or file_hash(path) != h:
                 continue
-        if _wrapper_drift(st, path):
+        if wrapper_drift(st, path):
             continue
         key = tuple(-vals[o["name"]] if o["direction"] == "max" else vals[o["name"]] for o in objs)
         rank.append((key, h, vals))

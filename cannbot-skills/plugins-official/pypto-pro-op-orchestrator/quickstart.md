@@ -68,9 +68,11 @@ opencode agent list
 python .opencode/skills/pypto-pro-kernel/scripts/check.py links
 ```
 
-列表应包含主入口 `pypto-pro-op-orchestrator`，以及 `pypto-pro-op-` 前缀的 `planner`、`coder`、`debugger`、`verifier`、`optimizer`、`tool` 六个子代理。这些角色可按需调用；开启多 agent 模式后按协作说明派工。`links` 只检查文档链接，不代表数值或性能验证通过。
+列表应包含主入口 `pypto-pro-op-orchestrator`，以及 `pypto-pro-op-` 前缀的 `planner`、`coder`、`debugger`、`verifier`、`optimizer`、`tool` 和 `auto-tuner-panko` 七个子代理。普通角色可按需调用；PANKO 使用专用派工协议。`links` 只检查文档链接，不代表数值或性能验证通过。
 
-安装器复制完整的 `pypto-pro-kernel`、`pypto-pro-op-standard`、`pypto-benchmark-fracture-aggregator`、`pypto-fracture-point-detector` 和 `pypto-session-dfx-report`，包括参考资料、工具和样例，并将仓根 `LICENSE` 复制到每个已安装 skill 的 `LICENSE`；请勿只复制 `SKILL.md`。JSONC 注释、格式和已有选项保留。若同时有 `opencode.json` 和 `opencode.jsonc`，先合并所需设置，备份移走其中一个。已有其他默认 agent 时保留原选择，用下文的 `--agent` 启动本入口。
+默认安装两个完整 skill：`pypto-pro-kernel` 和 `pypto-pro-op-perf-panko-manual`。每个目录均包含该 skill 的配套资源和仓库的 `LICENSE`。各工具均通过 agent 指引派工，不安装 PANKO dispatch hook 或 SDK 依赖。更新安装时，旧安装收据中未被修改的 relay hook 与参考文档会备份后撤除；已有依赖、搜索状态和历史派工记录保留。更新后重启 OpenCode，以卸载旧进程已加载的 hook。
+
+JSONC 注释、格式和已有选项保留。若同时有 `opencode.json` 和 `opencode.jsonc`，先合并所需设置，备份移走其中一个。已有其他默认 agent 时保留原选择，用下文的 `--agent` 启动本入口。
 
 ## 二、快速上手
 
@@ -111,9 +113,14 @@ opencode --agent pypto-pro-op-orchestrator
 
 主代理先完整阅读[协作说明](references/multi-agent-workflow.md)，再按当前问题选择角色派工。需求与验收分析交 planner，独立的环境核对、探针和命令执行等任务交 tool；主代理负责审核、澄清和调度。六个角色不构成固定阶段，不要求每次全部调用。调用时机、输入输出和上下文交接统一见该说明。仅讲解、引用或否定该模式时不启用，用户要求退出时恢复默认执行方式。
 
+### PANKO 基础版优化
+
+例如：“用 PANKO 优化 ./custom/softmax/，沿用 ./ENVIRONMENT.md 和 test_softmax.py，在 NPU 上优化延迟和片上内存，预算 100 次评估。”
+支持单文件 JIT。续跑时指定原 campaign 目录以保留预算和测量记录。派工与验收见 [AGENTS.md](AGENTS.md)。
+
 ### 验收与交付
 
-前述示例的功能、精度和性能均达标后，Python/JIT 源码整理按“用户明确要求 > 项目交付规则 > 默认策略”选择。未关闭或替换时，采用[算子产物规范](../../ops/pypto-pro-op-standard/SKILL.md)整理到指定位置，并提供该规范要求的 README、DESIGN、RESULTS 三份文档；验证与性能结果写入 `RESULTS.md`。用户另有要求时可提供附加报告。
+前述示例的功能、精度和性能均达标后，Python/JIT 源码整理按“用户明确要求 > 项目交付规则 > 默认策略”选择。未关闭或替换时，采用[算子产物规范](../../ops/pypto-pro-kernel/references/workflows/op-standard.md)整理到指定位置，并提供该规范要求的 README、DESIGN、RESULTS 三份文档；验证与性能结果写入 `RESULTS.md`。用户另有要求时可提供附加报告。
 
 关闭时保留现有产物组织，不擅自重排目录、重命名入口或生成默认文档；替代时仅按所选规范处理目录、命名、接口包装和文档。两种选择都保留算子语义、独立 golden、原精度契约和既定性能方案，不降低功能、精度和性能验收要求。三种路径均从最终目录验证公开入口，整理影响实现、调用路径或性能时复验受影响项。
 
@@ -135,9 +142,9 @@ CANN 离线安装包交付使用已安装或另行提供的 `pypto-pro-cann-deli
 
 ## 三、可用技能
 
-当前入口使用 [pypto-pro-kernel](../../ops/pypto-pro-kernel/SKILL.md) 完成原生实现、验证、调试、计时和优化。仅在选择默认源码整理策略时使用 [pypto-pro-op-standard](../../ops/pypto-pro-op-standard/SKILL.md)；CANN 离线交付使用 `pypto-pro-cann-delivery`，两个 skill 各司其职。协作角色与派工方式见[协作说明](references/multi-agent-workflow.md)。
+当前入口使用 [pypto-pro-kernel](../../ops/pypto-pro-kernel/SKILL.md) 完成原生实现、验证、调试、计时和优化。默认源码整理遵循该 skill 内置的产物规范。选择 PANKO 时使用 [pypto-pro-op-perf-panko-manual](../../ops/pypto-pro-op-perf-panko-manual/SKILL.md)。协作角色与派工方式见[协作说明](references/multi-agent-workflow.md)。
 
-独立使用 kernel skill 进行默认源码交付时，将 kernel 与源码产物规范两个 skill 的完整目录并列放入目标工具的 skills 目录，保留跨 skill 的相对引用。插件默认安装已包含两者；安装仅提供资源，不决定本次是否执行整理，也不自动安装 CANN 交付 skill。
+如需可选 skill（例如 CANN 离线交付用的 `pypto-pro-cann-delivery`），从仓库的 `cannbot-skills/ops/` 将所需 skill 的完整目录复制到项目的 `.opencode/skills/`，再按该 skill 的 `SKILL.md` 配置依赖。
 
 可从 skill 根目录运行 `python scripts/check.py query 'UB to L1'` 定向查阅契约、官方资料和样例；`query --validate` 检查知识准入。CLI 提供查询、检查与执行反馈。插件安装器只复制资源，不修改运行环境。
 

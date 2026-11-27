@@ -180,12 +180,14 @@ def task_pipe_statistics(path, *, repeats, tasks_per_call):
     return result
 
 
+def call_duration_sums(calls):
+    """Sum the ordered native task durations belonging to each kernel call."""
+    return tuple(sum(call) for call in calls)
+
+
 def task_samples(path, *, repeats, tasks_per_call):
     """Parse one capture strictly; missing/extra tasks never become zero cost."""
-    return tuple(
-        sum(call)
-        for call in _task_calls(path, repeats=repeats, tasks_per_call=tasks_per_call)
-    )
+    return call_duration_sums(_task_calls(path, repeats=repeats, tasks_per_call=tasks_per_call))
 
 
 def task_statistics(path, *, repeats, tasks_per_call):
@@ -201,7 +203,7 @@ def task_statistics(path, *, repeats, tasks_per_call):
 
 def _statistics(calls):
     repeats, tasks_per_call = len(calls), len(calls[0])
-    samples = tuple(sum(call) for call in calls)
+    samples = call_duration_sums(calls)
     per_task = []
     for position in range(tasks_per_call):
         durations = tuple(call[position] for call in calls)

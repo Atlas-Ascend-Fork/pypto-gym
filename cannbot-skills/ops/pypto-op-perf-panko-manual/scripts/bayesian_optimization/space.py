@@ -547,7 +547,7 @@ def _draw_site(trial, site, r, ctx):
     return _draw_vec(trial, r, a, ctx)
 
 
-def _apply_tie(cfg, tie, fields_of=vec_fields):
+def apply_tie(cfg, tie, fields_of=vec_fields):
     """Write the shared leading value back over every member of a tied group.
 
     A tied site is drawn independently (it is its own `rep`), so without this the
@@ -588,7 +588,7 @@ def suggest(trial, sites, opts=None):
         "lead_dom": tied_lead_domain(opts.tie, sites, opts.anchor, opts.domain),
     }
     cfg = draw_grouped(trial, sites, rep, ctx, _draw_site)
-    _apply_tie(cfg, opts.tie)
+    apply_tie(cfg, opts.tie)
     return cfg
 
 

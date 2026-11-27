@@ -1,0 +1,492 @@
+[
+  {
+    "id": "F-1",
+    "stage": "frontend",
+    "requires": ["has_cube_op"],
+    "delta": "Vary the Cube tile shapes: the `shape=` of every `pl.make_tile_group(type=pl.TileType(...))` at a Mat / Left / Right / Acc site. Applies when the kernel has Cube sites whose shape the search may set; Vec tiles are not touched under this action. Equivalent only if the shape stays expressible -- `M > 128` is forbidden by the L0C `mad` column pitch (`ceil16(m)`), so stacking the M axis is not expensive but inexpressible, and windowing N is the supported direction.",
+    "prior_gain": 0.5
+  },
+  {
+    "id": "F-2",
+    "stage": "frontend",
+    "delta": "Vary the Vector tile shapes: the `shape=` of every `pl.make_tile_group(type=pl.TileType(...))` at a Vec site. Applies when the kernel has Vec sites whose shape the search may set. Equivalent only if a site that declares `valid_shape=` keeps its window inside the tile: that declaration is a floor on each axis, not a hint.",
+    "prior_gain": 0.5
+  },
+  {
+    "id": "F-3",
+    "stage": "frontend",
+    "conversion": true,
+    "requires": ["has_nested_pypto_loop"],
+    "prior_gain": 0.9,
+    "delta": "Interleave N iterations of an outer `pl.range` into the inner loop so N independent chains can overlap. Use a source rewrite with separate accumulators and tile lifetimes for each chain. Applies when the outer iterations are independent and the grouping preserves loop bounds; handle any remainder explicitly. Preserve loop-carried dependencies, initialization, synchronization and output ownership, then validate accuracy and measure the rewritten kernel. Check the added live tiles against each on-chip memory limit."
+  },
+  {
+    "id": "F-4",
+    "stage": "frontend",
+    "requires": ["has_nested_pypto_loop"],
+    "bound": ["MTE2", "MAC"],
+    "delta": "Guard an iteration that the program's own validity predicate already proves contributes nothing. Applies when the kernel computes a count or mask that reaches zero for some iterations of a loop whose body runs regardless, so the result is multiplied by zero or discarded after the work is done. Equivalent only if the guard covers exactly the provably-empty case and the skipped iteration leaves the running accumulation untouched -- a skip that suppresses only the store leaves stale state feeding the total.",
+    "prior_gain": 0.9
+  },
+  {
+    "id": "F-5",
+    "stage": "frontend",
+    "prior_gain": 0.5,
+    "delta": "Give each segment of a tile its own aligned start instead of letting segments begin at unaligned offsets. Applies when a segment's start is off the transfer unit's alignment boundary and the on-chip budget can hold the separate tiles together with their padding.",
+    "bound": ["MTE2", "MTE3"]
+  },
+  {
+    "id": "F-6",
+    "stage": "frontend",
+    "prior_gain": 0.5,
+    "delta": "Have the epilogue write its result directly in the layout its consumer expects, instead of producing a compact internal layout and repacking it in a second pass. Applies when the internal layout differs from the downstream contract's padding or grouping, the reorder is currently done element by element, and the computing stage is free to choose its output stride and order.",
+    "moves": ["workspace"],
+    "bound": ["MTE3"]
+  },
+  {
+    "id": "F-7",
+    "stage": "frontend",
+    "prior_gain": 0.9,
+    "delta": "Keep the smaller matmul operand resident on-chip for the whole of the other side's loop instead of re-reading it each iteration. Applies when one side fits in the on-chip budget beside the streaming side's buffers, and the other side loops more than once.",
+    "requires": ["has_cube_op"],
+    "bound": ["MTE2"]
+  },
+  {
+    "id": "F-8",
+    "stage": "frontend",
+    "prior_gain": 0.5,
+    "delta": "Have a constant operand arrive already in the layout the hardware wants, so its transfer does no conversion, instead of converting it on every call. Applies when the operand does not change between invocations, its transfer is a large share of the work, and the conversion is otherwise paid on the critical path -- more so when its innermost axis is unaligned.",
+    "requires": ["has_cube_op"],
+    "bound": ["MTE2"]
+  },
+  {
+    "id": "F-9",
+    "stage": "frontend",
+    "prior_gain": 0.5,
+    "delta": "Serve two differently laid out reads of the same data from one on-chip copy instead of staging it twice. Applies when the same data feeds two inputs of one compute unit, one in its original layout and one transposed, and both can be transferred without reshaping.",
+    "requires": ["has_cube_op"],
+    "bound": ["MTE1"]
+  },
+  {
+    "id": "F-10",
+    "stage": "frontend",
+    "prior_gain": 0.5,
+    "delta": "Split the loop into an aligned main region with static shapes and a separate tail, instead of sending every tile through the dynamic conservative path. Applies when one kernel covers both aligned and unaligned shapes, every tile currently takes that path, and the main region can be cut into whole aligned tiles.",
+    "bound": ["MTE2", "MTE3"]
+  },
+  {
+    "id": "F-11",
+    "stage": "frontend",
+    "prior_gain": 0.5,
+    "delta": "Transfer several rows per operation instead of one row at a time. Applies when the loop moves single rows or small tensors repeatedly, those rows are contiguous in memory, their consumers are in the same stage, and the on-chip budget holds a multi-row tile.",
+    "bound": ["MTE2", "MTE3"]
+  },
+  {
+    "id": "F-12",
+    "stage": "frontend",
+    "prior_gain": 0.5,
+    "delta": "Mark data that is read once as non-cacheable, so it stops evicting data that is reused. Applies when a large operand is consumed exactly once, no later reuse is possible by shape or schedule, and reused data is losing cache residency to those streaming reads.",
+    "bound": ["MTE2"]
+  },
+  {
+    "id": "F-13",
+    "stage": "frontend",
+    "prior_gain": 0.5,
+    "delta": "Write a result out in one transfer instead of row by row. Applies when the result already sits contiguously on-chip in output order, nothing transforms it afterwards, and it has to reach one contiguous destination range.",
+    "moves": ["workspace"],
+    "bound": ["MTE3"]
+  },
+  {
+    "id": "F-14",
+    "stage": "frontend",
+    "prior_gain": 0.5,
+    "delta": "Route a degenerate case to a plain copy instead of running the general transform. Applies when the operator's parameters can make the transform an identity -- a reshape that moves nothing, a single-segment split -- and that condition is fully provable from shape and layout before the work is planned.",
+    "bound": ["SCALAR"]
+  },
+  {
+    "id": "F-15",
+    "stage": "frontend",
+    "prior_gain": 0.5,
+    "delta": "Hand a result from one compute unit to the next on-chip instead of writing it out and reading it back. Applies when the producer's result is consumed immediately by the other unit and that round trip is on the critical path.",
+    "requires": ["has_cube_op"],
+    "moves": ["workspace"],
+    "bound": ["VEC", "MTE2", "MTE3"]
+  },
+  {
+    "id": "F-16",
+    "stage": "frontend",
+    "prior_gain": 0.9,
+    "delta": "Keep only the K candidates each block can contribute and truncate again at every merge level, instead of fully ordering all N elements. Applies when the consumer uses only K values or indices while the code orders the whole input, or a merge level keeps more than K candidates, and an element outside a block's local top K provably cannot enter the global one. Equivalent only if the comparison key encodes the whole ordering semantics -- direction, stability, tie-break and special values -- so truncating cannot change which elements win.",
+    "bound": ["算法", "VEC", "Scalar", "访存"]
+  },
+  {
+    "id": "F-17",
+    "stage": "frontend",
+    "prior_gain": 0.5,
+    "delta": "Count occurrences over a small exact domain and locate the answer from the counts, instead of ordering the input. Applies when the frozen contract proves the input lies in a finite domain small enough to hold a counter table, that domain is far smaller than the input, and prefix counts recover the required value, index and tie result exactly. Equivalent only if the domain is exact rather than bucketed, the counters cannot overflow, and a stable index is recoverable from the counts alone.",
+    "bound": ["算法", "VEC", "访存"]
+  },
+  {
+    "id": "F-18",
+    "stage": "frontend",
+    "prior_gain": 0.5,
+    "delta": "Delete a production chain that reaches no observable output, together with the transfers and descriptors only it uses. Applies when a full def-use and reachability argument shows its initialisation, updates and stores cannot reach any output, and the generated code still carries the work. Equivalent only if no rare, tail, empty-input, all-invalid or fallback path consumes it, and no value in it serves as an identity, a padding value or a safe address.",
+    "bound": ["算法", "VEC", "Scalar", "访存"]
+  },
+  {
+    "id": "F-19",
+    "stage": "frontend",
+    "prior_gain": 0.5,
+    "delta": "Compute a repeated production once and share it with every consumer, instead of rebuilding it per consumer. Applies when two chains run the same scan, reduction or intermediate construction over the same input, range, type, layout and masking, and the first consumer does not overwrite the result. Equivalent only if every ordering and rounding semantic agrees between the two, and sharing does not force a spill or exceed the on-chip budget.",
+    "bound": ["算法", "VEC", "Scalar", "访存"]
+  },
+  {
+    "id": "F-20",
+    "stage": "frontend",
+    "prior_gain": 0.5,
+    "delta": "Widen the tile or strip so one logical item is cut into fewer pieces, instead of paying the per-piece fixed cost many times over. Applies when an item is split into many small tiles that each repeat descriptor, mask and setup work, so the fixed cost grows with the tile count and dominates, and adjacent pieces can be merged while the budget still holds the rotating slots and live roles. Equivalent only if the valid shape, the tail's neutral values, the offset unit and every load, store and reduction are recomputed for the new width.",
+    "bound": ["Scalar", "调度", "访存", "流水"]
+  },
+  {
+    "id": "F-21",
+    "stage": "frontend",
+    "prior_gain": 0.5,
+    "delta": "Compute only the part of the domain the consumer needs, instead of the whole sort, scan or reduction. Applies when the contract and a full def-use argument show the consumer needs a strict subset -- proved there, never inferred from the inputs that have been seen -- and the omitted part cannot affect any observable output.",
+    "bound": ["算法", "VEC", "Scalar", "访存"]
+  },
+  {
+    "id": "F-22",
+    "stage": "frontend",
+    "prior_gain": 0.5,
+    "delta": "Connect a producer to its consumer directly, instead of writing the intermediate out and reading it back. Applies when the intermediate is still consumed, but the two sides' live ranges, types, owners, synchronisation and capacity allow the hand-off to stay on-chip. Equivalent only if the intermediate is not itself an output and the contract does not require it to be materialised.",
+    "moves": ["workspace"],
+    "bound": ["访存", "流水", "同步"]
+  },
+  {
+    "id": "F-23",
+    "stage": "frontend",
+    "prior_gain": 0.5,
+    "delta": "Specialise the resource allocation and the hot path at build time for each of a small number of metadata classes, instead of carrying one configuration that has to suit them all. Applies when the classification depends only on metadata the contract permits, the classes are finitely many, and it stays one build and one launch. Equivalent only if every class keeps the same public contract.",
+    "bound": ["Scalar", "资源", "调度"]
+  },
+  {
+    "id": "F-24",
+    "stage": "frontend",
+    "prior_gain": 0.5,
+    "delta": "Let mutually exclusive stages reuse one physical on-chip arena instead of giving each its own. Applies when the live intervals of the differently typed tile groups are genuinely disjoint, and the addresses, capacity, alignment and mutual-exclusion ids are each valid and do not conflict. Equivalent only if every launched lane reaches the hard barrier unconditionally, so no lane is still holding the arena when the next stage claims it.",
+    "moves": ["workspace"],
+    "bound": ["片上容量", "搬运"]
+  },
+  {
+    "id": "F-25",
+    "stage": "frontend",
+    "delta": "Move a computation that is a contraction in shape onto the matrix unit, instead of carrying it out as vector operations. Applies when the kernel computes a product-and-sum over a shared axis in the vector unit, and the matrix unit can take its operand shapes -- the move introduces new tile sites for the operands and the accumulator. Equivalent only if the accumulator's precision matches the rounding of the vector path it replaces, so nothing is spent from the accuracy budget.",
+    "prior_gain": 0.9,
+    "bound": ["VEC"],
+    "conversion": true
+  },
+  {
+    "id": "S-1",
+    "stage": "swimlane",
+    "requires": ["has_cube_op"],
+    "delta": "Deep-tune the Cube tile shapes against the pipeline, trading reloads of the on-chip operand against a split of the reduction axis. Applies when the structure has moved since the Cube shapes were last searched, or they were never searched on this structure. Equivalent only if the shape stays expressible -- `M > 128` is forbidden by the L0C `mad` column pitch (`ceil16(m)`), so windowing N is the supported direction.",
+    "prior_gain": 0.5
+  },
+  {
+    "id": "S-2",
+    "stage": "swimlane",
+    "delta": "Deep-tune the Vector tile shapes against the hand-off to the stages on either side. Applies when the structure has moved since the Vector shapes were last searched, or they were never searched on this structure. TPE searches only the Vector tile shapes; buffering depth and the pipeline's preload VALUE remain agent-owned choices under a separate concrete edit. There is no `vec_nbuffer_setting` on this arm.",
+    "prior_gain": 0.5
+  },
+  {
+    "id": "S-3",
+    "stage": "swimlane",
+    "delta": "Set the pipeline knobs on the kernel's entry point: how far ahead the pipeline preloads, and whether mutual exclusion is inferred. ENUMERATE, do not search -- the space is small enough to walk, and walking it is cheaper than modelling it. A larger preload hides more transfer latency and pays for it in a longer fill and drain, so the useful value is per kernel. Applies when the kernel has `@pl.pipeline.stage` functions; without them `pipeline=` is refused after the build has already been paid for, and only the mutual-exclusion knob remains.",
+    "prior_gain": 0.5
+  },
+  {
+    "id": "S-4",
+    "stage": "swimlane",
+    "prior_gain": 0.5,
+    "delta": "Overlap the accumulator's write-out with the next multiply at a finer granularity than the whole output block. Applies when the accumulator is written straight out with no post-processing stage, the write-out and the multiply are serialised end to end, and the accumulator space is too full to hold a second buffer.",
+    "requires": ["has_cube_op"],
+    "bound": ["MAC", "FIXPIPE"]
+  },
+  {
+    "id": "S-5",
+    "stage": "swimlane",
+    "prior_gain": 0.5,
+    "delta": "Place the two alternating operand buffers in different banks of the on-chip space instead of letting them collide. Applies when the inner loop holds two or more operand buffers and each one fits in half the space.",
+    "requires": ["has_cube_op"],
+    "bound": ["MTE1"]
+  },
+  {
+    "id": "S-6",
+    "stage": "swimlane",
+    "prior_gain": 0.5,
+    "delta": "Split the reduction axis across cores and accumulate the partial results atomically, instead of giving each core a whole output tile. Applies when there are fewer output tiles than cores, the reduction axis is long, and the output type supports atomic accumulation. Equivalent only if the precision budget allows the partial sums to be combined in an order that is not fixed.",
+    "requires": ["has_cube_op"],
+    "bound": ["MAC"]
+  },
+  {
+    "id": "S-7",
+    "stage": "swimlane",
+    "prior_gain": 0.5,
+    "delta": "Issue the next operand's transfer before the current one is consumed, instead of waiting for the dependence to clear. Applies when double buffering is already in place but the pipeline still shows transfer gaps, and the inner loop runs at least twice.",
+    "requires": ["has_cube_op"],
+    "bound": ["MTE2"]
+  },
+  {
+    "id": "S-8",
+    "stage": "swimlane",
+    "prior_gain": 0.5,
+    "delta": "Assign cores over one flat tile space spanning all groups instead of group by group. Applies when a single kernel carries many groups of the same operation and no group's tile count divides the core count, so each group leaves cores idle at its boundary.",
+    "requires": ["has_cube_op"],
+    "bound": ["MAC"]
+  },
+  {
+    "id": "S-9",
+    "stage": "swimlane",
+    "prior_gain": 0.5,
+    "delta": "Increase the overlap between transfer and compute when no single unit is the bottleneck. Applies when every unit's utilisation is low, the trace shows pipeline bubbles and waiting intervals, and no one stage can be named as the limit.",
+    "bound": ["PIPELINE"]
+  },
+  {
+    "id": "S-10",
+    "stage": "swimlane",
+    "prior_gain": 0.5,
+    "delta": "Reorder the stages so compute issues ahead of the previous iteration's write-out, delaying the write by one step. Applies when double buffering is on but load, compute and store still run in sequence, and each core has enough tiles for the pipeline to fill.",
+    "bound": ["PIPELINE"]
+  },
+  {
+    "id": "S-11",
+    "stage": "swimlane",
+    "prior_gain": 0.5,
+    "delta": "Interleave the two compute units' work from adjacent iterations instead of running each unit's whole stage in turn. Applies when the two have independent work in neighbouring iterations and the pipeline currently serialises them.",
+    "bound": ["PIPELINE"]
+  },
+  {
+    "id": "S-12",
+    "stage": "swimlane",
+    "prior_gain": 0.5,
+    "delta": "Track the buffer index of an address space shared by several tile groups with one explicit shared counter, instead of letting each group advance its own. Applies when several tile groups share the same addresses and mutual-exclusion ids, and different phases call the groups an unequal number of times. Equivalent only if every phase advances the shared counter, including a phase that skips its body.",
+    "bound": ["PIPELINE"]
+  },
+  {
+    "id": "S-13",
+    "stage": "swimlane",
+    "prior_gain": 0.5,
+    "delta": "Give the short-lived input slot and the long-lived accumulation state separate roles, so the next load can overlap the fold before it. Applies when the rotating input slots are held by in-place accumulation state, serialising a load against that fold, and the live ranges show both roles must exist at once. Equivalent only if the separation comes from a real slot rather than from overlapping addresses or a reused mutual-exclusion id, and it does not add a copy to buy the independence.",
+    "bound": ["VEC", "访存", "流水"]
+  },
+  {
+    "id": "S-14",
+    "stage": "swimlane",
+    "prior_gain": 0.9,
+    "delta": "Tune the core count, the owner granularity and the tail policy as one candidate instead of one at a time. Applies when idle cores, a long tail or a wide per-core spread appears, and changing the core count alone neither explains nor reproduces the result. Equivalent only if every candidate covers each work item exactly once with disjoint owners -- or, where they overlap, the overlap is a reduction the contract allows.",
+    "bound": ["Launch", "调度", "Scalar", "访存"]
+  },
+  {
+    "id": "S-15",
+    "stage": "swimlane",
+    "prior_gain": 0.9,
+    "delta": "Remove a synchronisation whose protected resource has no later consumer. Applies when a wait or barrier on the hot path can be mapped to a specific producer, consumer, resource and retirement point, and that consumer does not exist. Equivalent only if the two sides share no resource the data flow does not show -- a reused on-chip address, a scratch value read back later, or a wrap-around that overwrites.",
+    "bound": ["同步", "Scalar", "流水"]
+  },
+  {
+    "id": "S-16",
+    "stage": "swimlane",
+    "prior_gain": 0.5,
+    "delta": "Process several independent work items in one task, instead of building a task, descriptor and setup for each. Applies when each item's real work is small beside its fixed cost, the items are independent and layout-compatible, one owner can group them, and grouping does not worsen the access pattern. Equivalent only if no prefix, recurrence, cross-item reduction or visible ordering runs between them, and the last group's real item count, each item's tail and each offset stay separately correct.",
+    "bound": ["Launch", "Scalar", "调度", "访存"]
+  },
+  {
+    "id": "S-17",
+    "stage": "swimlane",
+    "prior_gain": 0.5,
+    "delta": "Reuse one copy of a shared operand across several outputs of the same partition, instead of re-staging it per output. Applies when at least two outputs take exactly the same operand, each partition's chain opens and closes independently, and the accumulator and operand budgets hold the extra outputs. Equivalent only if each output keeps its own reduction order and its single writer.",
+    "requires": ["has_cube_op"],
+    "bound": ["Cube", "搬运", "流水"]
+  },
+  {
+    "id": "S-18",
+    "stage": "swimlane",
+    "prior_gain": 0.5,
+    "delta": "Reuse one set of shared operand residuals across an adjacent pair of outputs, instead of loading them once per output. Applies when complete adjacent pairs exist whose residuals are identical, and the accumulator and operand budgets hold both outputs at once. Equivalent only if the per-output accumulation order, the odd tail and the single writer are unchanged.",
+    "requires": ["has_cube_op"],
+    "bound": ["Cube", "搬运"]
+  },
+  {
+    "id": "S-19",
+    "stage": "swimlane",
+    "prior_gain": 0.5,
+    "delta": "Flatten a multi-stage logical task onto the physical cores, so fewer cores idle and the scheduling tail shortens. Applies when a single kernel already has several stages, the task mapping can be changed, and each section can recover its physical id independently under its target engine's semantics. Equivalent only if each stage is covered exactly once, every launched core reaches the barrier in the same order and the same number of times, and the tail, the dataflow and the reduction order are unchanged.",
+    "requires": ["module_count >= 2"],
+    "bound": ["调度", "Scalar", "流水"]
+  },
+  {
+    "id": "I-1",
+    "stage": "incore",
+    "prior_gain": 0.5,
+    "delta": "Fuse adjacent element-wise chains so their intermediate never leaves the unit. Applies when the intermediate has no consumer outside the chain, the generated code still writes it out and reads it back, and the on-chip budget holds the fused live set.",
+    "moves": ["workspace"],
+    "bound": ["VEC", "MTE2", "MTE3"]
+  },
+  {
+    "id": "I-2",
+    "stage": "incore",
+    "prior_gain": 0.5,
+    "delta": "Remove a type conversion, batch several into one pass, or move one to where its result is used. Applies when a conversion is redundant, several can share a pass, or one materialises a staging tile of its own. Equivalent only if the type, the rounding and the value range make the rewritten conversion exact.",
+    "bound": ["VEC"]
+  },
+  {
+    "id": "I-3",
+    "stage": "incore",
+    "prior_gain": 0.5,
+    "delta": "Fuse a multiply and the add that consumes it into one operation. Applies when the two appear together, the compiler has not fused them already, and the intermediate product has no other consumer.",
+    "bound": ["VEC"]
+  },
+  {
+    "id": "I-4",
+    "stage": "incore",
+    "prior_gain": 0.5,
+    "delta": "Broadcast a reduced value in registers instead of storing it and reading it back as a scalar. Applies when a per-row reduction is followed by a scalar round trip, or by a store and reload of a tile, and the consumer can read the value within the same vector pass.",
+    "bound": ["VEC", "SCALAR"]
+  },
+  {
+    "id": "I-5",
+    "stage": "incore",
+    "prior_gain": 0.5,
+    "delta": "Keep an intermediate in registers instead of materialising it on-chip. Applies when it serves only the step immediately after it, has no role across iterations and is not an output, and the generated code stores and reloads it.",
+    "moves": ["workspace"],
+    "bound": ["VEC", "MTE2", "MTE3"]
+  },
+  {
+    "id": "I-6",
+    "stage": "incore",
+    "prior_gain": 0.5,
+    "delta": "Broadcast a loop-invariant once outside the loop, and merge several rows into one vector operation. Applies when the value does not change across the reusing loop, and the rows to be merged agree in layout, tiling and masking.",
+    "bound": ["VEC", "MTE2"]
+  },
+  {
+    "id": "I-7",
+    "stage": "incore",
+    "prior_gain": 0.5,
+    "delta": "Replace a reduction written as a scalar loop or a linear dependence chain with the hardware's tree reduction. Applies when the result is a single value, or one that can be broadcast, and the element type and masking fit the reduction primitive.",
+    "bound": ["VEC"]
+  },
+  {
+    "id": "I-8",
+    "stage": "incore",
+    "prior_gain": 0.5,
+    "delta": "Accumulate into several independent registers and combine them at the end, instead of into one. Applies when a single accumulator's read-after-write chain is the limit rather than register pressure, and the reduction is long enough to pay for the final combine. Equivalent only if the reduction's order may change.",
+    "bound": ["VEC"]
+  },
+  {
+    "id": "I-9",
+    "stage": "incore",
+    "prior_gain": 0.5,
+    "delta": "Move a loop that repeats the same vector body inside that body. Applies when the iterations are independent of each other, their setup does not change between them, and the merged body's register and tile lifetimes fit.",
+    "bound": ["VEC", "SCALAR"]
+  },
+  {
+    "id": "I-10",
+    "stage": "incore",
+    "prior_gain": 0.5,
+    "delta": "Unroll a loop whose trip count is known when the kernel is built. Applies when that count is small, and the unrolled offsets and masks are the same work as the loop's.",
+    "bound": ["VEC"]
+  },
+  {
+    "id": "I-11",
+    "stage": "incore",
+    "prior_gain": 0.5,
+    "delta": "Reduce how much transcendental arithmetic runs. Applies when it dominates the hot path and one of three openings exists: a repeated call whose result can be reused, a fused form the language offers, or a table or approximation whose accuracy can be shown to fit the precision budget.",
+    "bound": ["VEC"]
+  },
+  {
+    "id": "I-12",
+    "stage": "incore",
+    "prior_gain": 0.5,
+    "delta": "Split one vector body into specialised bodies along a provable condition, so each holds fewer live values. Applies when the generated code spills and reloads, the condition can be proved where the split is made, and each specialised body genuinely drops logic rather than branching around it.",
+    "bound": ["VEC"]
+  },
+  {
+    "id": "I-13",
+    "stage": "incore",
+    "prior_gain": 0.5,
+    "delta": "Handle the full and the tail iterations with one masked body instead of two copies. Applies when the two bodies do the same work, the active count per step can be recomputed exactly from the total and the offset, and both use the same element granularity.",
+    "bound": ["VEC", "SCALAR"]
+  },
+  {
+    "id": "I-14",
+    "stage": "incore",
+    "prior_gain": 0.5,
+    "delta": "Flip the layout so the reduction axis lies along the vector lanes, removing cross-lane reductions and scalar packing. Applies when the hot body reduces along an axis the layout places across lanes, the producer can be rewritten to emit the transposed form, and the flipped live set fits on-chip. Equivalent only if no reduced result is consumed across the axis that was flipped.",
+    "bound": ["VEC"]
+  },
+  {
+    "id": "I-15",
+    "stage": "incore",
+    "prior_gain": 0.5,
+    "delta": "Hoist redundant scalar computation out of the loop. Applies when the scalar lane is busy while the vector lane idles, or the shape is small enough that address arithmetic dominates, and the loop recomputes divisions, remainders or offsets that do not change.",
+    "bound": ["SCALAR"]
+  },
+  {
+    "id": "I-16",
+    "stage": "incore",
+    "prior_gain": 0.5,
+    "delta": "Take a faster association of the arithmetic only where the value range proves it stays inside the precision budget, keeping the original order elsewhere. Applies when regrouping, tree folding or cross-row merging changes the order of floating-point operations, and the error depends on the input range. Equivalent only if the range is established by the frozen contract -- a shape, a type tier or a sample of inputs is not a proof.",
+    "bound": ["VEC", "精度", "算法"]
+  },
+  {
+    "id": "I-17",
+    "stage": "incore",
+    "prior_gain": 0.5,
+    "delta": "Cut the downstream work and transfers to the lanes that are actually valid, instead of carrying padding lanes through compare, scan, merge and movement. Applies when the physical tile is wider than the real extent, the padding lanes still take part in that work after being neutralised, and the real valid domain is expressible. Equivalent only if the identity values, predicates and safe addresses that correctness rests on stay in place, and invalid lanes are masked before an address is formed rather than only at the final store.",
+    "bound": ["算法", "VEC", "访存"]
+  },
+  {
+    "id": "I-18",
+    "stage": "incore",
+    "prior_gain": 0.5,
+    "delta": "Classify once on metadata and branch to a small number of specialised paths, so the inner loop stops evaluating the condition. Applies when a condition tested per row, per rank or per tile is constant over the whole owner, stage or a finite shape class, and the generated code still carries the branch and its unused path in the hot region. Equivalent only if the condition carries no state between iterations.",
+    "bound": ["Scalar", "调度", "VEC", "Cube"]
+  },
+  {
+    "id": "I-19",
+    "stage": "incore",
+    "prior_gain": 0.5,
+    "delta": "Hoist the invariant parts of address and descriptor construction out of the loop, leaving only the fields that really change inside it. Applies when shape products, axis normalisation, base addresses, strides or descriptor parameters are constant across a batch of work items but rebuilt every iteration, and that cost is visible in the generated code. Equivalent only if the per-item valid shape, tail and offset are not treated as invariant.",
+    "bound": ["Scalar", "调度", "访存"]
+  },
+  {
+    "id": "I-20",
+    "stage": "incore",
+    "prior_gain": 0.5,
+    "delta": "Keep a data-parallel computation in the vector path, instead of routing it through scalar reads and broadcasts or a per-element loop. Applies when a compare, select, reduce or merge could run data-parallel but the generated code still moves the value out to the scalar side and back, or walks it element by element. Equivalent only if no real serial dependence exists, and where parallelising changes the reduction order the precision is re-established against the frozen contract.",
+    "bound": ["Scalar", "VEC", "访存"]
+  },
+  {
+    "id": "I-21",
+    "stage": "incore",
+    "prior_gain": 0.5,
+    "delta": "Make a small bounded control or reduction topology static, removing the dynamic back edge and the repeated start-up it costs. Applies when the frozen contract proves the trip count or the topology is fixed and small, and that dynamic edge, the repeated start-up, or a single accumulator's dependence chain is the main cost. Equivalent only if the amount of arithmetic, the owner and the output semantics do not change, and the static form neither spills nor outgrows the code budget.",
+    "bound": ["Scalar", "VEC", "Cube", "精度"]
+  },
+  {
+    "id": "I-22",
+    "stage": "incore",
+    "prior_gain": 0.5,
+    "delta": "Narrow an internal key, index or value to the width its proved range needs. Applies when the full reachable range is established by the frozen contract or by permitted metadata, and the current width has a measurable cost in scalar work, vector work, registers or transfers. Equivalent only if no overflow or precision gate is bypassed on the way.",
+    "moves": ["workspace"],
+    "bound": ["Scalar", "VEC", "访存", "精度"]
+  },
+  {
+    "id": "I-23",
+    "stage": "incore",
+    "prior_gain": 0.5,
+    "delta": "Accumulate a dot product over a panel with a scalar broadcast in the vector unit, instead of taking the general path. Applies when the operator has a panel dot of that shape and its layout, stride, masking and tail are expressible. Equivalent only if the panel width divides the group width or an explicit tail path exists, and the frozen precision allows that accumulation and its compensation.",
+    "requires": ["has_cube_op"],
+    "bound": ["Vector", "Scalar", "搬运"]
+  }
+]

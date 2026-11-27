@@ -7,7 +7,8 @@
 # INCLUDING BUT NOT LIMITED TO NON-INFRINGEMENT, MERCHANTABILITY, OR FITNESS FOR A PARTICULAR PURPOSE.
 # See LICENSE in the root of the software repository for the full text of the License.
 
-"""Install the PyPTO-Pro skills and their entry point for the selected tool.
+"""
+Install the PyPTO-Pro skills and their entry point for the selected tool.
 
 Uses the existing Python environment; does not install PyPTO-Pro/CANN or run
 network or device commands.
@@ -16,16 +17,17 @@ network or device commands.
 from __future__ import annotations
 
 import argparse
-from datetime import datetime, timezone
 import hashlib
 import json
 import os
-from pathlib import Path
 import shutil
 import stat
 import sys
 import tempfile
 import uuid
+from datetime import datetime, timezone
+from pathlib import Path
+
 
 
 def filesystem_path(path):
@@ -69,11 +71,12 @@ ORCHESTRATOR = filesystem_path(Path(__file__).resolve().parents[1])
 PLUGIN = "pypto-pro-op-orchestrator"
 SKILLS = (
     "pypto-pro-kernel",
+    "pypto-pro-op-perf-panko-manual",
 )
-AGENTS = tuple(
-    f"pypto-pro-op-{role}"
-    for role in ("planner", "coder", "debugger", "verifier", "optimizer", "tool")
-)
+
+
+AGENT_ROLES = ("planner", "coder", "debugger", "verifier", "optimizer", "tool", "auto-tuner-panko")
+AGENTS = tuple(f"pypto-pro-op-{role}" for role in AGENT_ROLES)
 RECEIPT = f"{PLUGIN}-install.json"
 BEGIN = f"<!-- cannbot:{PLUGIN}:begin -->"
 END = f"<!-- cannbot:{PLUGIN}:end -->"
@@ -154,7 +157,7 @@ def read_jsonc(path):
                 quoted = False
         elif char == '"':
             quoted = True
-        elif char == "," and text[index + 1 :].lstrip().startswith(("}", "]")):
+        elif char == "," and text[index + 1:].lstrip().startswith(("}", "]")):
             continue
         output.append(char)
     value = json.loads("".join(output))
@@ -237,7 +240,10 @@ def _resources(source, prefix, config=None):
             continue
         content = path.read_bytes()
         if config is not None and path.suffix == ".md":
-            content = render(content.decode("utf-8"), config).encode("utf-8")
+            document = render(content.decode("utf-8"), config)
+            if relative == Path("multi-agent-workflow.md"):
+                document = document.replace("](../AGENTS.md)", f"](../agents/{PLUGIN}.md)")
+            content = document.encode("utf-8")
         result[(Path(prefix) / relative).as_posix()] = content
     return result
 
@@ -342,7 +348,7 @@ def _root_prompt(target, content, previous):
             or existing.index(BEGIN) > existing.index(END)
         ):
             raise InstallError(f"ambiguous managed instruction block: {target}")
-        managed = existing[existing.index(BEGIN) : existing.index(END) + len(END)]
+        managed = existing[existing.index(BEGIN): existing.index(END) + len(END)]
         expected = previous.get("managed_prompt_sha256")
         if expected is None or digest(managed.encode("utf-8")) != expected:
             raise InstallError(
@@ -352,7 +358,7 @@ def _root_prompt(target, content, previous):
         return (
             existing[: existing.index(BEGIN)]
             + block
-            + existing[existing.index(END) + len(END) :]
+            + existing[existing.index(END) + len(END):]
         ).encode("utf-8")
     return (existing.rstrip() + "\n\n" + block + "\n").encode("utf-8")
 
@@ -599,6 +605,7 @@ def install(project, *, tool="opencode", global_level=False):
     _reject_legacy_installation(config, root_target, previous, tool)
     retire = set()
     sources = {}
+    dependency_sources = {}
     desired = {}
     for skill in SKILLS:
         source = ORCHESTRATOR.parents[1] / "ops" / skill
@@ -606,6 +613,24 @@ def install(project, *, tool="opencode", global_level=False):
             raise InstallError(f"missing required Skill: {source / 'SKILL.md'}")
         sources[skill] = source
         desired.update(_resources(source, f"skills/{skill}"))
+    # Install a snapshot of the canonical runtime, without its test suite or
+    # another DSL's agents. Both frontends are maintained in the same sources.
+    panko = "pypto-pro-op-perf-panko-manual"
+    if panko in sources:
+        core_source = sources[panko].parent / "pypto-op-perf-panko-manual" / "scripts"
+        prefix = f"skills/{panko}/scripts/_core"
+        core_hash = hashlib.sha256()
+        for source in sorted(core_source.rglob("*.py")):
+            relative = source.relative_to(core_source)
+            if "tests" in relative.parts or "__pycache__" in relative.parts:
+                continue
+            name = f"{prefix}/{relative.as_posix()}"
+            content = source.read_bytes()
+            desired[name] = content
+            dependency_sources[name] = source
+            core_hash.update(relative.as_posix().encode() + b"\0" + content)
+        desired[f"{prefix}/VERSION"] = ("core-sha256:" + core_hash.hexdigest() + "\n").encode()
+        dependency_sources[f"{prefix}/VERSION"] = core_source / "panko" / "backend.py"
     license_path = ORCHESTRATOR.parents[2] / "LICENSE"
     if not license_path.is_file():
         raise InstallError(f"missing repository license: {license_path}")
@@ -654,6 +679,10 @@ def install(project, *, tool="opencode", global_level=False):
             f"unmanaged or modified installation resource; preserve/move it before retrying: {target}"
         )
     for name, fingerprint in previous.get("owned_files", {}).items():
+        # Older installers merged the relay SDK into a shared manifest. Stop
+        # managing it without removing dependencies or subsequent user edits.
+        if name == "package.json":
+            continue
         if name not in desired:
             target = config / name
             _no_link_parents(target.parent, config)
@@ -687,8 +716,8 @@ def install(project, *, tool="opencode", global_level=False):
             preserve(config / name, name)
         for name, content in desired.items():
             target = config / name
-            mode_source = None
-            if name.startswith("skills/"):
+            mode_source = dependency_sources.get(name)
+            if mode_source is None and name.startswith("skills/"):
                 skill, _, relative = name.removeprefix("skills/").partition("/")
                 if skill in sources and relative:
                     mode_source = (
