@@ -19,12 +19,15 @@ if __package__ in (None, ""):
 
 import builtins
 import hashlib
+import json
 import logging
 import os
 import runpy
 import time
 import shutil
 import traceback
+from contextlib import contextmanager
+from importlib.machinery import SourceFileLoader
 
 logger = logging.getLogger(__name__)
 
@@ -36,8 +39,11 @@ LAUNCH_MARKER = "[panko-progress] launch %d/%d done"
 
 # Bind the measurement to the loaded module path and hash.
 IMPL_ENV = "PANKO_IMPL_PATH"
+PROGRAM_IMPL_ENV = "PANKO_PROGRAM_IMPL_PATHS"
+EXPORT_PATHS_ENV = "PANKO_EXPORT_IMPORT_PATHS"
 
 IMPL_MARKER = "[panko-progress] impl %s %s"
+MODULE_MARKER = "[panko-progress] program module "
 
 # A frozen test can read its launch grid from this environment variable.
 BLOCK_DIM_ENV = "PANKO_BLOCK_DIM"
@@ -159,13 +165,16 @@ def run(script, args, launches, block_dim=None, timing=None):
     here = os.path.dirname(script)
     if here and here not in sys.path:
         sys.path.insert(0, here)
+    # Frozen tests can import either the qualified package or its top-level modules.
+    sys.path[:0] = json.loads(os.environ.pop(EXPORT_PATHS_ENV, "[]"))
     if block_dim is not None:
         os.environ[BLOCK_DIM_ENV] = str(int(block_dim))
     started = time.perf_counter() if timing is not None else None
     for i in range(launches):
         sys.argv = [script, *[str(a) for a in args]]
         try:
-            runpy.run_path(script, run_name="__main__")
+            with capture_impl_imports(i == 0) as imported_paths:
+                runpy.run_path(script, run_name="__main__")
         except builtins.SystemExit as exc:
             # A script exit is a result, including a successful exit(None/0).
             code = exc.code
@@ -185,26 +194,57 @@ def run(script, args, launches, block_dim=None, timing=None):
         if i == 0:
             err.write(FIRST_CALL_MARKER + "\n")
             err.flush()
-            report_impl_modules(out)
+            report_impl_modules(out, imported_paths)
         out.write((LAUNCH_MARKER % (i + 1, launches)) + "\n")
         out.flush()
     return 0
 
 
-def report_impl_modules(out):
+@contextmanager
+def capture_impl_imports(enabled):
+    """Observe source loads on the first launch, including modules removed from the import cache."""
+    paths = set()
+    if not enabled or not os.environ.get(PROGRAM_IMPL_ENV):
+        yield paths
+        return
+    original = SourceFileLoader.exec_module
+
+    def observed(loader, module):
+        result = original(loader, module)
+        paths.add((loader.name, module.__package__, loader.path))
+        return result
+
+    SourceFileLoader.exec_module = observed
+    try:
+        yield paths
+    finally:
+        SourceFileLoader.exec_module = original
+
+
+def report_impl_modules(out, imported_paths=()):
     """Report loaded implementation paths and hashes after launch. Diagnostic failures are nonfatal."""
     staged = os.environ.get(IMPL_ENV)
     if not staged:
         return
     try:
+        program_paths = json.loads(os.environ.get(PROGRAM_IMPL_ENV, "[]"))
+        want = {os.path.basename(p) for p in program_paths} if program_paths else {os.path.basename(staged)}
         seen = set()
-        paths = [getattr(module, "__file__", None) for module in list(sys.modules.values())]
-        for path in paths:
-            real = os.path.realpath(path) if path and os.path.basename(path) == os.path.basename(staged) else None
-            if real and real not in seen:
-                seen.add(real)
-                digest = hashlib.sha256(Path(real).read_bytes()).hexdigest()
-                out.write((IMPL_MARKER % (digest[:8], real)) + "\n")
+        modules = [(name, getattr(module, "__package__", None), getattr(module, "__file__", None))
+                   for name, module in list(sys.modules.items())]
+        reported = set()
+        for name, package, path in [*modules, *imported_paths]:
+            if not isinstance(path, str) or os.path.basename(path) not in want:
+                continue
+            real = os.path.realpath(path)
+            if program_paths and (name, real) not in reported:
+                out.write(MODULE_MARKER + json.dumps([name, package, real]) + "\n")
+                reported.add((name, real))
+            if real in seen:
+                continue
+            seen.add(real)
+            digest = hashlib.sha256(Path(real).read_bytes()).hexdigest()
+            out.write((IMPL_MARKER % (digest if program_paths else digest[:8], real)) + "\n")
         out.flush()
     except Exception:                       # noqa: BLE001 -- a diagnostic only
         pass

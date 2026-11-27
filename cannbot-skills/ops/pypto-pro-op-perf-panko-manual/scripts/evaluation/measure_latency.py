@@ -14,6 +14,7 @@ from __future__ import annotations
 import csv
 import glob
 import hashlib
+import json
 import logging
 import math
 import os
@@ -24,7 +25,9 @@ import subprocess
 import tempfile
 import time
 from contextlib import contextmanager
+from collections import Counter
 from dataclasses import dataclass, replace
+from importlib.util import resolve_name
 from pathlib import Path
 from typing import List, Mapping, Optional, Tuple
 
@@ -72,6 +75,7 @@ class Reading:
     # Each latency sample sums the device rows belonging to one call.
     calls: Optional[int] = None
     rows_per_call: Optional[int] = None
+    tasks_per_call: Optional[dict] = None
 
 
 def prior_cell(row: Mapping, column: str) -> Optional[float]:
@@ -141,8 +145,6 @@ def _group_by_call(rows, calls):
 
 
 def _call_durations(groups, chosen):
-    if chosen == "*" and any(sorted(r[NAME] for r in group) != sorted(r[NAME] for r in groups[0]) for group in groups):
-        raise ValueError("program task composition differs between repeated calls")
     durations = [[prior_cell(row, DURATION) for row in group] for group in groups]
     if any(None in cells for cells in durations):
         raise ValueError(f"missing or invalid {DURATION} for {chosen!r}")
@@ -150,6 +152,17 @@ def _call_durations(groups, chosen):
     if any(not math.isfinite(value) for value in samples):
         raise ValueError(f"non-finite per-call sum for {DURATION}")
     return samples
+
+
+def _program_tasks(groups):
+    """Count each AI-Core name per call, independent of row order."""
+    def counts(group):
+        return Counter(row[NAME].strip() for row in group)
+
+    first = counts(groups[0])
+    if any(counts(group) != first for group in groups[1:]):
+        raise ValueError("program task composition differs between repeated calls")
+    return dict(first)
 
 
 def _op_summary_in(root: str) -> str:
@@ -288,7 +301,8 @@ def _summarise_launches(profile, ordered, warmup, calls, block_dim):
         raise ValueError(disagreement)
     return Reading(p=round(median, LATENCY_DECIMALS), samples=tuple(warm), warmup=warmup, op_name=chosen,
                    sigma_log=log_sample_sigma(warm), block_num=block, rows_considered=profile.core_count, error=None,
-                   calls=calls, rows_per_call=len(groups[0]))
+                   calls=calls, rows_per_call=len(groups[0]),
+                   tasks_per_call=_program_tasks(groups) if chosen == "*" else None)
 
 
 _agg = core_profile.aggregate
@@ -307,7 +321,8 @@ def reading_to_metrics(reading, workspace, compile_s=None):
         # Whether `p` is one of the warm readings rather than a synthetic midpoint.
         "p_is_sample": bool(samples) and reading.p is not None and statistics.median(samples) in samples,
     }
-    optional = {"calls": reading.calls, "rows_per_call": reading.rows_per_call, "p_error": reading.error or None}
+    optional = {"calls": reading.calls, "rows_per_call": reading.rows_per_call,
+                "tasks_per_call": reading.tasks_per_call, "p_error": reading.error or None}
     out.update({key: value for key, value in optional.items() if value is not None})
     out.update(workspace)
     return out
@@ -327,6 +342,11 @@ def imported_impls(output):
 def impl_mismatch(output, impl_path):
     """The reason the test measured a DIFFERENT file, or None."""
     seen = imported_impls(output)
+    if impl_path:
+        from source_analysis.program_bundle import runtime_spec
+        spec = runtime_spec(impl_path)
+        if spec:
+            return _program_import_mismatch(spec, seen, impl_path, output)
     if not impl_path:
         return "no staged implementation path"
     if not seen:
@@ -428,20 +448,36 @@ def prepare_launch(run_once, options):
     else:
         looped, why = repeat_runner.looped_argv(run_once, launches, python=options.python, block_dim=options.block_dim,
                                                 block_dim_flag=options.block_dim_flag)
-        if looped is not None:
-            child_env = _profile_environment(options.env, options.impl_path)
-            return _PreparedProfile(options, workspace, looped, child_env)
-        reason = ("the test command cannot be looped in-process, so this "
-                  "acquisition would have measured ONE launch and called it %d: "
-                  "%s" % (launches, why))
+        if looped is None:
+            reason = ("the test command cannot be looped in-process, so this "
+                      "acquisition would have measured ONE launch and called it %d: "
+                      "%s" % (launches, why))
+        else:
+            try:
+                child_env = _profile_environment(options.env, options.impl_path)
+            except (OSError, ValueError, KeyError, TypeError, SyntaxError) as exc:
+                reason = "invalid program runtime identity: %s" % exc
+            else:
+                return _PreparedProfile(options, workspace, looped, child_env)
     return reading_to_metrics(Reading(options.warmup, reason), workspace=workspace)
 
 
 def _profile_environment(env, impl_path):
     child_env = dict(os.environ)
     child_env.update({str(key): str(value) for key, value in (env or {}).items()})
+    child_env.pop(repeat_runner.EXPORT_PATHS_ENV, None)
     if impl_path:
+        from source_analysis.program_bundle import runtime_spec
         child_env[repeat_runner.IMPL_ENV] = os.path.abspath(impl_path)
+        spec = runtime_spec(impl_path) if os.path.isfile(impl_path) else None
+        child_env.pop(repeat_runner.PROGRAM_IMPL_ENV, None)
+        if spec:
+            child_env[repeat_runner.PROGRAM_IMPL_ENV] = json.dumps(sorted(spec["files"]))
+            export_dir = Path(str(impl_path) + ".program").resolve()
+            root = Path(spec["root"])
+            if root.is_relative_to(export_dir):
+                child_env[repeat_runner.EXPORT_PATHS_ENV] = json.dumps(
+                    [str(export_dir), str(root)] if root != export_dir else [str(root)])
     return child_env
 
 
@@ -504,7 +540,8 @@ def _profile_once(prepared, out_dir):
     metrics.update(diagnostics)
     from panko_core.bayesian_optimization.evaluator import ENV_FAULT_MARKERS
     fault = next((marker for marker in ENV_FAULT_MARKERS if marker in output), None)
-    if fault or (metrics.get("impl_module_mismatch") and metrics.get("impl_modules_seen")):
+    import_observed = metrics.get("impl_modules_seen") or metrics.get("correctness_passed")
+    if fault or (metrics.get("impl_module_mismatch") and import_observed):
         metrics.update(test_failed=False, correctness_passed=False, p=None, samples=[],
                        p_error="acquisition refused: " + (fault or "wrong implementation imported"))
     return metrics, output, rc
@@ -568,6 +605,50 @@ def campaign_command(command, op_dir, device):
     if selected != str(device):
         raise ValueError("test command device differs from the campaign device")
     return argv, cwd, env
+
+
+def _program_import_mismatch(spec, seen, impl_path, output):
+    from source_analysis.program_bundle import package_namespace
+    from source_analysis.program_view import ProgramView
+
+    for filename in spec["required"]:
+        if seen.get(filename) != spec["files"][filename]:
+            return "required program entry was not imported from the staged bundle: %s" % filename
+    view = ProgramView.from_source(Path(impl_path).read_text(encoding="utf-8"))
+    origins, packages = {}, {}
+    for line in (output or "").splitlines():
+        if line.startswith(repeat_runner.MODULE_MARKER):
+            name, package, path = json.loads(line[len(repeat_runner.MODULE_MARKER):])
+            origins.setdefault(name, set()).add(path)
+            packages.setdefault(path, set()).add(package)
+    root = Path(spec["root"])
+    try:
+        imports = view.acquisition_imports(package_namespace(root))
+    except ValueError as exc:
+        return str(exc)
+    for filename, expected in spec["files"].items():
+        if filename not in seen:
+            continue
+        if seen[filename] != expected:
+            return "imported program member differs from staged bundle: %s" % filename
+        relative = str(Path(filename).relative_to(root))
+        if imports[relative] and filename not in packages:
+            return "missing module identity for staged importer: %s" % filename
+        mismatch = _local_import_mismatch(imports[relative], packages.get(filename, ()),
+                                          spec, seen, origins, relative)
+        if mismatch:
+            return mismatch
+    return None
+
+
+def _local_import_mismatch(imports, packages, spec, seen, origins, relative):
+    for package in packages:
+        for lookup, dependency in imports.items():
+            name = resolve_name(lookup, package)
+            expected_path = str(Path(spec["root"]) / dependency)
+            if origins.get(name) != {expected_path} or seen.get(expected_path) != spec["files"][expected_path]:
+                return "local import %s in %s did not resolve to staged %s" % (name, relative, dependency)
+    return None
 
 
 def check_campaign_command(command, op_dir, contract):

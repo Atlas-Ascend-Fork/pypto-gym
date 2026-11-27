@@ -19,6 +19,7 @@ from evaluation.measure_latency import campaign_command, measure
 from evaluation.repeat_runner import loopable
 from evaluation.workspace_probe import SPACES, validate_capacity
 from source_analysis.runtime_files import check_files, file_digest as sha
+from source_analysis.program_bundle import runtime_spec
 import jsonio
 
 
@@ -56,20 +57,36 @@ def _profile_files(reading):
 
 
 def bind_timing_target(contract, reading):
-    if contract["op_name"] is not None:
+    if contract["op_name"] == "*":
+        tasks = reading.get("tasks_per_call")
+        if not tasks or not isinstance(tasks, dict) or any(type(n) is not int or n < 1 for n in tasks.values()):
+            raise ValueError("package timing target needs the measured task counts per call")
+        target = {"tasks_per_call": tasks}
+    elif contract["op_name"] is None:
+        name, count = reading.get("op_name"), reading.get("rows_per_call")
+        valid_name = isinstance(name, str) and name.strip() and name != "*"
+        if not valid_name or type(count) is not int or count < 1:
+            raise ValueError("auto-detected timing target needs an operator name and a positive task count per call")
+        target = {"op_name": name, "rows_per_call": count}
+    else:
         return contract
-    name, count = reading.get("op_name"), reading.get("rows_per_call")
-    valid_name = isinstance(name, str) and name.strip() and name != "*"
-    if not valid_name or type(count) is not int or count < 1:
-        raise ValueError("auto-detected timing target needs an operator name and a positive task count per call")
-    target = {"op_name": name, "rows_per_call": count}
     if "timed_target" in contract and contract["timed_target"] != target:
-        raise ValueError("auto-detected timing target differs from the frozen measurement")
+        raise ValueError("timing target differs from the frozen measurement")
     return dict(contract, timed_target=target)
 
 
 def campaign_contract(state):
     contract = state["measurement_contract"]
+    if contract["op_name"] == "*" and "timed_target" not in contract:
+        from evaluation.measure_latency import summarise
+
+        baseline = state["nodes"]["closed"][0]["eval"]["m"]
+        profile = baseline.get("msprof_dir")
+        runs = contract["runs"] + contract["warmup"]
+        observed = summarise(profile, "*", contract["warmup"], calls=runs) if profile else None
+        if not observed or observed.error or observed.rows_per_call != baseline.get("rows_per_call"):
+            raise ValueError("cannot recover the package timing target from the original baseline profile")
+        return bind_timing_target(contract, {"tasks_per_call": observed.tasks_per_call})
     if contract["op_name"] is None and "timed_target" not in contract:
         # Older campaigns retained both observed fields in the baseline node.
         return bind_timing_target(contract, state["nodes"]["closed"][0]["eval"]["m"])
@@ -104,17 +121,28 @@ def acquire(args):
     argv, cwd, environment = campaign_command(args.test_command, str(Path(args.op_dir).resolve()), args.device)
     manifest = _test_manifest(args, argv, cwd, impl)
     initial_hash = sha(impl)
+    program = runtime_spec(impl)
+    if program:
+        if args.op_name not in (None, "*"):
+            raise ValueError("multi-file programs must measure all AI-Core task names, not one member")
+        args.op_name = "*"
     profile_root = Path(args.op_dir).resolve() / "optimization" / "profiles"
     profile_root.mkdir(parents=True, exist_ok=True)
     reading = measure(argv, warmup=2, runs=9, agg="median", op_dir=cwd, op_name=args.op_name, timeout_s=args.timeout,
                       impl_path=impl, keep_prof=True, prof_root=str(profile_root), env=environment,
                       joint_correctness=True, budget=capacity, address_limits=address_limits)
     check_files({**manifest, impl: initial_hash}, "source or frozen precision files changed during acquisition")
+    if runtime_spec(impl) != program:
+        raise RuntimeError("runtime program changed during acquisition")
     reading.update(profile_files=_profile_files(reading), schema="panko-pro-npu-v1", code_hash=initial_hash,
-                   program_files={impl: initial_hash},
-                   contract={"test_files": manifest, "argv": argv, "cwd": cwd, "env": environment,
-                             "device": str(args.device), "op_name": args.op_name, "warmup": 2, "runs": 9,
-                             "memory_capacity": capacity, "program": None, "metric": "msprof Task Duration(us)"})
+                   program_files=program["files"] if program else {impl: initial_hash},
+                   contract={"test_files": manifest, "argv": argv, "cwd": cwd,
+                             "env": environment, "device": str(args.device),
+                             "op_name": args.op_name, "warmup": 2, "runs": 9,
+                             "memory_capacity": capacity,
+                             "program": ({k: program[k] for k in ("root", "required")} | {
+                                 "files": sorted(program["files"])}) if program else None,
+                             "metric": "msprof Task Duration(us)"})
     if address_limits is not None:
         reading["contract"]["address_limits"] = address_limits
     if reading.get("p") is not None:

@@ -1,6 +1,6 @@
 ---
 name: pypto-pro-op-auto-tuner-panko
-description: PANKO base-release world model and evaluator for single-file PyPTO-Pro kernels with latency/on-chip-memory objectives on NPU. Runs one persisted search transition per dispatch.
+description: PANKO base-release world model and evaluator for single-file or multi-file PyPTO-Pro kernels with latency/on-chip-memory objectives on NPU. Runs one persisted search transition per dispatch.
 mode: subagent
 permission:
   read: allow

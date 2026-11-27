@@ -30,6 +30,7 @@ register(pro_backend)
 from panko.config import out
 from panko.state import load, file_hash
 from source_analysis.runtime_files import check_files
+from source_analysis import program_bundle
 from evaluation.measure_latency import LATENCY_DECIMALS
 from evaluation.repeat_runner import split_script_command
 from evaluation.workspace_probe import profile_workspace, validate_capacity
@@ -122,6 +123,16 @@ def _check_workspace(receipt, impl, contract, allow_partial):
         raise ValueError("on-chip memory reading is missing or differs from the measured source")
 
 
+def _bind_recorded_timing(contract, receipt):
+    profile = _timing_profile(receipt)
+    if contract["op_name"] == "*":
+        tasks = profile.tasks_per_call
+        if receipt.get("tasks_per_call", tasks) != tasks:
+            raise ValueError("package timing target differs from the timing CSV")
+        return bind_timing_target(contract, {"tasks_per_call": tasks})
+    return bind_timing_target(contract, receipt)
+
+
 def _validate_reading(receipt, impl, require_success, *, timing_only=False, runs=9, allow_partial_workspace=False):
     schema = "panko-pro-verification-v1" if timing_only else "panko-pro-npu-v1"
     if not isinstance(receipt, dict) or receipt.get("schema") != schema:
@@ -133,18 +144,20 @@ def _validate_reading(receipt, impl, require_success, *, timing_only=False, runs
         raise ValueError("measurement has no frozen precision-test manifest")
     check_files(contract["test_files"], "frozen precision input changed or missing")
     passed = receipt.get("correctness_passed") is True
-    expected_files = {str(Path(impl).resolve()): file_hash(impl)}
+    spec = program_bundle.runtime_spec(impl)
+    expected_files = spec["files"] if spec else {str(Path(impl).resolve()): file_hash(impl)}
     if receipt.get("program_files") != expected_files:
         raise ValueError("receipt does not cover the complete runtime program")
+    if spec and contract.get("op_name") != "*":
+        raise ValueError("package measurements must include all AI-Core tasks")
     if require_success or passed:
         _check_latency(receipt, passed, runs)
-        contract = bind_timing_target(contract, receipt)
         _check_workspace(receipt, impl, contract, timing_only or allow_partial_workspace)
         profiles = receipt.get("profile_files")
         if not profiles or not any(name.endswith(".csv") for name in profiles):
             raise ValueError("raw profile evidence is required")
         check_files(profiles, "profile evidence changed or missing")
-        _timing_profile(receipt)
+        contract = _bind_recorded_timing(contract, receipt)
     elif not receipt.get("test_failed") or receipt.get("p") is not None:
         raise ValueError("acquisition failure is not an incorrect candidate; keep the evidence and retry later")
     return contract
@@ -164,6 +177,18 @@ def _bind_repair(args, config):
         out({"initialized": False, "refused": True, "initialization_blocked": True, "phase": "init_repair",
              "error": "init_repair_blocked", "reason": str(exc)})
         raise Refusal(4) from exc
+
+
+def _check_manifest(args):
+    if args.program_manifest:
+        manifest = json.loads(Path(args.program_manifest).read_text())
+        program = pro_backend.ACTIVE_PROGRAM
+        if not program or any(manifest.get(k) != v for k, v in program.items()):
+            raise ValueError("program manifest differs from the staged runtime package")
+        if manifest.get("view_sha256") != file_hash(args.op_file) or any(
+            manifest.get("sha256", {}).get(rel) != file_hash(Path(program["root"]) / rel) for rel in program["files"]
+        ):
+            raise ValueError("program manifest hashes differ from the staged sources")
 
 
 def _check_original_command(args, contract):
@@ -192,8 +217,10 @@ def _before_init(args, receipt):
         raise ValueError("base-release settings cannot enable deferred features: " + ", ".join(sorted(unsupported)))
     args.pro_measurement_contract = _validate_reading(receipt, args.op_file, True)
     split_script_command(args.pro_measurement_contract["argv"])
+    pro_backend.ACTIVE_PROGRAM = program_bundle.attached(args.op_file)
     capacity = args.pro_measurement_contract["memory_capacity"]
     contract = args.pro_measurement_contract
+    _check_manifest(args)
     if args.preopt_s != 1 or args.preopt_p != receipt["p"] or args.preopt_hash != receipt["code_hash"]:
         raise ValueError("baseline arguments differ from measurement")
     if args.op_name and args.op_name != contract["op_name"]:
@@ -231,6 +258,7 @@ def _timing_profile(receipt):
     reading = summarise(profile, contract["op_name"], warmup, calls=warmup + contract["runs"])
     if list(reading.samples) != receipt["samples"]:
         raise ValueError("measurement samples differ from the timing CSV")
+    return reading
 
 
 def _remeasurement_profile(receipt, entry):
@@ -284,6 +312,9 @@ def _campaign_state(args):
     state = load(args.op_dir)
     if state.get("backend") != "pypto-pro-base-v2":
         raise ValueError("this entrypoint requires a base-release Pro campaign")
+    pro_backend.ACTIVE_PROGRAM = state.get("program")
+    if pro_backend.ACTIVE_PROGRAM and args.cmd not in ("step", "stop"):
+        program_bundle.require_current(pro_backend.ACTIVE_PROGRAM)
     for name, expected in state["measurement_contract"]["test_files"].items():
         if file_hash(name) != expected:
             raise ValueError("frozen precision input changed: " + name)
@@ -333,7 +364,7 @@ def _before_record(args, state, receipt):
     if receipt.get("p") is None:
         expected = {k: v for k, v in expected.items() if k != "timed_target"}
     if contract.get("timed_target") != expected.get("timed_target"):
-        raise ValueError("auto-detected timing target differs from the baseline")
+        raise ValueError("timing target differs from the baseline")
     if contract != expected:
         raise ValueError("measurement command, device, profiler settings or precision inputs changed")
     if remeasure:

@@ -46,15 +46,42 @@ def state_metadata(args):
     source = Path(args.op_file).read_text()
     return {"wrapper_owned_bindings": discover_owned_bindings(source, args.pro_context),
             "wrapper_signature": wrapper_signature(source, args.pro_context), "case_context": args.pro_context,
-            "backend": "pypto-pro-base-v2", "measurement_contract": args.pro_measurement_contract}
+            "backend": "pypto-pro-base-v2", "measurement_contract": args.pro_measurement_contract,
+            "program": ACTIVE_PROGRAM}
+
+
+ACTIVE_PROGRAM = None
 
 
 def write_source(path, source):
-    write_runtime_file(Path(path), source.encode("utf-8"))
+    from source_analysis import program_bundle
+    if ACTIVE_PROGRAM:
+        if Path(path).resolve() != Path(ACTIVE_PROGRAM['view']).resolve():
+            raise ValueError('working view differs from the campaign')
+        program_bundle.write_candidate(ACTIVE_PROGRAM, source)
+    else:
+        write_runtime_file(Path(path), source.encode("utf-8"))
 
 
 def export_source(source, destination):
-    write_runtime_file(Path(destination), Path(source).read_bytes())
+    from source_analysis import program_bundle
+    from source_analysis.program_view import HEADER
+    data = Path(source).read_bytes()
+    if data.startswith(HEADER.encode("utf-8")):
+        original = ACTIVE_PROGRAM or program_bundle.attached(source)
+        root = Path(str(destination) + ".program")
+        if root.is_symlink():
+            raise ValueError("export directory cannot be a symlink")
+        namespace = original.get("package") or program_bundle.package_namespace(Path(original["root"]))
+        if namespace:
+            parts = namespace.split(".")
+            if not all(part.isidentifier() for part in parts):
+                raise ValueError("invalid export package name")
+            root = program_bundle.member(root, Path(*parts) / "__init__.py").parent
+        target = dict(original, root=str(root), view=str(destination))
+        program_bundle.write_candidate(target, data.decode("utf-8"), exporting=True)
+    else:
+        write_runtime_file(Path(destination), data)
 
 
 def verification_policy():

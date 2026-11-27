@@ -98,7 +98,7 @@ cannbot-skills/
 | 断裂点分析与报告类 | `pypto-benchmark-fracture-aggregator`、`pypto-fracture-point-detector`、`pypto-session-dfx-report` | Session 断裂点聚合/检测/复现取证、Issue 文档产出、DFX 报告 |
 | Pro 专属类 | `pypto-pro-golden-generate`、`pypto-pro-environment-check`、`pypto-pro-precision-debug`、`pypto-pro-cann-delivery`、`pypto-pro-docs-search` | PyPTO-Pro 需求、开发、调优与调试、CANN 交付与文档检索 |
 | Pro 核心技能 | `pypto-pro-kernel` | 原生 kernel 开发、验证、调试与优化，内含参考资料、检查工具和样例 |
-| Pro PANKO 调优 | `pypto-pro-op-perf-panko-manual` | 单文件 JIT 的 NPU 延迟与片上内存优化 |
+| Pro PANKO 调优 | `pypto-pro-op-perf-panko-manual` | 单文件或多文件 JIT 的 NPU 延迟与片上内存优化 |
 
 ### 模型适配（model/）
 

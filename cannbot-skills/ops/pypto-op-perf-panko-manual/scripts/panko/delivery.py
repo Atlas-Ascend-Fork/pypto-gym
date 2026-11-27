@@ -87,12 +87,26 @@ def _delivered_check(st, op_dir):
     on_disk = None
     if f and os.path.exists(f):
         on_disk = hashlib.sha256(_read_bytes(f)).hexdigest()
+    matches = bool(want) and on_disk == want
+    policy = _classic_verification_policy()
+    if matches and policy.strict_restore:
+        matches = policy.matches(op_dir, f, want)
     out_d = {"best_code_hash": want, "delivered_code_hash": on_disk,
-             "delivered_is_best": bool(want) and on_disk == want,
+             "delivered_is_best": matches,
              "delivery": detail}
     if want and node and want != node:
         out_d["best_node_code_hash"] = node
     return out_d
+
+
+def _restore_delivery_point(op_dir, op_file, want):
+    policy = _classic_verification_policy()
+    restored = restore(op_dir, op_file, want)
+    if policy.strict_restore:
+        if not want or (not restored and os.path.exists(npath(op_dir, want))):
+            return False
+        return policy.matches(op_dir, op_file, want)
+    return restored or file_hash(op_file) == want
 
 
 def _deliver_best(st, a):
@@ -115,7 +129,7 @@ def _deliver_best(st, a):
             "delivered_values": detail.get("values"),
             "at_eval": st["progress"]["evals_used"]}
     op_f = op_file_path(st, a.op_dir)
-    if best_hash and (restore(a.op_dir, op_f, best_hash) or file_hash(op_f) == best_hash):
+    if best_hash and _restore_delivery_point(a.op_dir, op_f, best_hash):
         # Frozen, because everything after the stop has to name THIS program:
         # the verification arm, the file put back between passes, the speedup
         # the pass is compared against. `ratchet_best_hash` is `best_node` and

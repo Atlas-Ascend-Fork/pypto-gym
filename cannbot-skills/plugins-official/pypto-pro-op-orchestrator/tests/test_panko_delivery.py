@@ -5,7 +5,8 @@
 # THIS SOFTWARE IS PROVIDED ON AN "AS IS" BASIS, WITHOUT WARRANTIES OF ANY KIND, EITHER EXPRESS OR IMPLIED,
 # INCLUDING BUT NOT LIMITED TO NON-INFRINGEMENT, MERCHANTABILITY, OR FITNESS FOR A PARTICULAR PURPOSE.
 # See LICENSE in the root of the software repository for the full text of the License.
-"""Host regressions for Pro acquisition and single-file delivery contracts."""
+"""Host regressions for Pro acquisition and multi-file delivery contracts."""
+import ast
 import hashlib
 import json
 import os
@@ -47,17 +48,42 @@ class ProContractsTest(unittest.TestCase):
         self.assertEqual(result.returncode, status, result.stdout + result.stderr)
         return json.loads(result.stdout)
 
+    def prepare_package(self, scripts):
+        self.package = self.root / "mypkg"
+        inner = self.package / "inner"
+        inner.mkdir(parents=True)
+        (self.package / "__init__.py").write_text("BIAS = 5\n")
+        (inner / "__init__.py").touch()
+        (inner / "kernel.py").write_text("from .helper import compute\n" + KERNEL)
+        (inner / "helper.py").write_text(
+            "import pypto_pro.language as pl\nfrom mypkg import BIAS\n"
+            "@pl.jit(auto_mutex=False)\ndef compute(x):\n    return x + BIAS\n")
+        (self.root / "precision.py").write_text("from mypkg.inner import kernel\nassert kernel.compute(7) == 12\n")
+        view = self.root / "view.py"
+        prepare = [scripts / "source_analysis/program_bundle.py", "prepare", "--view", view,
+                   "--manifest", "manifest.json", "--root"]
+        rejected = subprocess.run([sys.executable, *prepare, inner], cwd=self.root, env=self.env,
+                                  capture_output=True, text=True)
+        self.assertNotEqual(rejected.returncode, 0)
+        self.assertIn("Prepare the outermost package 'mypkg' as --root", rejected.stderr)
+        self.assertFalse(view.exists())
+        self.assertFalse(Path(str(view) + ".runtime.json").exists())
+        self.assertFalse((self.root / "manifest.json").exists())
+        self.run_cli(*prepare, self.package)
+        return view
+
     def baseline_receipt(self):
         view = self.root / "kernel.py"
         view.write_text(KERNEL)
         precision = self.root / "precision.py"
         precision.touch()
         self.template = dict(
-            schema="panko-pro-npu-v1", code_hash=sha(view), program_files={str(view): sha(view)},
-            contract=dict(test_files={str(precision): sha(precision)}, device="0", op_name="kernel", warmup=2, runs=9,
+            schema="panko-pro-npu-v1", code_hash=sha(view),
+            program_files={str(view): sha(view)},
+            contract=dict(test_files={str(precision): sha(precision)}, device="0", op_name="kernel",
+                          warmup=2, runs=9,
                           argv=["python3", "precision.py"], cwd=str(self.root), env={"TILE_FWK_DEVICE_ID": "0"},
-                          program=None,
-                          memory_capacity=CAPACITY),
+                          program=None, memory_capacity=CAPACITY),
             correctness_passed=True, workspace_b=4096, workspace_by_space={"Vec": 4096}, workspace_state="measured")
         return view, self.reading("baseline", 100)
 
@@ -133,15 +159,35 @@ latency = Path("latency.txt").read_text() if Path("latency.txt").exists() else "
         profiler.chmod(0o755)
         return kernel
 
+    def prepare_profiled_package(self, kernel):
+        package = self.root / "package"
+        package.mkdir()
+        runtime = package / kernel.name
+        kernel.rename(runtime)
+        source = runtime.read_text().replace("return a", "return compute(a)")
+        runtime.write_text("from helper import compute\n" + source)
+        (package / "helper.py").write_text("def compute(x):\n    return x + 1\n")
+        (package / "unused.py").write_text("unused = True\n")
+        precision = self.root / "precision.py"
+        precision.write_text(f"import sys\nsys.path.insert(0, {str(package)!r})\n" + precision.read_text())
+        view = self.root / "view.py"
+        self.run_cli(SCRIPTS / "source_analysis/program_bundle.py", "prepare", "--root", package,
+                     "--view", view, "--manifest", "manifest.json")
+        return view
+
     def start_profiled_campaign(self, *, tile_search=False, precision_check="", capacity=None, source=KERNEL,
-                                catalog=None, command="python3 precision.py", **config):
+                                catalog=None, command="python3 precision.py", package=False,
+                                address_limits=None, **config):
         capacity = CAPACITY if capacity is None else capacity
         kernel = self.prepare_profiled_kernel(source, precision_check)
+        if package:
+            kernel = self.prepare_profiled_package(kernel)
         harness = SCRIPTS / "panko_harness.py"
         target = ["--op-dir", self.root, "--op-file", kernel]
         baseline = self.run_cli(SCRIPTS / "measure.py", *target, "--device", "0", "--test-command", command,
                                 "--test-files", '["precision.py"]', "--out", "baseline.json",
-                                "--memory-capacity", json.dumps(capacity))
+                                "--memory-capacity", json.dumps(capacity),
+                                *(["--address-limits", json.dumps(address_limits)] if address_limits else []))
         self.run_cli(harness, "init", *target, "--device", "0", "--op", "kernel", "--test-command", command,
                      "--measurement-file", "baseline.json", "--chip-envelope", json.dumps(ENVELOPE),
                      *(["--catalog", catalog] if catalog else []),
@@ -209,6 +255,41 @@ latency = Path("latency.txt").read_text() if Path("latency.txt").exists() else "
                 if not same:
                     self.assertIn("timing target", reply["error"])
                     self.assertEqual(state.read_bytes(), original)
+
+    def test_package_remeasurement_requires_baseline_tasks_per_call(self):
+        view, baseline = self.start_profiled_campaign(package=True)
+        profiler = self.root / "msprof"
+        script = profiler.read_text()
+        record = [SCRIPTS / "panko_harness.py", "record", "--op-dir", self.root,
+                  "--parent", "root", "--remeasure"]
+        state = self.root / "optimization/search_state.json"
+        original = state.read_bytes()
+        self.assertEqual(json.loads(original)["measurement_contract"]["timed_target"],
+                         {"tasks_per_call": {"kernel": 1}})
+        for name, count in (("kernel", 2), ("other", 1), ("kernel", 1)):
+            if name == "other":
+                legacy = json.loads(original)
+                del legacy["measurement_contract"]["timed_target"]
+                state.write_text(json.dumps(legacy))
+                original = state.read_bytes()
+            profiler.write_text(script.replace("kernel,AI_CORE,", f"{name},AI_CORE,")
+                                .replace("* launches)", f"* (launches * {count}))"))
+            path = f"{name}-{count}.json"
+            self.run_cli(SCRIPTS / "measure.py", "--op-file", view, "--op-dir", self.root,
+                         "--test-command", "python3 precision.py", "--device", "0", "--test-files",
+                         '["precision.py"]', "--memory-capacity", json.dumps(CAPACITY), "--out", path)
+            same = (name, count) == ("kernel", 1)
+            reply = self.run_cli(*record, "--measurement-file", path, status=0 if same else 3)
+            if not same:
+                self.assertIn("timing target", reply["error"])
+                self.assertEqual(state.read_bytes(), original)
+                path = self.root / path
+                edited = json.loads(path.read_bytes())
+                edited["tasks_per_call"] = {"kernel": 1}
+                edited["contract"]["timed_target"] = {"tasks_per_call": {"kernel": 1}}
+                path.write_text(json.dumps(edited))
+                self.assertIn("timing CSV", self.run_cli(*record, "--measurement-file", path, status=3)["error"])
+        self.assertEqual(len(json.loads(state.read_bytes())["eval_cache"][baseline["code_hash"]]["samples"]), 18)
 
     def test_address_gap_reaches_measurement_and_pareto_record(self):
         source = """import pypto_pro.language as pl
@@ -355,6 +436,21 @@ def kernel(a):
         self.assertEqual(state["measurement_contract"]["address_limits"], {"Vec": 256 * 1024})
         self.assertEqual(state["measurement_contract"]["memory_capacity"], capacity)
 
+    def test_vec_budget_alone_does_not_authorize_a_reserved_tail(self):
+        kernel = self.root / "kernel.py"
+        probe = ("import json; from evaluation.workspace_probe import profile_workspace; "
+                 "print(json.dumps(profile_workspace('kernel.py', {'Vec': 248 * 1024})))")
+        kernel.write_text(KERNEL.replace("addrs=0", "addrs=249856"))
+        at_limit = self.run_cli("-c", probe)
+        self.assertEqual((at_limit["workspace_state"], at_limit["workspace_b"]), ("measured", 253952))
+        self.assertEqual(at_limit["workspace_headroom"]["Vec"], 0)
+
+        kernel.write_text(KERNEL.replace("addrs=0", "addrs=256000"))
+        over_limit = self.run_cli("-c", probe)
+        self.assertEqual(over_limit["workspace_state"], "unavailable")
+        self.assertIsNone(over_limit["workspace_b"])
+        self.assertIn("Vec needs 260096 bytes, budget is 253952", over_limit["workspace_error"])
+
     def test_depth_slots_use_declared_addresses(self):
         kernel = self.root / "kernel.py"
         probe = ("import json; from evaluation.workspace_probe import profile_workspace; "
@@ -477,6 +573,43 @@ def kernel(a):
         for mode in ("--acquire", "--auto"):
             self.assertIn("timing target", self.run_cli(*verify, mode, status=3)["error"])
             self.assertEqual(self.run_cli(*verify)["stage"], stage)
+
+    def test_auto_verification_binds_each_arm_to_its_runtime_package(self):
+        limits = {"Vec": 4096}
+        view, _ = self.start_profiled_campaign(package=True, capacity=dict(CAPACITY, Vec=2048),
+                                              address_limits=limits, precision_check=(
+            "from pathlib import Path\n"
+            "Path('latency.txt').write_text('10' if 'shape=[16, 16]' in inspect.getsource(kernel.kernel) else '20')\n"))
+        package = self.root / "package"
+        files = [package / name for name in ("kernel.py", "helper.py", "unused.py")]
+        baseline = {str(path): sha(path) for path in files}
+        cli = SCRIPTS / "panko_harness.py"
+        target = ["--op-dir", self.root]
+        parent = self.run_cli(cli, "select", *target)["selected"]["id"]
+        kernel = package / "kernel.py"
+        kernel.write_text(kernel.read_text().replace("shape=[16, 32]", "shape=[16, 16]"))
+        candidate = {str(path): sha(path) for path in files}
+        self.assertNotEqual(baseline, candidate)
+        profiler = self.root / "msprof"
+        original = profiler.read_text()
+        step = [cli, "step", *target, "--op-file", view, "--parent", parent, "--test-command", "python3 precision.py"]
+        profiler.write_text(original.replace("kernel,AI_CORE,", "other,AI_CORE,"))
+        self.assertIn("timing target", self.run_cli(*step, "--dispatch-id", "drift", status=3)["error"])
+        profiler.write_text(original)
+        self.run_cli(*step, "--dispatch-id", "smaller")
+        profiler.write_text(original.replace("kernel,AI_CORE,", "other,AI_CORE,"))
+        for mode in ("--auto", "--acquire"):
+            self.assertIn("timing target", self.run_cli(cli, "verify", *target, mode, status=3)["error"])
+            self.assertEqual(self.run_cli(cli, "verify", *target)["stage"], 0)
+        profiler.write_text(original)
+        self.assertEqual(self.run_cli(cli, "verify", *target, "--auto")["status"], "confirmed")
+        verification = json.loads((self.root / "optimization/search_state.json").read_bytes())["verification"]
+        self.assertEqual([r["program_files"] for r in verification["receipts"]],
+                         [baseline, candidate, candidate, baseline])
+        for receipt in verification["receipts"]:
+            self.assertEqual(receipt["contract"]["address_limits"], limits)
+            self.assertEqual(receipt["workspace_state"], "measured")
+            self.assertEqual(receipt["workspace_b"], 4096 if receipt["arm"] == "preopt" else 2048)
 
     def test_manual_verification_requires_one_new_acquisition_per_stage(self):
         kernel, baseline, candidate, search = self.stopped_verification_campaign()
@@ -616,6 +749,7 @@ print(json.dumps([
         campaign = json.loads((self.root / "optimization/search_state.json").read_text())
         for check in [*campaign.get("verifications", []), campaign["verification"]]:
             point = check["arms"]["delivered"]["code_hash"]
+            self.assertTrue(all(r["point"] == point for r in check["receipts"]))
             self.assertEqual([r["code_hash"] for r in check["receipts"]],
                              [baseline["code_hash"], point, point, baseline["code_hash"]])
         self.assertEqual(sha(kernel), frontier["impl_code_hash"])
@@ -682,10 +816,16 @@ print(json.dumps([
         return kernel, baseline, step
 
     def test_step_measures_the_pending_f2_trial_once(self):
+        self.check_pending_f2_trial(package=False)
+
+    def test_package_step_replay_preserves_pending_f2_trial(self):
+        self.check_pending_f2_trial(package=True)
+
+    def check_pending_f2_trial(self, package):
         catalog = self.root / "actions.json"
         actions = json.loads((SCRIPTS.parent / "references/action_catalog.json").read_text())
         catalog.write_text(json.dumps([a for a in actions if a["id"] == "F-2"]))
-        kernel, _ = self.start_profiled_campaign(tile_search=True, catalog=catalog,
+        kernel, _ = self.start_profiled_campaign(tile_search=True, catalog=catalog, package=package,
                                                 capacity=dict(CAPACITY, Vec=248 * 1024), eval_budget=8)
         harness = SCRIPTS / "panko_harness.py"
         target = ["--op-dir", self.root]
@@ -702,10 +842,23 @@ print(json.dumps([
         self.assertEqual(sha(kernel), proposal["code_hash"])
         self.assertEqual((reply["next"], reply["parent"]), ("evaluate", parent))
         self.assertNotIn("selection", reply)
+        staged = [kernel]
+        if package:
+            staged.extend([self.root / "view.py.runtime.json", *(self.root / "package").glob("*.py")])
+        hashes = [sha(path) for path in staged]
         again = self.run_cli(*step, "trial")
         self.assertEqual(again, reply)
+        self.assertEqual([sha(path) for path in staged], hashes)
         self.assertEqual(choices.read_bytes(), before)
         self.assertEqual(sha(kernel), proposal["code_hash"])
+        if package:
+            helper = self.root / "package/helper.py"
+            original = helper.read_bytes()
+            helper.write_bytes(original + b"\n# pending coder edit\n")
+            edited = [sha(path) for path in staged]
+            self.assertEqual(self.run_cli(*step, "trial"), reply)
+            self.assertEqual([sha(path) for path in staged], edited)
+            helper.write_bytes(original)
         following = self.run_cli(*step, "next")
         reading = json.loads(Path(following["measurement_file"]).read_text())
         self.assertEqual(reading["code_hash"], proposal["code_hash"])
@@ -760,6 +913,52 @@ print(json.dumps([
         self.assertNotIn(sha(kernel), campaign["eval_cache"])
         self.assertEqual(campaign["progress"]["evals_used"], 1)
         self.assertEqual(campaign["progress"].get("block_evals", 0), 0)
+
+    def test_single_file_init_requires_csv_samples(self):
+        kernel, baseline = self.baseline_receipt()
+        baseline.write_text(json.dumps(dict(json.loads(baseline.read_bytes()), samples=[99] + [100] * 8)))
+        reply = self.run_cli(SCRIPTS / "panko_harness.py", "init", "--op-dir", self.root,
+                             "--op", "kernel", "--op-file", kernel, "--device", "0",
+                             "--chip-envelope", json.dumps(ENVELOPE),
+                             "--config", '{"bayesian_optimization_tile_search":false}',
+                             "--measurement-file", baseline, status=3)
+        self.assertIn("samples differ from the timing CSV", reply["error"])
+        self.assertFalse((self.root / "optimization/search_state.json").exists())
+
+    def test_single_file_record_checks_each_original_csv(self):
+        kernel, _ = self.start_profiled_campaign()
+        harness = SCRIPTS / "panko_harness.py"
+        parent = self.run_cli(harness, "select", "--op-dir", self.root)["selected"]["id"]
+        kernel.write_text(kernel.read_text().replace("[16, 32]", "[16, 16]", 1))
+        measure = [SCRIPTS / "measure.py", "--op-dir", self.root, "--op-file", kernel, "--device", "0",
+                   "--test-command", "python3 precision.py", "--test-files", '["precision.py"]',
+                   "--memory-capacity", json.dumps(CAPACITY)]
+        first, last = (self.root / name for name in ("first.json", "last.json"))
+        original = self.run_cli(*measure, "--out", first)
+        (self.root / "latency.txt").write_text("10")
+        self.run_cli(*measure, "--out", last)
+        envelope = self.root / "winner.json"
+
+        def write_confirmation():
+            readings = [{"path": str(path), "sha256": sha(path)} for path in (first, last)]
+            envelope.write_text(json.dumps(dict(schema="panko-confirmed-winner-v1", op_file=str(kernel),
+                                                readings=readings)))
+
+        record = [harness, "record", "--op-dir", self.root, "--parent", parent, "--measurement-file"]
+        state = self.root / "optimization/search_state.json"
+        before = state.read_bytes()
+        first.write_text(json.dumps(dict(original, p=1, samples=[1] * 9)))
+        write_confirmation()
+        for receipt in (first, envelope):
+            with self.subTest(receipt=receipt.name):
+                reply = self.run_cli(*record, receipt, status=3)
+                self.assertIn("samples differ from the timing CSV", reply["error"])
+                self.assertEqual(state.read_bytes(), before)
+
+        first.write_text(json.dumps(original))
+        write_confirmation()
+        self.run_cli(*record, envelope)
+        self.assertEqual(json.loads(state.read_bytes())["eval_cache"][sha(kernel)]["p"], 11)
 
     def test_init_checks_baseline_samples_against_csv(self):
         kernel, baseline = self.baseline_receipt()
@@ -870,3 +1069,194 @@ print(json.dumps([
         self.assertEqual(stopped["frontier"]["points"], 1)
         view, = (self.root / "optimization/frontier").glob("*.py")
         self.assertEqual(view.read_bytes(), source.read_bytes())
+
+    def test_package_factory_width_survives_nested_global(self):
+        package = self.root / "package"
+        package.mkdir()
+        (package / "factory.py").write_text("""import pypto_pro.language as pl
+WIDTH = 16
+
+def make(WIDTH):
+    def reset():
+        global WIDTH
+        WIDTH += 1
+
+    @pl.jit(auto_mutex=False)
+    def kernel(a):
+        tile = pl.make_tile_group(type=pl.TileType(shape=[16, WIDTH], dtype=pl.DT_FP32,
+                                  target_memory=pl.MemorySpace.Vec), addrs=0, mutex_ids=[0])
+        return a
+    return kernel
+""")
+        (package / "entry.py").write_text("import factory\nkernel = factory.make(64)\n")
+        view = self.root / "view.py"
+        self.run_cli(SCRIPTS / "source_analysis/program_bundle.py", "prepare", "--root", package,
+                     "--view", view, "--manifest", "manifest.json")
+        probe = ("import json; from evaluation.workspace_probe import profile_workspace; "
+                 "print(json.dumps(profile_workspace('view.py', {'Vec': 8192})))")
+        self.assertEqual(self.run_cli("-c", probe)["workspace_by_space"], {"Vec": 4096})
+        functions = (node for node in ast.walk(ast.parse(view.read_text())) if isinstance(node, ast.FunctionDef))
+        reset = next(node for node in functions if node.name == "reset")
+        declaration, increment = reset.body
+        self.assertEqual(declaration.names, [increment.target.id])
+        self.assertNotEqual(increment.target.id, "WIDTH")
+
+    def test_prepare_resolves_initializer_reexports_in_source_order(self):
+        package = self.root / "package"
+        package.mkdir()
+        (package / "__init__.py").write_text(
+            "width = 7\nfrom . import helper, width as initial\nfrom . import helper as public\n"
+            "result = helper.value + initial\nhelper = 11\nfrom . import helper as after\n")
+        (package / "helper.py").write_text("value = 35\n")
+        (package / "width.py").write_text("value = 999\n")
+        (package / "consumer.py").write_text("from . import public as h, after\nresult = h.value + after\n")
+        expected = self.run_cli("-c", "from package import consumer, result; print([result, consumer.result])")
+        self.assertEqual(expected, [42, 46])
+        view = self.root / "view.py"
+        manifest = self.run_cli(SCRIPTS / "source_analysis/program_bundle.py", "prepare", "--root", package,
+                                "--view", view, "--manifest", "manifest.json", "--entry-file", "consumer.py")
+        symbols = manifest["symbol_map"]
+        actual = self.run_cli("-c", f"import view; print([view.{symbols['__init__.py']['result']}, "
+                                    f"view.{symbols['consumer.py']['result']}])")
+        self.assertEqual(actual, expected)
+
+    def test_stop_restores_package_after_interrupted_helper_edit(self):
+        view, baseline = self.start_profiled_campaign(package=True, eval_budget=2)
+        helper = self.root / "package/helper.py"
+        helper.write_text("def compute(")
+        stop = [SCRIPTS / "panko_harness.py", "stop", "--op-dir", self.root]
+        poll = self.run_cli(*stop)
+        self.assertFalse(poll["stop"])
+        self.assertFalse(poll["delivered_is_best"])
+        self.assertEqual(helper.read_text(), "def compute(")
+        stop.extend(["--force", "interrupted"])
+        nodes = self.root / "optimization/nodes"
+        snapshot = nodes / (baseline["code_hash"] + ".py")
+        original = snapshot.read_bytes()
+        snapshot.write_bytes(original + b"# corrupt\n")
+        self.assertEqual(self.run_cli(*stop, status=3)["error"], "restore_failed")
+        self.assertEqual(helper.read_text(), "def compute(")
+        snapshot.write_bytes(original)
+        extra = helper.with_name("unexpected.py")
+        extra.touch()
+        self.assertEqual(self.run_cli(*stop, status=3)["error"], "restore_failed")
+        self.assertFalse((self.root / "optimization/frontier/frontier.json").exists())
+        extra.unlink()
+        self.assertTrue(self.run_cli(*stop)["stop"])
+        self.assertEqual(sha(view), baseline["code_hash"])
+        self.assertEqual({str(f): sha(f) for f in helper.parent.glob("*.py")}, baseline["program_files"])
+        exported, = (self.root / "optimization/frontier").glob("*.py")
+        self.assertEqual(sha(exported), sha(view))
+        spec = json.loads(Path(str(exported) + ".runtime.json").read_bytes())
+        self.assertEqual({Path(f).name: sha(Path(f)) for f in spec["files"]},
+                         {Path(f).name: h for f, h in baseline["program_files"].items()})
+
+    def test_package_block_refuses_host_edit_after_refresh(self):
+        self.start_profiled_campaign(tile_search=True, package=True)
+        harness = SCRIPTS / "panko_harness.py"
+        parent = self.run_cli(harness, "select", "--op-dir", self.root)["selected"]["id"]
+        helper = self.root / "package/helper.py"
+        helper.write_text(helper.read_text() + "\nHOST_SIDE_CHANGE = 123\n")
+        self.run_cli(SCRIPTS / "source_analysis/program_bundle.py", "refresh", "--manifest", "manifest.json")
+        state = self.root / "optimization/search_state.json"
+        before = sha(state)
+        reply = self.run_cli(harness, "block", "--op-dir", self.root, "--parent", parent,
+                             "--test-command", "python3 precision.py", status=3)
+        self.assertIn("host wrapper", reply["error"])
+        self.assertEqual(sha(state), before)
+        self.assertFalse((self.root / "optimization/blocks/0").exists())
+
+    def test_measure_rejects_shadowed_package_helper(self):
+        view = self.prepare_profiled_package(self.prepare_profiled_kernel(KERNEL))
+        measure = [SCRIPTS / "measure.py", "--op-file", view, "--op-dir", self.root, "--device", "0",
+                   "--test-command", "python3 precision.py", "--test-files", '["precision.py"]',
+                   "--memory-capacity", json.dumps(CAPACITY), "--out"]
+        good = self.run_cli(*measure, "good.json")
+        self.assertTrue(good["correctness_passed"])
+        self.assertEqual(good["p"], 12)
+        other = self.root / "other"
+        other.mkdir()
+        (other / "helper.py").write_text("def compute(x):\n    return x - 1\n")
+        precision = self.root / "precision.py"
+        precision.write_text(f"import sys\nsys.path.insert(0, {str(other)!r})\nimport helper\n"
+                             + precision.read_text() + "\nassert kernel.compute(3) == 2\n"
+                             + "import package.helper\nassert package.helper.compute(3) == 4\n")
+        bad = self.run_cli(*measure, "wrong.json")
+        self.assertTrue(bad.get("impl_module_mismatch"), bad)
+        self.assertFalse(bad["correctness_passed"])
+        self.assertIsNone(bad["p"])
+        # A relative import can coexist with an unrelated top-level module named helper.
+        kernel = self.root / "package/kernel.py"
+        kernel.write_text(kernel.read_text().replace("from helper import", "from .helper import"))
+        self.run_cli(SCRIPTS / "source_analysis/program_bundle.py", "refresh", "--manifest", "manifest.json")
+        precision.write_text(f"import sys\nsys.path.insert(0, {str(other)!r})\nimport helper\n"
+                             "from package import kernel\nassert kernel.compute(3) == 4 and helper.compute(3) == 2\n")
+        relative = self.run_cli(*measure, "relative.json")
+        self.assertTrue(relative["correctness_passed"], relative)
+        self.assertEqual(relative["p"], 12)
+
+    def test_acquisition_binds_qualified_package_helper(self):
+        view = self.prepare_profiled_package(self.prepare_profiled_kernel(KERNEL))
+        package = self.root / "package"
+        kernel = package / "kernel.py"
+        kernel.write_text(kernel.read_text().replace("from helper import", "from package.helper import"))
+        self.run_cli(SCRIPTS / "source_analysis/program_bundle.py", "refresh", "--manifest", "manifest.json")
+        measure = [SCRIPTS / "measure.py", "--op-file", view, "--op-dir", self.root, "--device", "0",
+                   "--test-command", "python3 precision.py", "--test-files", '["precision.py"]',
+                   "--memory-capacity", json.dumps(CAPACITY), "--out"]
+        receipt = self.run_cli(*measure, "measurement.json")
+        self.assertTrue(receipt["correctness_passed"], receipt)
+        self.assertEqual(receipt["p"], 12)
+        helper = package / "helper.py"
+        log = (Path(receipt["msprof_dir"]) / "command.log").read_text()
+        check = ("import json; from pathlib import Path; from evaluation.measure_latency import impl_mismatch; "
+                 "print(json.dumps(impl_mismatch(Path('report.txt').read_text(), 'view.py')))")
+        for old, new in ((str(helper), str(self.root / "elsewhere/helper.py")), (sha(helper), "0" * 64)):
+            with self.subTest(report_field=old):
+                self.assertIn(old, log)
+                (self.root / "report.txt").write_text(log.replace(old, new))
+                self.assertIn("staged", self.run_cli("-c", check))
+        # Model a collector that completed the launches but omitted this helper's import evidence.
+        profiler = self.root / "msprof"
+        profiler.write_text(profiler.read_text().replace(
+            "subprocess.run([python, *args], check=True)",
+            "log = subprocess.check_output([python, *args], text=True)\n"
+            "print('\\n'.join(line for line in log.splitlines() if '/helper.py' not in line))"))
+        incomplete = self.run_cli(*measure, "incomplete.json")
+        self.assertTrue(incomplete["impl_module_mismatch"])
+        self.assertFalse(incomplete["correctness_passed"])
+        self.assertIsNone(incomplete["p"])
+
+    def test_exported_package_passes_runtime_check(self):
+        installer = Path(__file__).resolve().parents[1] / "scripts/install_opencode.py"
+        runpy.run_path(str(installer))["install"](self.root)
+        scripts = self.root / ".opencode/skills/pypto-pro-op-perf-panko-manual/scripts"
+        self.env["PYTHONPATH"] = str(scripts)
+        self.prepare_profiled_kernel(KERNEL)
+        original = self.prepare_package(scripts)
+        measure = [scripts / "measure.py", "--op-dir", self.root, "--test-command", "python3 precision.py",
+                   "--device", "0", "--test-files", '["precision.py"]', "--memory-capacity", json.dumps(CAPACITY)]
+        before = self.run_cli(*measure, "--op-file", original, "--out", "original.json")
+        self.assertTrue(before["correctness_passed"], before)
+        self.run_cli(scripts / "panko_harness.py", "init", "--op-dir", self.root, "--op", "kernel",
+                     "--op-file", original, "--device", "0", "--chip-envelope", json.dumps(ENVELOPE),
+                     "--config", '{"bayesian_optimization_tile_search":false,"eval_budget":1}',
+                     "--measurement-file", "original.json")
+        stopped = self.run_cli(scripts / "panko_harness.py", "stop", "--op-dir", self.root)
+        self.assertTrue(stopped["stop"])
+        self.assertEqual(stopped["frontier"]["points"], 1)
+        view, = (self.root / "optimization/frontier").glob("*.py")
+        self.package.rename(self.root / "old-package")
+        check = ("import json, sys; from source_analysis.program_bundle import runtime_spec; "
+                 "print(json.dumps(runtime_spec(sys.argv[1])))")
+        spec = self.run_cli("-c", check, view)
+        receipt = self.run_cli(*measure, "--op-file", view, "--out", "exported.json")
+        self.assertTrue(receipt["correctness_passed"], receipt.get("p_error"))
+        self.assertEqual(receipt["contract"]["test_files"], before["contract"]["test_files"])
+        self.assertEqual(receipt["program_files"], spec["files"])
+        self.assertEqual(receipt["p"], 12)
+        root = Path(str(view) + ".program") / "mypkg"
+        self.assertEqual(spec["root"], str(root))
+        self.assertEqual(set(spec["required"]), {str(root / "inner/kernel.py"), str(root / "inner/helper.py")})
+        members = ("__init__.py", "inner/__init__.py", "inner/kernel.py", "inner/helper.py")
+        self.assertEqual(spec["files"], {str(root / name): sha(self.root / "old-package" / name) for name in members})

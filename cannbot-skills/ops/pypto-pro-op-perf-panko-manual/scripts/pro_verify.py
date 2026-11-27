@@ -23,7 +23,8 @@ from panko.config import VERIFY_ALPHA, VERIFY_BOOT, Refusal, out
 from panko.measurement import bootstrap_speedup as native_interval, median_of as median
 from evaluation.measure_latency import measure
 from source_analysis.runtime_files import check_files, file_digest
-from measure import bind_timing_target, campaign_contract
+from source_analysis import program_bundle
+from measure import _profile_files, bind_timing_target, campaign_contract
 
 READING_SIGMA_LOG = 0.02 / math.sqrt(2)
 
@@ -36,7 +37,13 @@ def bootstrap_speedup(pre, dele, n_boot, alpha):
 
 
 def matches(directory, filename, wanted):
+    import pro_backend
+
     try:
+        if pro_backend.ACTIVE_PROGRAM:
+            program_bundle.require_current(pro_backend.ACTIVE_PROGRAM)
+        else:
+            program_bundle.runtime_spec(filename)
         return file_digest(filename) == wanted
     except (OSError, KeyError, ValueError):
         return False
@@ -67,18 +74,21 @@ def auto(args):
     out(reply)
 
 
-def _measure_arm(args, st, filename, prompt, root):
+def _measure_arm(st, prompt, root):
+    """Acquire one staged arm and bind its receipt to the verified runtime and profile files."""
+    filename = prompt["op_file"]
     c = campaign_contract(st)
     device = str(c["device"])
     if c["env"].get("TILE_FWK_DEVICE_ID", os.environ.get("TILE_FWK_DEVICE_ID")) != device:
         raise ValueError("activate the frozen campaign device before verification")
 
     def check_inputs():
-        if not matches(args.op_dir, filename, prompt["code_hash"]):
+        if file_digest(filename) != prompt["code_hash"]:
             raise ValueError("staged program identity changed")
         check_files(c["test_files"], "frozen test input changed")
+        return program_bundle.runtime_spec(filename)
 
-    check_inputs()
+    program = check_inputs()
     metrics = measure(
         c["argv"],
         warmup=c["warmup"],
@@ -94,7 +104,8 @@ def _measure_arm(args, st, filename, prompt, root):
         prof_root=str(root),
         joint_correctness=True,
     )
-    check_inputs()
+    if check_inputs() != program:
+        raise ValueError("runtime program changed during verification acquisition")
     samples = metrics.get("samples") or []
     correct = metrics.get("correctness_passed") is True and bool(metrics.get("impl_modules_seen"))
     latency = not metrics.get("p_error") and metrics.get("p") is not None
@@ -103,7 +114,10 @@ def _measure_arm(args, st, filename, prompt, root):
         out(dict(error="verification_refused", reason=metrics.get("p_error") or "incomplete acquisition"))
         raise Refusal(3)
     bind_timing_target(c, metrics)
-    metrics.update(step=prompt["stage"], code_hash=prompt["code_hash"], arm=prompt["arm"])
+    metrics.update(schema="panko-pro-verification-v1", step=prompt["stage"], arm=prompt["arm"],
+                   code_hash=prompt["code_hash"], point=st["verification"]["arms"]["delivered"]["code_hash"],
+                   contract=dict(c, runs=prompt["runs"]), profile_files=_profile_files(metrics),
+                   program_files=program["files"] if program else {str(Path(filename).resolve()): prompt["code_hash"]})
     return metrics
 
 
@@ -123,8 +137,6 @@ def _resume_acquisition(op_dir, st):
 
 def acquire_stage(args):
     """Measure the pending arm now and leave its submission to the caller."""
-    from measure import _profile_files
-
     st = state.load(args.op_dir)
     _resume_acquisition(args.op_dir, st)
     prompt = transition(args)
@@ -133,13 +145,8 @@ def acquire_stage(args):
         return
     root = Path(args.op_dir).resolve() / "optimization/verification"
     root.mkdir(exist_ok=True)
-    filename = prompt["op_file"]
-    reading = _measure_arm(args, st, filename, prompt, root)
+    reading = _measure_arm(st, prompt, root)
     v = st["verification"]
-    reading.update(schema="panko-pro-verification-v1", point=v["arms"]["delivered"]["code_hash"],
-                   contract=dict(campaign_contract(st), runs=prompt["runs"]),
-                   program_files={str(Path(filename).resolve()): prompt["code_hash"]},
-                   profile_files=_profile_files(reading))
     path = Path(reading["msprof_dir"]) / "verification-receipt.json"
     atomic_write(path, json.dumps(reading))
     v["pending_receipt_sha256"] = _receipt_digest(reading)
@@ -197,7 +204,7 @@ def run_auto(args):
             if "stage" not in prompt:
                 out(dict(prompt, points=delivery.verdicts_by_point(state.load(args.op_dir))))
                 return
-            metrics = _measure_arm(args, st, filename, prompt, root)
+            metrics = _measure_arm(state.load(args.op_dir), prompt, root)
             transition(Namespace(op_dir=args.op_dir, samples=",".join(map(str, metrics["samples"])), receipt=metrics))
     finally:
         try:

@@ -257,7 +257,10 @@ def restore(op_dir, op_file, code_hash):
     try:
         from .backend import current
         if current() is not None:
-            current().write_source(op_file, _read_bytes(snap).decode("utf-8"))
+            data = _read_bytes(snap)
+            if hashlib.sha256(data).hexdigest() != code_hash:
+                return False
+            current().write_source(op_file, data.decode("utf-8"))
             return file_hash(op_file) == code_hash
         else:
             shutil.copyfile(snap, op_file)

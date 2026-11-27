@@ -14,8 +14,12 @@ import tempfile
 from pathlib import Path
 
 
+def digest(data):
+    return hashlib.sha256(data).hexdigest()
+
+
 def file_digest(path):
-    return hashlib.sha256(Path(path).read_bytes()).hexdigest()
+    return digest(Path(path).read_bytes())
 
 
 def check_files(manifest, reason):

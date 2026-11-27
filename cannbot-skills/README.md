@@ -91,7 +91,7 @@ python scripts/check.py
 | 报告与可视化 | `pypto-session-dfx-report` | Session DFX 报告（端到端耗时、token 消耗、执行轨迹） |
 | **Pro 专属** | `pypto-pro-golden-generate`、`pypto-pro-environment-check`、`pypto-pro-precision-debug`、`pypto-pro-cann-delivery`、`pypto-pro-docs-search` | PyPTO-Pro 开发、精度诊断、CANN 交付与文档检索 |
 | **Pro 核心技能** | [pypto-pro-kernel](ops/pypto-pro-kernel/SKILL.md) | 原生 kernel 开发、验证、调试与优化，内含参考资料、检查工具和样例 |
-| **Pro PANKO 调优** | [pypto-pro-op-perf-panko-manual](ops/pypto-pro-op-perf-panko-manual/SKILL.md) | 单文件 JIT 的 NPU 延迟与片上内存优化，见 [quickstart](plugins-official/pypto-pro-op-orchestrator/quickstart.md) |
+| **Pro PANKO 调优** | [pypto-pro-op-perf-panko-manual](ops/pypto-pro-op-perf-panko-manual/SKILL.md) | 单文件或多文件 JIT 的 NPU 延迟与片上内存优化，见 [quickstart](plugins-official/pypto-pro-op-orchestrator/quickstart.md) |
 
 **模型适配**（model/，共 3 个）
 

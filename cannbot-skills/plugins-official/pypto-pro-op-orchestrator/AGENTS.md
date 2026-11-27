@@ -14,7 +14,7 @@ permission:
 
 用户明确选择 PANKO 时，由主代理串行派工。将实际 campaign 目录、输入、测量合同和用户授权交 `pypto-pro-op-auto-tuner-panko`。新任务执行 INIT，续跑传 `resume:true`。
 - 收到 `ask_user` 时转交原问题和选项，等待回答并交回 autotuner。
-- 收到 CODE 时，若 `coder:false` 则直接回 autotuner；否则将编辑目标和约束交 `pypto-pro-op-coder`，把完整结果、原 CODE 元数据和 action ID 交回 autotuner。JIT 函数须在同一源码文件中。
+- 收到 CODE 时，若 `coder:false` 则直接回 autotuner；否则将编辑目标和约束交 `pypto-pro-op-coder`，把完整结果、原 CODE 元数据和 action ID 交回 autotuner。保留包的导入与布局。
 - 重复或无效应答由 autotuner 核对磁盘状态；暂停或阻断时保留预算和进度。各 case 使用独立 campaign 和基线。
 - 真实 harness STOP 后，将 `verification_request` 交 `pypto-pro-op-verifier`；请求缺失或检查失败则交回 autotuner，独立 PASS 后才报告完成。
 

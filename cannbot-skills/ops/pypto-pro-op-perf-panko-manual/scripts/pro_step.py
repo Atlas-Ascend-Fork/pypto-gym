@@ -18,6 +18,8 @@ from panko import selection, state
 from panko.config import call_transition, out, Refusal
 from pro_persistence import atomic_write
 from panko.stopping import stop_condition
+from source_analysis import program_bundle
+import pro_backend
 
 
 def check_command(a, st):
@@ -128,6 +130,9 @@ def step(a, _before, _receipt_args, configure):
     ):
         raise ValueError("candidate has no matching selected action")
     check_command(a, st)
+    if pro_backend.ACTIVE_PROGRAM:
+        program_bundle.refresh_program(pro_backend.ACTIVE_PROGRAM, preserve_current=True)
+        program_bundle.require_current(pro_backend.ACTIVE_PROGRAM)
     root.mkdir(parents=True, exist_ok=True)
     if not saved:
         atomic_write(journal, json.dumps({"request": key}))

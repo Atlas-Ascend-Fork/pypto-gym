@@ -228,6 +228,7 @@ def arguments(sub):
     for name in ("normalize", "init"):
         sub.choices[name].add_argument("--case-context", default="")
     init = sub.choices["init"]
+    init.add_argument("--program-manifest")
     init.add_argument("--mode", choices=["npu"])
     for flag in ("--test-command", "--op-name", "--normalization-before", "--normalization-evidence"):
         init.add_argument(flag)

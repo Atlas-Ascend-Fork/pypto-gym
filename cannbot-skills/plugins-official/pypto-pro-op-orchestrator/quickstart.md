@@ -116,7 +116,7 @@ opencode --agent pypto-pro-op-orchestrator
 ### PANKO 基础版优化
 
 例如：“用 PANKO 优化 ./custom/softmax/，沿用 ./ENVIRONMENT.md 和 test_softmax.py，在 NPU 上优化延迟和片上内存，预算 100 次评估。”
-支持单文件 JIT。续跑时指定原 campaign 目录以保留预算和测量记录。派工与验收见 [AGENTS.md](AGENTS.md)。
+支持单文件或多文件 JIT。续跑时指定原 campaign 目录以保留预算和测量记录。派工与验收见 [AGENTS.md](AGENTS.md)。
 
 ### 验收与交付
 
