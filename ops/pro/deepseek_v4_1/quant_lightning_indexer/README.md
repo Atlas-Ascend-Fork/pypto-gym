@@ -133,7 +133,7 @@ host 通过本轮生成的 `GET_TPL_TILING_KEY` 选 key，通过生成的 Tiling
 
 ## 验证
 
-测试复用原算子的独立 CPU golden、合法同分集合检查和 Scheme A，未复制或放宽精度策略；候选长度与 padding 精确检查。
+JIT 和 ACLNN 测试共用本算子 `tests/assets/` 下的 CPU golden 和精度判据。索引检查合法同分集合，分数使用 Scheme A，候选长度与 padding 要求精确匹配。
 
 ```bash
 python -m pytest -q --mode=torch \

@@ -6,11 +6,7 @@
 # INCLUDING BUT NOT LIMITED TO NON-INFRINGEMENT, MERCHANTABILITY, OR FITNESS FOR A PARTICULAR PURPOSE.
 # See LICENSE in the root of the software repository for the full text of the License.
 # -----------------------------------------------------------------------------------------------------------
-"""Replay the existing QLI golden through JIT or both formal Torch entries.
-
-The original golden and precision policy are shared instead of copied. Binary
-mode imports no PyPTO kernel; all device work enters the installed Torch binding.
-"""
+"""Check the JIT and Torch entries against the CPU golden in tests/assets."""
 from functools import lru_cache
 import importlib.util
 import inspect
@@ -24,11 +20,18 @@ import torch
 import torch_npu  # noqa: F401
 
 HERE = Path(__file__).resolve().parent
-GYM = HERE.parents[4]
-BASE = GYM / "ops/pypto_pro/deepseek_v4_1/quant_lightning_indexer"
-sys.path.insert(0, str(BASE / "tests/assets"))
-import quant_lightning_indexer_golden_cpu as golden  # noqa: E402
-from quant_lightning_indexer_precision import check_precision, check_topk  # noqa: E402
+
+
+def _load_module(name, path):
+    spec = importlib.util.spec_from_file_location(name, path)
+    module = importlib.util.module_from_spec(spec)
+    sys.modules[name] = module
+    spec.loader.exec_module(module)
+    return module
+
+
+golden = _load_module("gym_pro_qli_golden", HERE / "assets/quant_lightning_indexer_golden_cpu.py")
+precision = _load_module("gym_pro_qli_precision", HERE / "assets/quant_lightning_indexer_precision.py")
 
 pytestmark = pytest.mark.soc("950")
 _ENTRY_CYCLE = itertools.cycle(("python", "torch"))
@@ -46,12 +49,7 @@ def _torch_entry(*args, **kwargs):
 
 @lru_cache(maxsize=1)
 def _jit_module():
-    path = HERE.parent / "op_kernel/quant_lightning_indexer.py"
-    spec = importlib.util.spec_from_file_location("gym_pro_quant_lightning_indexer", path)
-    module = importlib.util.module_from_spec(spec)
-    sys.modules[spec.name] = module
-    spec.loader.exec_module(module)
-    return module
+    return _load_module("gym_pro_quant_lightning_indexer", HERE.parent / "op_kernel/quant_lightning_indexer.py")
 
 
 def runner():
@@ -75,9 +73,9 @@ def verify(outputs, kwargs, refs, allowed, return_value, offsets=True):
     idx, val, cand, length = [t.cpu() for t in outputs]
     assert idx.dtype == torch.int32 and idx.shape == (len(refs), 1, kwargs["topk"])
     for row, (ref, valid) in enumerate(zip(refs, allowed)):
-        check_topk(idx[row, 0], ref, valid, row * 10000 if offsets else 0)
+        precision.check_topk(idx[row, 0], ref, valid, row * 10000 if offsets else 0)
     if return_value:
-        passed, summary = check_precision(val, golden.expected_scores(idx, refs))
+        passed, summary = precision.check_precision(val, golden.expected_scores(idx, refs))
         assert passed, summary
     else:
         assert val.shape == (0,) and val.dtype == torch.bfloat16
@@ -90,7 +88,7 @@ def verify(outputs, kwargs, refs, allowed, return_value, offsets=True):
         score, active = golden.candidate_scores(ref, valid)
         count = min(capacity, int(active.sum()))
         counts.append(count)
-        check_topk(cand[row, 0, :count], score, active)
+        precision.check_topk(cand[row, 0, :count], score, active)
         assert bool((cand[row, 0, count:] == -1).all())
     assert torch.equal(length, torch.tensor(counts, dtype=torch.int32).view_as(length))
 
